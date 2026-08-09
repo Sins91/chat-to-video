@@ -2,26 +2,38 @@
   "name": "@chat-to-video/api",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "preinstall": "node ../../scripts/enforce-pnpm.cjs",
+    "workflow:init": "workflow-nest init --force",
+    "prebuild": "pnpm run workflow:init",
     "build": "nest build",
+    "predev": "pnpm run workflow:init",
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "lint": "eslint src test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "workflow:validate": "workflow validate",
     "test": "vitest run",
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.16",
+    "@chat-to-video/contracts": "workspace:*",
     "@nestjs/common": "11.1.28",
     "@nestjs/core": "11.1.28",
     "@nestjs/platform-express": "11.1.28",
+    "@workflow/nest": "4.0.14",
+    "ai": "7.0.58",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "workflow": "4.6.2"
   },
   "devDependencies": {
     "@nestjs/cli": "11.0.24",
     "@nestjs/schematics": "11.0.9",
-    "@nestjs/testing": "11.1.28"
+    "@nestjs/testing": "11.1.28",
+    "@swc/cli": "0.8.1",
+    "@swc/core": "1.15.3"
   }
 }

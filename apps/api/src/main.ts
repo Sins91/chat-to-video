@@ -1,6 +1,7 @@
 import { NestFactory } from "@nestjs/core";
 
 import { AppModule } from "./app.module.js";
+import { loadRepositoryEnvironment } from "./environment.js";
 
 const parseApiPort = (value: string): number => {
   const port = Number(value);
@@ -13,12 +14,13 @@ const parseApiPort = (value: string): number => {
 };
 
 const bootstrap = async (): Promise<void> => {
+  loadRepositoryEnvironment();
+
   const app = await NestFactory.create(AppModule);
-  const apiPort = parseApiPort(process.env.API_PORT ?? "3001");
+  const apiPort = parseApiPort(process.env.API_PORT ?? "4001");
 
   app.enableShutdownHooks();
   await app.listen(apiPort, "0.0.0.0");
 };
 
 void bootstrap();
-

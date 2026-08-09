@@ -30,7 +30,7 @@ RUN pnpm --filter @chat-to-video/api build
 FROM node:26.7.0-bookworm-slim AS api-runtime
 
 ENV NODE_ENV=production
-ENV API_PORT=3001
+ENV API_PORT=4001
 
 WORKDIR /app
 
@@ -39,7 +39,7 @@ COPY --from=api-build --chown=node:node /app/apps/api/node_modules ./apps/api/no
 COPY --from=api-build --chown=node:node /app/apps/api/dist ./apps/api/dist
 
 USER node
-EXPOSE 3001
+EXPOSE 4001
 
 CMD ["node", "apps/api/dist/main.js"]
 
@@ -54,7 +54,8 @@ FROM node:26.7.0-bookworm-slim AS web-runtime
 
 ENV HOSTNAME=0.0.0.0
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=4000
+ENV WEB_PORT=4000
 
 WORKDIR /app
 
@@ -62,6 +63,6 @@ COPY --from=web-build --chown=node:node /app/apps/web/.next/standalone ./
 COPY --from=web-build --chown=node:node /app/apps/web/.next/static ./apps/web/.next/static
 
 USER node
-EXPOSE 3000
+EXPOSE 4000
 
 CMD ["node", "apps/web/server.js"]
