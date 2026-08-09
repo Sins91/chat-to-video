@@ -1,0 +1,25 @@
+{
+  "name": "chat-to-video",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=26.7.0 <27",
+    "pnpm": ">=11.20.0 <12"
+  },
+  "scripts": {
+    "preinstall": "node scripts/enforce-pnpm.cjs",
+    "package-manager:check": "node scripts/enforce-pnpm.cjs",
+    "deps:install:cn": "node scripts/install-with-registry-fallback.cjs",
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "typescript": "6.0.3"
+  }
+}

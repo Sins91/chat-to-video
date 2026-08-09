@@ -1,0 +1,15 @@
+{
+  "name": "@chat-to-video/worker",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "preinstall": "node ../../scripts/enforce-pnpm.cjs",
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "lint": "eslint src test",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rimraf dist coverage"
+  }
+}

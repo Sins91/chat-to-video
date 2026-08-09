@@ -1,0 +1,25 @@
+{
+  "name": "@chat-to-video/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "preinstall": "node ../../scripts/enforce-pnpm.cjs",
+    "build": "tsc -p tsconfig.json",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.2",
+    "mysql2": "3.23.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10"
+  }
+}

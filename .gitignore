@@ -1,0 +1,33 @@
+node_modules/
+.pnpm-store/
+.turbo/
+.next/
+dist/
+coverage/
+
+.env
+.env.*
+!.env.example
+
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+
+tmp/
+temp/
+workdir/
+artifacts/
+
+# Local agent instructions and tooling
+/AGENTS.md
+/CLAUDE.md
+/.agents/
+/.codex/
+/.cursor/
+/agents/
+/skills/
+/.skills/
+
+# Local project documentation
+/docs/
