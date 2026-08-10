@@ -1,98 +1,25 @@
 "use client";
 
-import { useChat } from "@ai-sdk/react";
+import type { ChatStatus } from "ai";
 import { MessageSquareTextIcon, PlusIcon } from "lucide-react";
-import { useCallback, useState } from "react";
-
+import { useCallback } from "react";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { ChatConversation } from "@/components/chat/chat-conversation";
 import { Button } from "@/components/ui/button";
-import { chatTransport } from "@/lib/chat-transport";
+import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-provider";
 
 export function ChatPanel() {
-  const [input, setInput] = useState("");
-  const {
-    error,
-    messages,
-    regenerate,
-    sendMessage,
-    setMessages,
-    status,
-    stop,
-  } = useChat({ transport: chatTransport });
+  const workflow = useVideoWorkflow();
+  const isLocked = workflow.isSubmitting || workflow.snapshot?.status === "drafting" || workflow.snapshot?.status === "queued" || workflow.snapshot?.status === "running" || workflow.snapshot?.status === "succeeded";
+  const status: ChatStatus = isLocked ? "submitted" : "ready";
+  const sendText = useCallback((text: string) => void workflow.submitText(text), [workflow]);
 
-  const isGenerating = status === "submitted" || status === "streaming";
-
-  const sendText = useCallback(
-    (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || isGenerating) {
-        return;
-      }
-
-      void sendMessage({ text: trimmed });
-      setInput("");
-    },
-    [isGenerating, sendMessage],
-  );
-
-  const handleNewChat = useCallback(() => {
-    if (isGenerating) {
-      void stop();
-    }
-    setMessages([]);
-    setInput("");
-  }, [isGenerating, setMessages, stop]);
-
-  const handleRegenerate = useCallback(() => {
-    void regenerate();
-  }, [regenerate]);
-
-  const handleStop = useCallback(() => {
-    void stop();
-  }, [stop]);
-
-  return (
-    <div className="chat-panel">
-      <header className="chat-header">
-        <div className="brand-lockup">
-          <span className="brand-mark" aria-hidden="true">
-            <MessageSquareTextIcon />
-          </span>
-          <div>
-            <p>Chat-to-Video</p>
-          </div>
-        </div>
-
-        <Button
-          aria-label="开始新对话"
-          className="new-chat-button"
-          onClick={handleNewChat}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          <PlusIcon />
-          新对话
-        </Button>
-      </header>
-
-      <ChatConversation
-        hasError={Boolean(error)}
-        messages={messages}
-        onRegenerate={handleRegenerate}
-        onSuggestionSelect={sendText}
-        status={status}
-      />
-
-      <ChatComposer
-        input={input}
-        isGenerating={isGenerating}
-        onInputChange={setInput}
-        onStop={handleStop}
-        onSubmitText={sendText}
-        status={status}
-      />
-    </div>
-  );
+  return <div className="grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-[#0d0e10]">
+    <header className="flex h-16 items-center border-b border-white/10 px-5"><span className="grid size-8 place-items-center rounded-lg border border-white/10 bg-white/5 text-zinc-300"><MessageSquareTextIcon className="size-4" /></span>
+      <div className="ml-3"><p className="text-sm font-semibold text-zinc-100">Chat-to-Video Agent</p><p className="mt-0.5 text-[10px] text-zinc-500">分镜确认 · Seedance 2.0 视频生成</p></div>
+      <Button className="ml-auto text-zinc-400 hover:bg-white/10 hover:text-white" onClick={workflow.newWorkflow} size="sm" type="button" variant="ghost"><PlusIcon />新工作流</Button>
+    </header>
+    <ChatConversation errorMessage={workflow.errorMessage} isSubmitting={workflow.isSubmitting} onApprove={() => void workflow.approve()} onRegenerate={() => void workflow.regenerate()} snapshot={workflow.snapshot} />
+    <ChatComposer input={workflow.input} isGenerating={isLocked} onInputChange={workflow.setInput} onStop={() => undefined} onSubmitText={sendText} status={status} />
+  </div>;
 }

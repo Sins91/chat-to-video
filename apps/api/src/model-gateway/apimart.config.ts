@@ -2,6 +2,7 @@ export type ApimartConfig = {
   apiKey: string;
   baseUrl: string;
   modelId: string;
+  storyboardTimeoutMs: number;
   timeoutMs: number;
 };
 
@@ -25,12 +26,12 @@ const parseBaseUrl = (value: string): string => {
   return url.toString().replace(/\/$/u, "");
 };
 
-const parseTimeoutMs = (value: string): number => {
+const parseTimeoutMs = (name: string, value: string): number => {
   const timeoutMs = Number(value);
 
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 120_000) {
     throw new Error(
-      `APIMART_TIMEOUT_MS must be an integer between 1000 and 120000; received "${value}".`,
+      `${name} must be an integer between 1000 and 120000; received "${value}".`,
     );
   }
 
@@ -41,5 +42,12 @@ export const loadApimartConfig = (): ApimartConfig => ({
   apiKey: required("APIMART_API_KEY"),
   baseUrl: parseBaseUrl(required("APIMART_BASE_URL")),
   modelId: required("APIMART_CHAT_MODEL"),
-  timeoutMs: parseTimeoutMs(process.env.APIMART_TIMEOUT_MS ?? "30000"),
+  storyboardTimeoutMs: parseTimeoutMs(
+    "APIMART_STORYBOARD_TIMEOUT_MS",
+    process.env.APIMART_STORYBOARD_TIMEOUT_MS ?? "120000",
+  ),
+  timeoutMs: parseTimeoutMs(
+    "APIMART_TIMEOUT_MS",
+    process.env.APIMART_TIMEOUT_MS ?? "30000",
+  ),
 });

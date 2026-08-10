@@ -2,14 +2,31 @@
   "name": "@chat-to-video/worker",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "preinstall": "node ../../scripts/enforce-pnpm.cjs",
+    "build:workspace-deps": "pnpm --filter @chat-to-video/contracts --filter @chat-to-video/database --filter @chat-to-video/storage build",
+    "prebuild": "pnpm run build:workspace-deps",
     "build": "tsc -p tsconfig.json",
+    "predev": "pnpm run build:workspace-deps",
     "dev": "tsx watch src/main.ts",
+    "prestart": "pnpm run build",
     "start": "node dist/main.js",
     "lint": "eslint src test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@chat-to-video/contracts": "workspace:*",
+    "@chat-to-video/database": "workspace:*",
+    "@chat-to-video/storage": "workspace:*",
+    "bullmq": "6.0.9",
+    "ioredis": "6.0.0",
+    "workflow": "4.6.2"
+  },
+  "devDependencies": {
+    "tsx": "4.23.11",
+    "vitest": "4.1.10"
   }
 }

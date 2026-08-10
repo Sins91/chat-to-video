@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ChatAgentService } from "../src/chat-agent.service.js";
 
-const createGateway = () => ({ streamChat: vi.fn() });
+const createGateway = () => ({ streamChat: vi.fn(), generateStoryboard: vi.fn() });
 
 describe("ChatAgentService", () => {
   it("returns the model stream with a request ID", async () => {

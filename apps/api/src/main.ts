@@ -16,8 +16,10 @@ const parseApiPort = (value: string): number => {
 const bootstrap = async (): Promise<void> => {
   loadRepositoryEnvironment();
 
+  const apiPort = parseApiPort(process.env.API_PORT ?? "4101");
+  process.env.PORT = String(apiPort);
+  process.env.WORKFLOW_LOCAL_BASE_URL ??= `http://localhost:${apiPort}`;
   const app = await NestFactory.create(AppModule);
-  const apiPort = parseApiPort(process.env.API_PORT ?? "4001");
 
   app.enableShutdownHooks();
   await app.listen(apiPort, "0.0.0.0");

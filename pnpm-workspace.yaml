@@ -7,4 +7,5 @@ allowBuilds:
   '@swc/core': false
   cbor-extract: false
   esbuild: true
+  'msgpackr-extract@3.0.4': true
   sharp: true

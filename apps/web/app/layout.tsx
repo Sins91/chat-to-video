@@ -1,25 +1,13 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
-import { TooltipProvider } from "@/components/ui/tooltip";
-
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Chat-to-Video",
-  description: "通过对话规划视频创作。",
+  title: { default: "FilFil Studio", template: "%s · FilFil Studio" },
+  description: "AI 短剧创作与内容展示 UI 原型。",
 };
 
-type RootLayoutProps = Readonly<{
-  children: ReactNode;
-}>;
-
-export default function RootLayout({ children }: RootLayoutProps) {
-  return (
-    <html className="dark" lang="zh-CN">
-      <body>
-        <TooltipProvider>{children}</TooltipProvider>
-      </body>
-    </html>
-  );
+export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  return <html lang="zh-CN"><body>{children}</body></html>;
 }

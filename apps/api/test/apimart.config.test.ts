@@ -11,12 +11,14 @@ describe("loadApimartConfig", () => {
     vi.stubEnv("APIMART_API_KEY", "secret");
     vi.stubEnv("APIMART_BASE_URL", "https://api.apimart.ai/v1/");
     vi.stubEnv("APIMART_CHAT_MODEL", "gpt-5-mini");
+    vi.stubEnv("APIMART_STORYBOARD_TIMEOUT_MS", "90000");
     vi.stubEnv("APIMART_TIMEOUT_MS", "15000");
 
     expect(loadApimartConfig()).toEqual({
       apiKey: "secret",
       baseUrl: "https://api.apimart.ai/v1",
       modelId: "gpt-5-mini",
+      storyboardTimeoutMs: 90_000,
       timeoutMs: 15_000,
     });
   });

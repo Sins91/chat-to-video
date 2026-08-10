@@ -3,7 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    "types": "./src/index.ts",
+    "import": "./dist/index.js"
+  },
   "types": "./src/index.ts",
   "scripts": {
     "preinstall": "node ../../scripts/enforce-pnpm.cjs",
@@ -16,10 +19,12 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
+    "@chat-to-video/contracts": "workspace:*",
     "drizzle-orm": "0.45.2",
     "mysql2": "3.23.2"
   },
   "devDependencies": {
+    "@types/node": "26.2.0",
     "drizzle-kit": "0.31.10"
   }
 }

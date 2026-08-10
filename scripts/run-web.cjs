@@ -28,7 +28,7 @@ const webPort = parsePort(
   "WEB_PORT",
   process.env.WEB_PORT ?? process.env.PORT ?? "4000",
 );
-const apiPort = parsePort("API_PORT", process.env.API_PORT ?? "4001");
+const apiPort = parsePort("API_PORT", process.env.API_PORT ?? "4101");
 
 process.env.WEB_PORT = String(webPort);
 process.env.PORT = String(webPort);

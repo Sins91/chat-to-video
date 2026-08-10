@@ -34,10 +34,10 @@ const nextBin = join(
   "next",
 );
 
-const spawnNode = (entryPoint, args, cwd) =>
+const spawnNode = (entryPoint, args, cwd, environment = process.env) =>
   spawn(process.execPath, [entryPoint, ...args], {
     cwd,
-    env: process.env,
+    env: environment,
     stdio: "inherit",
   });
 
@@ -64,7 +64,7 @@ const runWorkflowInitialization = () =>
 const main = async () => {
   loadRepositoryEnvironment({ repositoryRoot });
 
-  const apiPort = parsePort("API_PORT", process.env.API_PORT ?? "4001");
+  const apiPort = parsePort("API_PORT", process.env.API_PORT ?? "4101");
   const webPort = parsePort(
     "WEB_PORT",
     process.env.WEB_PORT ?? process.env.PORT ?? "4000",
@@ -72,14 +72,20 @@ const main = async () => {
 
   process.env.API_PORT = String(apiPort);
   process.env.WEB_PORT = String(webPort);
-  process.env.PORT = String(webPort);
   process.env.API_BASE_URL ??= `http://localhost:${apiPort}`;
+  process.env.WORKFLOW_LOCAL_BASE_URL ??= `http://localhost:${apiPort}`;
 
   await runWorkflowInitialization();
 
   const children = [
-    spawnNode(nestBin, ["start", "--watch"], apiDirectory),
-    spawnNode(nextBin, ["dev", "--port", String(webPort)], webDirectory),
+    spawnNode(nestBin, ["start", "--watch"], apiDirectory, {
+      ...process.env,
+      PORT: String(apiPort),
+    }),
+    spawnNode(nextBin, ["dev", "--port", String(webPort)], webDirectory, {
+      ...process.env,
+      PORT: String(webPort),
+    }),
   ];
   let isStopping = false;
 

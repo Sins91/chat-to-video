@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE_URL = "http://localhost:4001";
+const DEFAULT_API_BASE_URL = "http://localhost:4101";
 const FORWARDED_RESPONSE_HEADERS = [
   "cache-control",
   "content-type",
@@ -23,14 +23,10 @@ export const getApiBaseUrl = (): string => {
 
 const responseHeaders = (upstream: Response): Headers => {
   const headers = new Headers();
-
   for (const name of FORWARDED_RESPONSE_HEADERS) {
     const value = upstream.headers.get(name);
-    if (value) {
-      headers.set(name, value);
-    }
+    if (value) headers.set(name, value);
   }
-
   return headers;
 };
 
@@ -49,15 +45,9 @@ export async function POST(request: Request): Promise<Response> {
       statusText: upstream.statusText,
     });
   } catch (error: unknown) {
-    if (request.signal.aborted) {
-      throw error;
-    }
-
+    if (request.signal.aborted) throw error;
     return Response.json(
-      {
-        code: "MODEL_GATEWAY_FAILED",
-        message: "The chat service is unavailable.",
-      },
+      { code: "MODEL_GATEWAY_FAILED", message: "The chat service is unavailable." },
       { status: 502 },
     );
   }

@@ -47,7 +47,6 @@ import {
   Monitor,
   PlusIcon,
   SquareIcon,
-  XIcon,
 } from "lucide-react";
 import { nanoid } from "nanoid";
 import type {
@@ -1248,8 +1247,6 @@ export const PromptInputSubmit = ({
     Icon = <Spinner />;
   } else if (status === "streaming") {
     Icon = <SquareIcon className="size-4" />;
-  } else if (status === "error") {
-    Icon = <XIcon className="size-4" />;
   }
 
   const handleClick = useCallback(

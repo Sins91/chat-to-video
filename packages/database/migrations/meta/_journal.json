@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786272000000,
+      "tag": "0000_video_workflow",
+      "breakpoints": true
+    }
+  ]
+}
