@@ -8,15 +8,19 @@ import {
   HttpStatus,
   Inject,
   Param,
+  Patch,
   Post,
   Res,
 } from "@nestjs/common";
 import {
   CreateVideoWorkflowRequestSchema,
+  type RetryVideoWorkflowResponse,
+  UpdateVideoWorkflowModelRequestSchema,
   VideoWorkflowEventSchema,
   VideoWorkflowIdSchema,
   VideoWorkflowInteractionSchema,
   type CreateVideoWorkflowResponse,
+  type UpdateVideoWorkflowModelResponse,
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
 } from "@chat-to-video/contracts";
@@ -47,12 +51,34 @@ export class VideoWorkflowController {
   async create(@Body() body: unknown): Promise<CreateVideoWorkflowResponse> {
     const parsed = CreateVideoWorkflowRequestSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException({ code: "INVALID_VIDEO_WORKFLOW_REQUEST", message: "Video workflow request is invalid.", issues: parsed.error.issues });
-    return this.workflows.create(parsed.data.prompt);
+    return this.workflows.create(parsed.data);
   }
 
   @Get(":workflowId")
   getSnapshot(@Param("workflowId") workflowId: unknown): Promise<VideoWorkflowSnapshot> {
     return this.workflows.getSnapshot(parseWorkflowId(workflowId));
+  }
+
+  @Patch(":workflowId/model")
+  async updateModel(
+    @Param("workflowId") workflowId: unknown,
+    @Body() body: unknown,
+  ): Promise<UpdateVideoWorkflowModelResponse> {
+    const parsed = UpdateVideoWorkflowModelRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        code: "INVALID_VIDEO_MODEL_REQUEST",
+        message: "Video model request is invalid.",
+        issues: parsed.error.issues,
+      });
+    }
+    return this.workflows.updateModel(parseWorkflowId(workflowId), parsed.data.videoModel);
+  }
+
+  @Post(":workflowId/retry")
+  @HttpCode(HttpStatus.ACCEPTED)
+  retry(@Param("workflowId") workflowId: unknown): Promise<RetryVideoWorkflowResponse> {
+    return this.workflows.retry(parseWorkflowId(workflowId));
   }
 
   @Post(":workflowId/interactions")

@@ -1,25 +1,142 @@
 "use client";
 
-import type { ChatStatus } from "ai";
-import { MessageSquareTextIcon, PlusIcon } from "lucide-react";
-import { useCallback } from "react";
+import { useChat } from "@ai-sdk/react";
+import { MenuIcon, MessageSquareTextIcon, PlusIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { ApimartBalanceIndicator } from "@/components/chat/apimart-balance-indicator";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { ChatConversation } from "@/components/chat/chat-conversation";
+import { ChatHistorySidebar } from "@/components/chat/chat-history-sidebar";
 import { Button } from "@/components/ui/button";
 import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-provider";
+import { createChatTransport } from "@/lib/chat-transport";
+import { notifyConversationHistoryChanged } from "@/lib/conversation-client";
+import { isVideoCreationIntent } from "@/lib/video-intent";
 
 export function ChatPanel() {
+  const router = useRouter();
   const workflow = useVideoWorkflow();
-  const isLocked = workflow.isSubmitting || workflow.snapshot?.status === "drafting" || workflow.snapshot?.status === "queued" || workflow.snapshot?.status === "running" || workflow.snapshot?.status === "succeeded";
-  const status: ChatStatus = isLocked ? "submitted" : "ready";
-  const sendText = useCallback((text: string) => void workflow.submitText(text), [workflow]);
+  const [input, setInput] = useState("");
+  const isHistoryCollapsed = false;
+  const [isMobileHistoryOpen, setIsMobileHistoryOpen] = useState(false);
+  const conversationIdRef = useRef(workflow.conversationId ?? undefined);
+  const previousConversationIdRef = useRef(workflow.conversationId);
+  const adoptedConversationIdRef = useRef<string | null>(null);
+  const refreshConversationRef = useRef(workflow.refresh);
 
-  return <div className="grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-[#0d0e10]">
-    <header className="flex h-16 items-center border-b border-white/10 px-5"><span className="grid size-8 place-items-center rounded-lg border border-white/10 bg-white/5 text-zinc-300"><MessageSquareTextIcon className="size-4" /></span>
-      <div className="ml-3"><p className="text-sm font-semibold text-zinc-100">Chat-to-Video Agent</p><p className="mt-0.5 text-[10px] text-zinc-500">分镜确认 · Seedance 2.0 视频生成</p></div>
-      <Button className="ml-auto text-zinc-400 hover:bg-white/10 hover:text-white" onClick={workflow.newWorkflow} size="sm" type="button" variant="ghost"><PlusIcon />新工作流</Button>
+  useEffect(() => {
+    conversationIdRef.current = workflow.conversationId ?? undefined;
+    refreshConversationRef.current = workflow.refresh;
+  }, [workflow.conversationId, workflow.refresh]);
+
+  const adoptConversation = useCallback((conversationId: string) => {
+    if (conversationIdRef.current === conversationId) return;
+    conversationIdRef.current = conversationId;
+    adoptedConversationIdRef.current = conversationId;
+    router.replace(`/studio/agent?conversationId=${encodeURIComponent(conversationId)}`);
+    notifyConversationHistoryChanged();
+  }, [router]);
+
+  const transport = useMemo(() => createChatTransport({
+    getConversationId: () => conversationIdRef.current,
+    onConversationId: adoptConversation,
+  }), [adoptConversation]);
+
+  const { error, messages, regenerate, sendMessage, setMessages, status, stop } = useChat({
+    transport,
+    onFinish: () => {
+      void refreshConversationRef.current().then(notifyConversationHistoryChanged).catch(() => undefined);
+    },
+  });
+
+  useEffect(() => {
+    if (previousConversationIdRef.current === workflow.conversationId) return;
+    previousConversationIdRef.current = workflow.conversationId;
+    if (adoptedConversationIdRef.current === workflow.conversationId) {
+      adoptedConversationIdRef.current = null;
+      return;
+    }
+    void stop();
+    setMessages([]);
+    setInput("");
+  }, [setMessages, stop, workflow.conversationId]);
+
+  const isChatGenerating = status === "submitted" || status === "streaming";
+  const workflowStatus = workflow.snapshot?.status;
+  const isWorkflowLocked = workflow.isSubmitting
+    || workflowStatus === "drafting"
+    || workflowStatus === "queued"
+    || workflowStatus === "running";
+  const isReviewingStoryboard = workflowStatus === "awaiting_input";
+  const isGenerating = isChatGenerating || isWorkflowLocked;
+  const composerStatus = isWorkflowLocked ? "submitted" : status;
+
+  const sendText = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isGenerating) return;
+    if (isReviewingStoryboard) {
+      void workflow.submitText(trimmed, crypto.randomUUID());
+    } else if (isVideoCreationIntent(trimmed)) {
+      void workflow.startWorkflow(trimmed, crypto.randomUUID());
+    } else {
+      void sendMessage({ text: trimmed });
+    }
+    setInput("");
+  }, [isGenerating, isReviewingStoryboard, sendMessage, workflow]);
+
+  const handleNewChat = useCallback(() => {
+    if (isChatGenerating) void stop();
+    workflow.newConversation();
+    setMessages([]);
+    setInput("");
+  }, [isChatGenerating, setMessages, stop, workflow]);
+
+  return <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-[#0d0e10]">
+    <header className="flex h-16 items-center border-b border-white/10 px-3 sm:px-5">
+      <Button aria-label="打开历史对话" className="mr-2 text-zinc-400 hover:bg-white/10 hover:text-white lg:hidden" onClick={() => setIsMobileHistoryOpen(true)} size="icon-sm" type="button" variant="ghost"><MenuIcon /></Button>
+      {/* <Button aria-label={isHistoryCollapsed ? "展开历史栏" : "收起历史栏"} className="mr-2 hidden text-zinc-400 hover:bg-white/10 hover:text-white lg:inline-flex" onClick={() => setIsHistoryCollapsed((value) => !value)} size="icon-sm" type="button" variant="ghost">{isHistoryCollapsed ? <ChevronRightIcon /> : <PanelLeftCloseIcon />}</Button> */}
+      <span className="grid size-8 place-items-center rounded-lg border border-white/10 bg-white/5 text-zinc-300"><MessageSquareTextIcon className="size-4" /></span>
+      <div className="ml-3 min-w-0"><p className="truncate text-sm font-semibold text-zinc-100">Chat-to-Video Agent</p><p className="mt-0.5 hidden text-[10px] text-zinc-500 sm:block">普通聊天 · 分镜确认 · 可切换视频模型</p></div>
+      <div className="ml-auto flex items-center gap-2">
+        <ApimartBalanceIndicator />
+        <Button aria-label="开始新对话" className="text-zinc-400 hover:bg-white/10 hover:text-white" onClick={handleNewChat} size="sm" type="button" variant="ghost"><PlusIcon /><span className="hidden sm:inline">新对话</span></Button>
+      </div>
     </header>
-    <ChatConversation errorMessage={workflow.errorMessage} isSubmitting={workflow.isSubmitting} onApprove={() => void workflow.approve()} onRegenerate={() => void workflow.regenerate()} snapshot={workflow.snapshot} />
-    <ChatComposer input={workflow.input} isGenerating={isLocked} onInputChange={workflow.setInput} onStop={() => undefined} onSubmitText={sendText} status={status} />
+    <div className="relative flex min-h-0 min-w-0">
+      <ChatHistorySidebar
+        activeConversationId={workflow.conversationId}
+        collapsed={isHistoryCollapsed}
+        mobileOpen={isMobileHistoryOpen}
+        onCloseMobile={() => setIsMobileHistoryOpen(false)}
+      />
+      <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)_auto]">
+        <ChatConversation
+          entries={workflow.entries}
+          hasChatError={Boolean(error)}
+          isLoadingHistory={workflow.isLoading}
+          isWorkflowSubmitting={workflow.isSubmitting}
+          messages={messages}
+          onChatRegenerate={() => void regenerate()}
+          onRetryWorkflow={() => void workflow.retryWorkflow()}
+          snapshot={workflow.snapshot}
+          status={status}
+          workflowErrorMessage={workflow.errorMessage ?? workflow.snapshot?.errorMessage ?? null}
+        />
+        <ChatComposer
+          input={input}
+          isGenerating={isGenerating}
+          isVideoModelLocked={workflowStatus === "drafting" || workflowStatus === "queued" || workflowStatus === "running"}
+          onInputChange={setInput}
+          onStop={() => void stop()}
+          onSubmitText={sendText}
+          onVideoModelChange={workflow.setVideoModel}
+          placeholder={isReviewingStoryboard ? "输入分镜修改意见，或确认生成…" : "输入消息；明确要求生成视频时会自动进入工作流…"}
+          status={composerStatus}
+          videoModel={workflow.videoModel}
+        />
+      </div>
+    </div>
   </div>;
 }

@@ -1,17 +1,23 @@
-import type { VideoWorkflowRepository } from "@chat-to-video/database";
+import type { ConversationRepository, VideoWorkflowRepository } from "@chat-to-video/database";
 import type { ObjectStorage } from "@chat-to-video/storage";
+import { ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const workflowApi = vi.hoisted(() => ({ resumeHook: vi.fn(), start: vi.fn() }));
-vi.mock("workflow/api", () => workflowApi);
-
+import {
+  MastraRunNotResumableError,
+  type MastraRuntimeService,
+} from "../src/video-workflow/mastra-runtime.service.js";
 import { VideoWorkflowService } from "../src/video-workflow/video-workflow.service.js";
+import type { WorkflowEventService } from "../src/video-workflow/workflow-event.service.js";
+import type { VideoWorkflowOperations } from "../src/video-workflow/video-workflow.operations.js";
 
 const waitingWorkflow = {
   id: "00000000-0000-4000-8000-000000000001",
+  conversationId: "00000000-0000-4000-8000-000000000010",
   runId: "run-1",
   requestId: "00000000-0000-4000-8000-000000000002",
-  initialPrompt: "雨夜里的未来来信",
+  initialPrompt: "A letter arriving on a rainy night",
+  videoModel: "doubao-seedance-2.0",
   status: "awaiting_input",
   currentVersion: 1,
   errorMessage: null,
@@ -20,22 +26,177 @@ const waitingWorkflow = {
 };
 
 describe("VideoWorkflowService interactions", () => {
-  const repository = { findWorkflow: vi.fn() };
+  const repository = {
+    findWorkflow: vi.fn(),
+    claimInteraction: vi.fn(),
+    createWorkflow: vi.fn(),
+    findWorkflowVideoJob: vi.fn(),
+    findStoryboard: vi.fn(),
+    claimVideoJobRetry: vi.fn(),
+    updateVideoJob: vi.fn(),
+    updateVideoModel: vi.fn(),
+    updateWorkflow: vi.fn(),
+  };
   const storage = { createDownloadUrl: vi.fn() };
-  const service = new VideoWorkflowService(repository as unknown as VideoWorkflowRepository, storage as unknown as ObjectStorage);
+  const conversations = { findActiveConversation: vi.fn(), appendMessage: vi.fn(), findWorkflow: vi.fn(), createWithUserMessage: vi.fn() };
+  const runtime = { resume: vi.fn(), start: vi.fn() };
+  const events = { append: vi.fn() };
+  const operations = { retryVideo: vi.fn() };
+  const service = new VideoWorkflowService(
+    repository as unknown as VideoWorkflowRepository,
+    conversations as unknown as ConversationRepository,
+    storage as unknown as ObjectStorage,
+    runtime as unknown as MastraRuntimeService,
+    events as unknown as WorkflowEventService,
+    operations as unknown as VideoWorkflowOperations,
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
     repository.findWorkflow.mockResolvedValue(waitingWorkflow);
-    workflowApi.resumeHook.mockResolvedValue({ runId: "run-1" });
+    conversations.findActiveConversation.mockResolvedValue({ id: waitingWorkflow.conversationId });
+    repository.claimInteraction.mockResolvedValue(true);
+    runtime.resume.mockResolvedValue(undefined);
+    repository.updateWorkflow.mockResolvedValue(undefined);
+    events.append.mockResolvedValue(undefined);
+    repository.createWorkflow.mockResolvedValue(true);
+    repository.updateVideoModel.mockResolvedValue(true);
+    repository.claimVideoJobRetry.mockResolvedValue(true);
+    conversations.createWithUserMessage.mockResolvedValue(undefined);
+    runtime.start.mockResolvedValue("run-created");
+    operations.retryVideo.mockResolvedValue(undefined);
   });
 
-  it("treats an approval phrase as an approval event", async () => {
-    await expect(service.interact(waitingWorkflow.id, { type: "message", text: "可以继续" })).resolves.toEqual({ accepted: true, intent: "approve" });
-    expect(workflowApi.resumeHook).toHaveBeenCalledWith(`video-workflow:${waitingWorkflow.id}:review:1`, { type: "approve" });
+  it("persists and starts the selected video model", async () => {
+    const created = await service.create({
+      messageId: "message-1",
+      prompt: "Generate a rainy night video",
+      videoModel: "MiniMax-Hailuo-2.3",
+    });
+    expect(typeof created.workflowId).toBe("string");
+    expect(repository.createWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      videoModel: "MiniMax-Hailuo-2.3",
+    }));
+    expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({
+      videoModel: "MiniMax-Hailuo-2.3",
+    }), expect.any(Function));
   });
 
-  it("keeps other messages as storyboard revisions", async () => {
-    await expect(service.interact(waitingWorkflow.id, { type: "message", text: "把第二个镜头改成俯拍" })).resolves.toEqual({ accepted: true, intent: "revise" });
+  it("creates another workflow in an existing conversation after the previous one is terminal", async () => {
+    const created = await service.create({
+      conversationId: waitingWorkflow.conversationId,
+      messageId: "message-2",
+      prompt: "Generate a second rainy night video",
+      videoModel: "MiniMax-Hailuo-2.3",
+    });
+
+    expect(created.conversationId).toBe(waitingWorkflow.conversationId);
+    expect(repository.createWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: waitingWorkflow.conversationId,
+      message: { messageId: "message-2", content: "Generate a second rainy night video" },
+    }));
+    expect(runtime.start).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a second workflow while another workflow is active", async () => {
+    repository.createWorkflow.mockResolvedValue(false);
+
+    await expect(service.create({
+      conversationId: waitingWorkflow.conversationId,
+      messageId: "message-2",
+      prompt: "Generate another video",
+      videoModel: "MiniMax-Hailuo-2.3",
+    })).rejects.toMatchObject({ response: { code: "CONVERSATION_WORKFLOW_ACTIVE" } });
+    expect(runtime.start).not.toHaveBeenCalled();
+  });
+
+  it("atomically claims and resumes an approval", async () => {
+    await expect(service.interact(waitingWorkflow.id, { type: "approve" })).resolves.toEqual({
+      accepted: true,
+      intent: "approve",
+    });
+    expect(repository.claimInteraction).toHaveBeenCalledWith(waitingWorkflow.id, 1);
+    expect(runtime.resume).toHaveBeenCalledWith("run-1", { type: "approve" });
+  });
+
+  it("changes the model while the storyboard is awaiting confirmation", async () => {
+    await expect(service.updateModel(waitingWorkflow.id, "MiniMax-Hailuo-2.3")).resolves.toEqual({
+      accepted: true,
+      videoModel: "MiniMax-Hailuo-2.3",
+    });
+    expect(repository.updateVideoModel).toHaveBeenCalledWith(
+      waitingWorkflow.id,
+      "MiniMax-Hailuo-2.3",
+    );
+  });
+
+  it("requeues a failed provider task without creating another workflow", async () => {
+    repository.findWorkflow.mockResolvedValue({ ...waitingWorkflow, status: "failed" });
+    repository.findWorkflowVideoJob.mockResolvedValue({
+      id: `${waitingWorkflow.id}-v1`,
+      workflowId: waitingWorkflow.id,
+      storyboardVersion: 1,
+      status: "failed",
+      progress: 50,
+      providerTaskId: "provider-task-1",
+      objectKey: `tenant/demo/project/demo/render/${waitingWorkflow.id}-v1/video.mp4`,
+      errorMessage: "fetch failed",
+    });
+    repository.findStoryboard.mockResolvedValue({
+      version: 1,
+      revisionRequest: null,
+      storyboard: {
+        title: "Rain Letter",
+        creativeSummary: "A letter arrives in the rain.",
+        shots: [
+          { order: 1, durationSeconds: 4, scene: "Street", subjectAction: "Walk", camera: "Track", visualStyle: "Noir", audio: "Rain" },
+          { order: 2, durationSeconds: 6, scene: "Mailbox", subjectAction: "Deliver", camera: "Close-up", visualStyle: "Noir", audio: "Rain" },
+        ],
+        videoPrompt: "A rainy noir delivery scene.",
+      },
+      createdAt: new Date("2026-08-09T00:00:00.000Z"),
+    });
+
+    await expect(service.retry(waitingWorkflow.id)).resolves.toEqual({
+      accepted: true,
+      jobId: `${waitingWorkflow.id}-v1`,
+    });
+    expect(repository.claimVideoJobRetry).toHaveBeenCalledWith(
+      waitingWorkflow.id,
+      `${waitingWorkflow.id}-v1`,
+    );
+    expect(operations.retryVideo).toHaveBeenCalledOnce();
+    expect(repository.createWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("rejects model changes after the workflow model is locked", async () => {
+    repository.updateVideoModel.mockResolvedValue(false);
+    await expect(service.updateModel(waitingWorkflow.id, "MiniMax-Hailuo-2.3"))
+      .rejects.toMatchObject({ response: { code: "VIDEO_MODEL_LOCKED" } });
+  });
+
+  it("rejects a concurrent interaction that lost the database claim", async () => {
+    repository.claimInteraction.mockResolvedValue(false);
+    await expect(service.interact(waitingWorkflow.id, { type: "approve" }))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(runtime.resume).not.toHaveBeenCalled();
+  });
+
+  it("returns the explicit migration conflict for a Vercel or expired run id", async () => {
+    runtime.resume.mockRejectedValue(new MastraRunNotResumableError("run-1"));
+    await expect(service.interact(waitingWorkflow.id, { type: "approve" }))
+      .rejects.toMatchObject({ response: { code: "VIDEO_WORKFLOW_RUN_NOT_RESUMABLE" } });
+    expect(repository.updateWorkflow).toHaveBeenCalledWith(waitingWorkflow.id, expect.objectContaining({
+      status: "failed",
+    }));
+  });
+
+  it("marks Redis resume failures as business failures", async () => {
+    runtime.resume.mockRejectedValue(new Error("Redis unavailable"));
+    await expect(service.interact(waitingWorkflow.id, { type: "approve" }))
+      .rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
+      eventId: `${waitingWorkflow.id}:runtime:failed`,
+    }));
   });
 });

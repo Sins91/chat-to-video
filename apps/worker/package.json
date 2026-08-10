@@ -22,8 +22,7 @@
     "@chat-to-video/database": "workspace:*",
     "@chat-to-video/storage": "workspace:*",
     "bullmq": "6.0.9",
-    "ioredis": "6.0.0",
-    "workflow": "4.6.2"
+    "ioredis": "6.0.0"
   },
   "devDependencies": {
     "tsx": "4.23.11",

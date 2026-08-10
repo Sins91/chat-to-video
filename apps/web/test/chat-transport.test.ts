@@ -5,7 +5,10 @@ import { toChatAgentRequest } from "@/lib/chat-transport";
 describe("toChatAgentRequest", () => {
   it("converts text UI message parts to the shared chat contract", () => {
     const messages: UIMessage[] = [{ id: "user-1", role: "user", parts: [{ type: "text", text: "hello" }, { type: "text", text: " world" }] }];
-    expect(toChatAgentRequest(messages)).toEqual({ messages: [{ role: "user", content: "hello world" }] });
+    expect(toChatAgentRequest(messages, "00000000-0000-4000-8000-000000000010")).toEqual({
+      conversationId: "00000000-0000-4000-8000-000000000010",
+      message: { id: "user-1", content: "hello world" },
+    });
   });
 
   it("rejects messages without valid text content", () => {

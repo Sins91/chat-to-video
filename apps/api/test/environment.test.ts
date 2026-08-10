@@ -18,8 +18,8 @@ describe("resolveRepositoryEnvironmentFile", () => {
     );
   });
 
-  it("resolves the repository root from the nested SWC output directory", () => {
-    const swcOutputDirectory = join(repositoryRoot, "apps/api/dist/src");
+  it("resolves the repository root from the SWC output directory", () => {
+    const swcOutputDirectory = join(repositoryRoot, "apps/api/dist");
 
     expect(
       resolveRepositoryEnvironmentFile(".env.local", swcOutputDirectory),

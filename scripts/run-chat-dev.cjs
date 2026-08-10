@@ -9,14 +9,6 @@ const {
 const repositoryRoot = resolve(__dirname, "..");
 const apiDirectory = join(repositoryRoot, "apps", "api");
 const webDirectory = join(repositoryRoot, "apps", "web");
-const workflowNestBin = join(
-  apiDirectory,
-  "node_modules",
-  "@workflow",
-  "nest",
-  "dist",
-  "cli.js",
-);
 const nestBin = join(
   apiDirectory,
   "node_modules",
@@ -41,28 +33,34 @@ const spawnNode = (entryPoint, args, cwd, environment = process.env) =>
     stdio: "inherit",
   });
 
-const runWorkflowInitialization = () =>
-  new Promise((resolveInitialization, rejectInitialization) => {
-    const initialization = spawnNode(
-      workflowNestBin,
-      ["init", "--force"],
-      apiDirectory,
-    );
-
-    initialization.once("error", rejectInitialization);
-    initialization.once("exit", (code) => {
+const waitForSuccessfulExit = (child, failureMessage) =>
+  new Promise((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => {
       if (code === 0) {
-        resolveInitialization();
+        resolvePromise();
         return;
       }
-      rejectInitialization(
-        new Error(`Workflow initialization exited with code ${code ?? 1}.`),
-      );
+      reject(new Error(`${failureMessage} (exit code ${code ?? "unknown"}).`));
     });
   });
 
+const buildApiWorkspaceDependencies = async () => {
+  const pnpmEntryPoint = process.env.npm_execpath;
+  if (!pnpmEntryPoint) {
+    throw new Error("pnpm execution path is unavailable. Run this script through pnpm dev:chat.");
+  }
+  const build = spawnNode(
+    pnpmEntryPoint,
+    ["--filter", "@chat-to-video/api", "build:workspace-deps"],
+    repositoryRoot,
+  );
+  await waitForSuccessfulExit(build, "API workspace dependency build failed");
+};
+
 const main = async () => {
   loadRepositoryEnvironment({ repositoryRoot });
+  await buildApiWorkspaceDependencies();
 
   const apiPort = parsePort("API_PORT", process.env.API_PORT ?? "4101");
   const webPort = parsePort(
@@ -73,9 +71,6 @@ const main = async () => {
   process.env.API_PORT = String(apiPort);
   process.env.WEB_PORT = String(webPort);
   process.env.API_BASE_URL ??= `http://localhost:${apiPort}`;
-  process.env.WORKFLOW_LOCAL_BASE_URL ??= `http://localhost:${apiPort}`;
-
-  await runWorkflowInitialization();
 
   const children = [
     spawnNode(nestBin, ["start", "--watch"], apiDirectory, {

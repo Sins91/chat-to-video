@@ -4,11 +4,11 @@ const path = require('node:path');
 const repositoryRoot = path.resolve(__dirname, '..');
 const sdkName = process.argv[2];
 const query = process.argv.slice(3).join(' ').trim();
-const supportedSdks = new Set(['ai', 'workflow']);
+const supportedSdks = new Set(['ai']);
 
 if (!supportedSdks.has(sdkName) || query.length === 0) {
   console.error(
-    'Usage: node scripts/search-sdk-docs.cjs <ai|workflow> <search text>',
+    'Usage: node scripts/search-sdk-docs.cjs ai <search text>',
   );
   process.exitCode = 1;
   return;
@@ -16,8 +16,8 @@ if (!supportedSdks.has(sdkName) || query.length === 0) {
 
 const packageRoot = path.join(
   repositoryRoot,
-  'packages',
-  'workflow',
+  'apps',
+  'api',
   'node_modules',
   sdkName,
 );

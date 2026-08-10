@@ -4,12 +4,24 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 const messageText = (message: UIMessage): string =>
   message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
 
-export const toChatAgentRequest = (messages: UIMessage[]): ChatAgentRequest =>
-  ChatAgentRequestSchema.parse({
-    messages: messages.map((message) => ({ role: message.role, content: messageText(message) })),
+export const toChatAgentRequest = (messages: UIMessage[], conversationId?: string): ChatAgentRequest => {
+  const message = messages.findLast((candidate) => candidate.role === "user");
+  return ChatAgentRequestSchema.parse({
+    conversationId,
+    message: message ? { id: message.id, content: messageText(message) } : undefined,
   });
+};
 
-export const chatTransport = new DefaultChatTransport({
+export const createChatTransport = (options: {
+  getConversationId: () => string | undefined;
+  onConversationId: (conversationId: string) => void;
+}) => new DefaultChatTransport({
   api: "/api/chat",
-  prepareSendMessagesRequest: ({ messages }) => ({ body: toChatAgentRequest(messages) }),
+  fetch: async (input, init) => {
+    const response = await fetch(input, init);
+    const conversationId = response.headers.get("x-conversation-id");
+    if (conversationId) options.onConversationId(conversationId);
+    return response;
+  },
+  prepareSendMessagesRequest: ({ messages }) => ({ body: toChatAgentRequest(messages, options.getConversationId()) }),
 });

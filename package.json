@@ -12,7 +12,6 @@
     "package-manager:check": "node scripts/enforce-pnpm.cjs",
     "deps:install:cn": "node scripts/install-with-registry-fallback.cjs",
     "sdk:docs:ai": "node scripts/search-sdk-docs.cjs ai",
-    "sdk:docs:workflow": "node scripts/search-sdk-docs.cjs workflow",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "dev:chat": "node scripts/run-chat-dev.cjs",

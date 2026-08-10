@@ -31,6 +31,7 @@ describe("ChatAgentController", () => {
   it("passes a validated and trimmed conversation to the service", async () => {
     const service = createService();
     service.stream.mockResolvedValue({
+      conversationId: "00000000-0000-4000-8000-000000000010",
       requestId: "6bb22fe5-3cd7-4e20-b5f5-2da99928f84d",
       stream: new ReadableStream({
         start(controller) {
@@ -44,19 +45,20 @@ describe("ChatAgentController", () => {
 
     const response = createResponse();
     await controller.respond(
-      { messages: [{ role: "user", content: "  hello  " }] },
+      { message: { id: "user-1", content: "  hello  " } },
       createRequest(),
       response,
     );
 
     expect(service.stream).toHaveBeenCalledWith(
-      [{ role: "user", content: "hello" }],
+      { message: { id: "user-1", content: "hello" } },
       expect.any(AbortSignal),
     );
     expect(response.writeHead).toHaveBeenCalledWith(
       200,
       expect.objectContaining({
         "content-type": "text/event-stream",
+        "x-conversation-id": "00000000-0000-4000-8000-000000000010",
         "x-request-id": "6bb22fe5-3cd7-4e20-b5f5-2da99928f84d",
         "x-vercel-ai-ui-message-stream": "v1",
       }),
@@ -71,7 +73,7 @@ describe("ChatAgentController", () => {
 
     await expect(
       controller.respond(
-        { messages: [], unexpected: true },
+        { message: { id: "", content: "" }, unexpected: true },
         createRequest(),
         createResponse(),
       ),
@@ -94,7 +96,7 @@ describe("ChatAgentController", () => {
     const response = createResponse();
 
     const pending = controller.respond(
-      { messages: [{ role: "user", content: "hello" }] },
+      { message: { id: "user-1", content: "hello" } },
       createRequest(),
       response,
     );

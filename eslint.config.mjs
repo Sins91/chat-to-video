@@ -9,7 +9,6 @@ export default tseslint.config(
       "**/dist/**",
       "**/.next/**",
       "**/.nestjs/**",
-      "**/.workflow-data/**",
       "**/coverage/**",
       "**/.swc/**",
     ],
@@ -66,13 +65,6 @@ export default tseslint.config(
     files: ["**/*.test.ts", "**/*.test.tsx"],
     rules: {
       "@typescript-eslint/unbound-method": "off",
-    },
-  },
-  {
-    files: ["apps/api/src/workflows/**/*.ts"],
-    rules: {
-      // Workflow SDK directives require transformed workflow and step functions to remain async.
-      "@typescript-eslint/require-await": "off",
     },
   },
   {

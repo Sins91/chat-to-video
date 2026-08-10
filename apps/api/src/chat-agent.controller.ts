@@ -41,14 +41,17 @@ export class ChatAgentController {
 
     try {
       const result = await this.chatAgent.stream(
-        parsed.data.messages,
+        parsed.data,
         abortController.signal,
       );
 
       await pipeUIMessageStreamToResponse({
         response,
         stream: result.stream,
-        headers: { "x-request-id": result.requestId },
+        headers: {
+          "x-conversation-id": result.conversationId,
+          "x-request-id": result.requestId,
+        },
       });
     } finally {
       response.off("close", abortStream);

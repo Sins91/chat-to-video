@@ -1,23 +1,27 @@
 import { z } from "zod";
 
+export * from "./apimart-account.js";
+export * from "./conversation.js";
 export * from "./video-workflow.js";
+
+import { ConversationIdSchema, ConversationMessageIdSchema } from "./conversation.js";
 
 export const ChatAgentMessageSchema = z
   .object({
     role: z.enum(["user", "assistant"]),
-    content: z.string().trim().min(1).max(8_000),
+    content: z.string().trim().min(1).max(32_000),
   })
   .strict();
 
 export const ChatAgentRequestSchema = z
   .object({
-    messages: z.array(ChatAgentMessageSchema).min(1).max(50),
+    conversationId: ConversationIdSchema.optional(),
+    message: z.object({
+      id: ConversationMessageIdSchema,
+      content: z.string().trim().min(1).max(8_000),
+    }).strict(),
   })
-  .strict()
-  .refine((request) => request.messages.at(-1)?.role === "user", {
-    message: "The last chat message must have the user role.",
-    path: ["messages"],
-  });
+  .strict();
 
 export const ChatAgentGatewayErrorSchema = z
   .object({

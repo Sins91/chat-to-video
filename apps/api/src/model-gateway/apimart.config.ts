@@ -1,3 +1,5 @@
+export const APIMART_CONFIG = Symbol("APIMART_CONFIG");
+
 export type ApimartConfig = {
   apiKey: string;
   baseUrl: string;

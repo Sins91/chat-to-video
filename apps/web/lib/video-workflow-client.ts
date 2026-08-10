@@ -1,8 +1,14 @@
 import {
   CreateVideoWorkflowResponseSchema,
+  RetryVideoWorkflowResponseSchema,
+  UpdateVideoWorkflowModelResponseSchema,
   VideoWorkflowInteractionResultSchema,
   VideoWorkflowSnapshotSchema,
   type CreateVideoWorkflowResponse,
+  type CreateVideoWorkflowRequest,
+  type RetryVideoWorkflowResponse,
+  type UpdateVideoWorkflowModelRequest,
+  type UpdateVideoWorkflowModelResponse,
   type VideoWorkflowInteraction,
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
@@ -24,11 +30,24 @@ const videoApi = createAlova({
   },
 });
 
-export const createVideoWorkflow = async (prompt: string): Promise<CreateVideoWorkflowResponse> =>
-  CreateVideoWorkflowResponseSchema.parse(await videoApi.Post("/video-workflows", { prompt }).send());
+export const createVideoWorkflow = async (request: CreateVideoWorkflowRequest): Promise<CreateVideoWorkflowResponse> =>
+  CreateVideoWorkflowResponseSchema.parse(await videoApi.Post("/video-workflows", request).send());
+
+export const retryVideoWorkflow = async (workflowId: string): Promise<RetryVideoWorkflowResponse> =>
+  RetryVideoWorkflowResponseSchema.parse(
+    await videoApi.Post(`/video-workflows/${encodeURIComponent(workflowId)}/retry`).send(),
+  );
 
 export const getVideoWorkflow = async (workflowId: string): Promise<VideoWorkflowSnapshot> =>
   VideoWorkflowSnapshotSchema.parse(await videoApi.Get(`/video-workflows/${encodeURIComponent(workflowId)}`).send(true));
+
+export const updateVideoWorkflowModel = async (
+  workflowId: string,
+  request: UpdateVideoWorkflowModelRequest,
+): Promise<UpdateVideoWorkflowModelResponse> =>
+  UpdateVideoWorkflowModelResponseSchema.parse(
+    await videoApi.Patch(`/video-workflows/${encodeURIComponent(workflowId)}/model`, request).send(),
+  );
 
 export const interactWithVideoWorkflow = async (workflowId: string, interaction: VideoWorkflowInteraction): Promise<VideoWorkflowInteractionResult> =>
   VideoWorkflowInteractionResultSchema.parse(await videoApi.Post(`/video-workflows/${encodeURIComponent(workflowId)}/interactions`, interaction).send());

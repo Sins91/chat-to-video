@@ -12,15 +12,44 @@ import {
 
 export const videoWorkflows = mysqlTable("video_workflows", {
   id: varchar("id", { length: 36 }).primaryKey(),
+  conversationId: varchar("conversation_id", { length: 36 }),
   runId: varchar("run_id", { length: 200 }),
   requestId: varchar("request_id", { length: 36 }).notNull(),
+  videoModel: varchar("video_model", { length: 64 }).notNull(),
   initialPrompt: text("initial_prompt").notNull(),
   status: varchar("status", { length: 32 }).notNull(),
   currentVersion: int("current_version").notNull().default(0),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
-}, (table) => [uniqueIndex("video_workflows_request_id_uq").on(table.requestId)]);
+}, (table) => [
+  uniqueIndex("video_workflows_request_id_uq").on(table.requestId),
+  index("video_workflows_conversation_id_idx").on(table.conversationId),
+]);
+
+export const conversations = mysqlTable("conversations", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  tenantId: varchar("tenant_id", { length: 64 }).notNull(),
+  projectId: varchar("project_id", { length: 64 }).notNull(),
+  title: varchar("title", { length: 100 }).notNull(),
+  deletedAt: timestamp("deleted_at", { mode: "date", fsp: 3 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("conversations_scope_updated_idx").on(table.tenantId, table.projectId, table.updatedAt),
+]);
+
+export const conversationMessages = mysqlTable("conversation_messages", {
+  id: int("id").autoincrement().primaryKey(),
+  conversationId: varchar("conversation_id", { length: 36 }).notNull(),
+  messageId: varchar("message_id", { length: 100 }).notNull(),
+  role: varchar("role", { length: 16 }).notNull(),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("conversation_messages_message_uq").on(table.conversationId, table.messageId),
+  index("conversation_messages_order_idx").on(table.conversationId, table.id),
+]);
 
 export const storyboardVersions = mysqlTable("storyboard_versions", {
   id: varchar("id", { length: 36 }).primaryKey(),
@@ -73,6 +102,8 @@ export const videoWorkflowEvents = mysqlTable("video_workflow_events", {
 ]);
 
 export type VideoWorkflowRow = typeof videoWorkflows.$inferSelect;
+export type ConversationRow = typeof conversations.$inferSelect;
+export type ConversationMessageRow = typeof conversationMessages.$inferSelect;
 export type StoryboardVersionRow = typeof storyboardVersions.$inferSelect;
 export type VideoJobRow = typeof videoJobs.$inferSelect;
 export type VideoOutputRow = typeof videoOutputs.$inferSelect;

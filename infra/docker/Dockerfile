@@ -23,7 +23,6 @@ COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/database/package.json ./packages/database/package.json
 COPY packages/media/package.json ./packages/media/package.json
 COPY packages/storage/package.json ./packages/storage/package.json
-COPY packages/workflow/package.json ./packages/workflow/package.json
 
 RUN node scripts/install-with-registry-fallback.cjs --frozen-lockfile
 
@@ -64,7 +63,7 @@ COPY --from=api-build --chown=node:node /app/packages ./packages
 USER node
 EXPOSE 4101
 
-CMD ["node", "apps/api/dist/src/main.js"]
+CMD ["node", "apps/api/dist/main.js"]
 
 FROM dependencies AS worker-build
 

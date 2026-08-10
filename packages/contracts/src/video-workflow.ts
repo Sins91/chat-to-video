@@ -1,7 +1,14 @@
 import { z } from "zod";
 
+const RelatedConversationIdSchema = z.string().uuid();
+const RelatedMessageIdSchema = z.string().trim().min(1).max(100);
+
 export const VideoWorkflowIdSchema = z.string().uuid();
 export const VideoJobIdSchema = z.string().min(1).max(100);
+export const VideoModelSchema = z.enum([
+  "MiniMax-Hailuo-2.3",
+  "doubao-seedance-2.0",
+]);
 
 export const StoryboardShotSchema = z
   .object({
@@ -88,6 +95,7 @@ export const VideoWorkflowSnapshotSchema = z
   .object({
     workflowId: VideoWorkflowIdSchema,
     requestId: z.string().uuid(),
+    videoModel: VideoModelSchema,
     initialPrompt: z.string().trim().min(1).max(8_000),
     status: VideoWorkflowStatusSchema,
     currentVersion: z.number().int().nonnegative(),
@@ -100,14 +108,32 @@ export const VideoWorkflowSnapshotSchema = z
   .strict();
 
 export const CreateVideoWorkflowRequestSchema = z
-  .object({ prompt: z.string().trim().min(1).max(8_000) })
+  .object({
+    conversationId: RelatedConversationIdSchema.optional(),
+    messageId: RelatedMessageIdSchema,
+    prompt: z.string().trim().min(1).max(8_000),
+    videoModel: VideoModelSchema,
+  })
   .strict();
 
 export const CreateVideoWorkflowResponseSchema = z
   .object({
+    conversationId: RelatedConversationIdSchema,
     workflowId: VideoWorkflowIdSchema,
     requestId: z.string().uuid(),
   })
+  .strict();
+
+export const UpdateVideoWorkflowModelRequestSchema = z
+  .object({ videoModel: VideoModelSchema })
+  .strict();
+
+export const UpdateVideoWorkflowModelResponseSchema = z
+  .object({ accepted: z.literal(true), videoModel: VideoModelSchema })
+  .strict();
+
+export const RetryVideoWorkflowResponseSchema = z
+  .object({ accepted: z.literal(true), jobId: VideoJobIdSchema })
   .strict();
 
 export const VideoWorkflowInteractionSchema = z.discriminatedUnion("type", [
@@ -115,6 +141,7 @@ export const VideoWorkflowInteractionSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("message"),
+      messageId: RelatedMessageIdSchema,
       text: z.string().trim().min(1).max(2_000),
     })
     .strict(),
@@ -153,6 +180,7 @@ export const RenderVideoJobPayloadSchema = z
     requestId: z.string().uuid(),
     jobId: VideoJobIdSchema,
     storyboardVersion: z.number().int().positive(),
+    videoModel: VideoModelSchema.default("doubao-seedance-2.0"),
     videoPrompt: z.string().trim().min(1).max(4_000),
     objectKey: z.string().regex(/^tenant\/demo\/project\/demo\/render\/[a-zA-Z0-9-]+\/video\.mp4$/u),
   })
@@ -190,9 +218,13 @@ export type Storyboard = z.infer<typeof StoryboardSchema>;
 export type StoryboardVersion = z.infer<typeof StoryboardVersionSchema>;
 export type VideoWorkflowStatus = z.infer<typeof VideoWorkflowStatusSchema>;
 export type VideoJobStatus = z.infer<typeof VideoJobStatusSchema>;
+export type VideoModel = z.infer<typeof VideoModelSchema>;
 export type VideoWorkflowSnapshot = z.infer<typeof VideoWorkflowSnapshotSchema>;
 export type CreateVideoWorkflowRequest = z.infer<typeof CreateVideoWorkflowRequestSchema>;
 export type CreateVideoWorkflowResponse = z.infer<typeof CreateVideoWorkflowResponseSchema>;
+export type UpdateVideoWorkflowModelRequest = z.infer<typeof UpdateVideoWorkflowModelRequestSchema>;
+export type UpdateVideoWorkflowModelResponse = z.infer<typeof UpdateVideoWorkflowModelResponseSchema>;
+export type RetryVideoWorkflowResponse = z.infer<typeof RetryVideoWorkflowResponseSchema>;
 export type VideoWorkflowInteraction = z.infer<typeof VideoWorkflowInteractionSchema>;
 export type VideoWorkflowInteractionResult = z.infer<typeof VideoWorkflowInteractionResultSchema>;
 export type VideoWorkflowEvent = z.infer<typeof VideoWorkflowEventSchema>;

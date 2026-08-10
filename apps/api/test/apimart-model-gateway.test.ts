@@ -1,10 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const mastraAiSdk = vi.hoisted(() => ({ toAISdkStream: vi.fn() }));
+vi.mock("@mastra/ai-sdk", () => mastraAiSdk);
 
 import {
+  ApimartModelGateway,
   buildStoryboardPrompt,
   createApimartFetch,
   transformApimartRequestBody,
 } from "../src/model-gateway/apimart-model-gateway.js";
+import type { MastraAgents } from "../src/model-gateway/mastra-agents.js";
+
+const storyboard = {
+  title: "雨夜来信",
+  creativeSummary: "雨夜中的神秘来信",
+  shots: [
+    { order: 1, durationSeconds: 4, scene: "旧街", subjectAction: "女孩走近信箱", camera: "推进", visualStyle: "冷色", audio: "雨声" },
+    { order: 2, durationSeconds: 6, scene: "信箱", subjectAction: "女孩取出信件", camera: "特写", visualStyle: "高反差", audio: "心跳" },
+  ],
+  videoPrompt: "雨夜旧街上的来信，推进后切至信件特写，冷色高反差灯光，雨声与心跳。",
+};
 
 describe("transformApimartRequestBody", () => {
   it("explicitly disables APIMart's default streaming mode for generate calls", () => {
@@ -78,5 +93,56 @@ describe("buildStoryboardPrompt", () => {
     expect(prompt).toContain("Previous storyboard:");
     expect(prompt).toContain('"title":"旧方案"');
     expect(prompt).toContain("第二个镜头改成俯拍");
+  });
+});
+
+describe("ApimartModelGateway Mastra agents", () => {
+  it("repairs one schema-invalid storyboard without framework retries", async () => {
+    const agents = {
+      storyboard: { generate: vi.fn()
+        .mockResolvedValueOnce({ object: { title: "invalid" } })
+        .mockResolvedValueOnce({ object: storyboard }) },
+      chat: { stream: vi.fn() },
+      timeoutMs: 30_000,
+      storyboardTimeoutMs: 120_000,
+    };
+    const gateway = new ApimartModelGateway(agents as unknown as MastraAgents);
+
+    await expect(gateway.generateStoryboard({
+      requestId: "00000000-0000-4000-8000-000000000001",
+      initialPrompt: "雨夜来信",
+    })).resolves.toEqual(storyboard);
+    expect(agents.storyboard.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("converts a Mastra chat stream and propagates cancellation", async () => {
+    const mastraOutput = { runId: "chat-run" };
+    const uiStream = new ReadableStream();
+    let passedSignal: AbortSignal | undefined;
+    const agents = {
+      storyboard: { generate: vi.fn() },
+      chat: { stream: vi.fn((_messages: unknown, options: { abortSignal: AbortSignal }) => {
+        passedSignal = options.abortSignal;
+        return Promise.resolve(mastraOutput);
+      }) },
+      timeoutMs: 30_000,
+      storyboardTimeoutMs: 120_000,
+    };
+    mastraAiSdk.toAISdkStream.mockReturnValue(uiStream);
+    const gateway = new ApimartModelGateway(agents as unknown as MastraAgents);
+    const controller = new AbortController();
+
+    await expect(gateway.streamChat({
+      abortSignal: controller.signal,
+      requestId: "00000000-0000-4000-8000-000000000001",
+      messages: [{ role: "user", content: "hello" }],
+    })).resolves.toEqual({ stream: uiStream });
+    expect(passedSignal).toBeInstanceOf(AbortSignal);
+    controller.abort();
+    expect(passedSignal?.aborted).toBe(true);
+    expect(mastraAiSdk.toAISdkStream).toHaveBeenCalledWith(mastraOutput, expect.objectContaining({
+      from: "agent",
+      version: "v6",
+    }));
   });
 });

@@ -6,8 +6,12 @@ const webRoot = resolve(import.meta.dirname, "..");
 
 describe("Studio UI shell", () => {
   it("mounts the chat Agent below the Studio route", async () => {
-    const agentPage = await readFile(resolve(webRoot, "app/(studio)/studio/agent/page.tsx"), "utf8");
-    expect(agentPage).toContain("ChatPanel");
+    const [agentPage, workspace] = await Promise.all([
+      readFile(resolve(webRoot, "app/(studio)/studio/agent/page.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/chat/agent-workspace.tsx"), "utf8"),
+    ]);
+    expect(agentPage).toContain("AgentWorkspace");
+    expect(workspace).toContain("ChatPanel");
   });
 
   it("redirects the root route into Studio", async () => {
@@ -37,11 +41,12 @@ describe("Studio UI shell", () => {
     expect(promptInput).toContain("CornerDownLeftIcon");
   });
 
-  it("constrains the Agent chat resizable panel between 38 and 72 percent", async () => {
-    const agentPage = await readFile(resolve(webRoot, "app/(studio)/studio/agent/page.tsx"), "utf8");
-    expect(agentPage).toContain('minSize="38%"');
-    expect(agentPage).toContain('maxSize="72%"');
-    expect(agentPage).toContain("ResizableHandle");
+  it("accounts for the history list inside the resizable chat workspace", async () => {
+    const workspace = await readFile(resolve(webRoot, "components/chat/agent-workspace.tsx"), "utf8");
+    expect(workspace).toContain('defaultSize="55%"');
+    expect(workspace).toContain('minSize="50%"');
+    expect(workspace).toContain('maxSize="72%"');
+    expect(workspace).toContain("ResizableHandle");
   });
 
   it("keeps a vertical separator narrow for a horizontal panel group", async () => {
@@ -49,6 +54,17 @@ describe("Studio UI shell", () => {
     expect(resizable).toContain("aria-[orientation=horizontal]:h-px");
     expect(resizable).not.toContain("aria-[orientation=vertical]:h-px");
     expect(resizable).not.toContain("ChevronsLeftRight");
+  });
+
+  it("shows the server-proxied APIMart account balance in the chat header", async () => {
+    const [panel, balanceIndicator] = await Promise.all([
+      readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/chat/apimart-balance-indicator.tsx"), "utf8"),
+    ]);
+
+    expect(panel).toContain("ApimartBalanceIndicator");
+    expect(balanceIndicator).toContain("getApimartAccountBalance");
+    expect(balanceIndicator).toContain("APIMart 余额");
   });
 
   it("uses one background color across the chat composer", async () => {

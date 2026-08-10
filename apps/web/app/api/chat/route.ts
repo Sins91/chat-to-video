@@ -2,6 +2,7 @@ const DEFAULT_API_BASE_URL = "http://localhost:4101";
 const FORWARDED_RESPONSE_HEADERS = [
   "cache-control",
   "content-type",
+  "x-conversation-id",
   "x-accel-buffering",
   "x-request-id",
   "x-vercel-ai-ui-message-stream",

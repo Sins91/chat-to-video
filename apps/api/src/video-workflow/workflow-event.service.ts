@@ -30,6 +30,7 @@ export class WorkflowEventService implements OnModuleDestroy {
   }
 
   async append(input: {
+    eventId?: string;
     workflowId: string;
     requestId: string;
     type: VideoWorkflowEvent["type"];
