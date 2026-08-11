@@ -98,6 +98,24 @@ describe("SeedanceClient", () => {
     });
   });
 
+  it("submits an explicit supported per-scene duration tier", async () => {
+    const fetchMock = submissionFetch("task_rounded");
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new SeedanceClient(hailuoConfig).submit("Short shot", 6))
+      .resolves.toBe("task_rounded");
+    expect(submittedBody(fetchMock)).toMatchObject({ duration: 6 });
+  });
+
+  it("rejects unsupported duration tiers before a paid submission", async () => {
+    const fetchMock = submissionFetch("unused");
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new SeedanceClient(hailuoConfig).submit("Invalid shot", 7))
+      .rejects.toThrow("not supported");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the legacy Seedance 2.0 profile available", async () => {
     const fetchMock = submissionFetch("task_123");
     vi.stubGlobal("fetch", fetchMock);
@@ -116,7 +134,7 @@ describe("SeedanceClient", () => {
   it("selects the requested job profile independently of the environment default", () => {
     expect(selectApimartVideoConfig(hailuoConfig, "doubao-seedance-2.0")).toMatchObject({
       model: "doubao-seedance-2.0",
-      durationSeconds: 10,
+      durationSeconds: 15,
       resolution: "720p",
       size: "16:9",
       seedanceGenerateAudio: true,

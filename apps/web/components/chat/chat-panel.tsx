@@ -14,6 +14,7 @@ import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-pro
 import { createChatTransport } from "@/lib/chat-transport";
 import { notifyConversationHistoryChanged } from "@/lib/conversation-client";
 import { isVideoCreationIntent } from "@/lib/video-intent";
+import { classifyWorkflowReviewInput } from "@/lib/workflow-review-intent";
 
 export function ChatPanel() {
   const router = useRouter();
@@ -65,26 +66,29 @@ export function ChatPanel() {
 
   const isChatGenerating = status === "submitted" || status === "streaming";
   const workflowStatus = workflow.snapshot?.status;
-  const isWorkflowLocked = workflow.isSubmitting
-    || workflowStatus === "drafting"
-    || workflowStatus === "queued"
-    || workflowStatus === "running";
+  const hasActiveWorkflow = workflowStatus !== undefined
+    && workflowStatus !== "succeeded"
+    && workflowStatus !== "failed"
+    && workflowStatus !== "cancelled";
   const isReviewingStoryboard = workflowStatus === "awaiting_input";
-  const isGenerating = isChatGenerating || isWorkflowLocked;
-  const composerStatus = isWorkflowLocked ? "submitted" : status;
+  const isGenerating = isChatGenerating || workflow.isSubmitting;
+  const composerStatus = workflow.isSubmitting ? "submitted" : status;
 
   const sendText = useCallback((text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isGenerating) return;
-    if (isReviewingStoryboard) {
+    const reviewIntent = isReviewingStoryboard
+      ? classifyWorkflowReviewInput(trimmed)
+      : "chat";
+    if (reviewIntent !== "chat") {
       void workflow.submitText(trimmed, crypto.randomUUID());
-    } else if (isVideoCreationIntent(trimmed)) {
+    } else if (!hasActiveWorkflow && isVideoCreationIntent(trimmed)) {
       void workflow.startWorkflow(trimmed, crypto.randomUUID());
     } else {
       void sendMessage({ text: trimmed });
     }
     setInput("");
-  }, [isGenerating, isReviewingStoryboard, sendMessage, workflow]);
+  }, [hasActiveWorkflow, isGenerating, isReviewingStoryboard, sendMessage, workflow]);
 
   const handleNewChat = useCallback(() => {
     if (isChatGenerating) void stop();
@@ -110,9 +114,11 @@ export function ChatPanel() {
         collapsed={isHistoryCollapsed}
         mobileOpen={isMobileHistoryOpen}
         onCloseMobile={() => setIsMobileHistoryOpen(false)}
+        onConversationSwitch={workflow.prepareConversationSwitch}
       />
       <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)_auto]">
         <ChatConversation
+          conversationId={workflow.conversationId}
           entries={workflow.entries}
           hasChatError={Boolean(error)}
           isLoadingHistory={workflow.isLoading}
@@ -120,9 +126,11 @@ export function ChatPanel() {
           messages={messages}
           onChatRegenerate={() => void regenerate()}
           onRetryWorkflow={() => void workflow.retryWorkflow()}
+          onSceneDurationsSubmit={(scenes) => void workflow.submitSceneDurations(scenes)}
           snapshot={workflow.snapshot}
           status={status}
           workflowErrorMessage={workflow.errorMessage ?? workflow.snapshot?.errorMessage ?? null}
+          workflowStepProgress={workflow.stepProgress}
         />
         <ChatComposer
           input={input}
@@ -132,7 +140,7 @@ export function ChatPanel() {
           onStop={() => void stop()}
           onSubmitText={sendText}
           onVideoModelChange={workflow.setVideoModel}
-          placeholder={isReviewingStoryboard ? "输入分镜修改意见，或确认生成…" : "输入消息；明确要求生成视频时会自动进入工作流…"}
+          placeholder={isReviewingStoryboard ? "可直接提问；确认请回复“确认生成”，修改请明确说明要求…" : "输入消息；明确要求生成视频时会自动进入工作流…"}
           status={composerStatus}
           videoModel={workflow.videoModel}
         />

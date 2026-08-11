@@ -2,6 +2,7 @@ const { spawn } = require("node:child_process");
 const { join, resolve } = require("node:path");
 
 const {
+  disableNodeWebStorage,
   loadRepositoryEnvironment,
   parsePort,
 } = require("./repository-environment.cjs");
@@ -29,7 +30,7 @@ const nextBin = join(
 const spawnNode = (entryPoint, args, cwd, environment = process.env) =>
   spawn(process.execPath, [entryPoint, ...args], {
     cwd,
-    env: environment,
+    env: disableNodeWebStorage(environment),
     stdio: "inherit",
   });
 

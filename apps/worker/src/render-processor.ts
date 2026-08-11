@@ -2,17 +2,27 @@ import {
   RenderVideoJobPayloadSchema,
   type RenderVideoJobPayload,
   type VideoWorkflowEvent,
+  type WorkflowStepProgress,
+  type WorkflowStepState,
 } from "@chat-to-video/contracts";
+import { composeCinematicVideo, type CinematicClip } from "@chat-to-video/media";
 import { createDatabase, VideoWorkflowRepository } from "@chat-to-video/database";
 import { ObjectStorage } from "@chat-to-video/storage";
 import { type Job, UnrecoverableError } from "bullmq";
 import { Redis } from "ioredis";
 
 import { selectApimartVideoConfig, type WorkerConfig } from "./config.js";
+import { renderFailureMessage, renderStageError } from "./render-error.js";
 import { PermanentVideoError, SeedanceClient } from "./seedance-client.js";
 
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
 const DOWNLOAD_ATTEMPTS = 5;
+class RenderJobInactiveError extends Error {
+  constructor(jobId: string) {
+    super(`Render job ${jobId} is no longer active.`);
+    this.name = "RenderJobInactiveError";
+  }
+}
 
 const downloadErrorCode = (error: unknown): string | null => {
   if (!(error instanceof Error) || !("cause" in error)) return null;
@@ -24,6 +34,18 @@ const downloadErrorCode = (error: unknown): string | null => {
 
 const retryDelay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const videoGenerationStep = (
+  stepState: WorkflowStepState,
+  message: string,
+): WorkflowStepProgress => ({
+  stepId: "video-generation",
+  stepLabel: "视频生成",
+  stepState,
+  stepIndex: 8,
+  stepTotal: 8,
+  message,
+});
 
 export class RenderProcessor {
   private readonly repository: VideoWorkflowRepository;
@@ -47,19 +69,44 @@ export class RenderProcessor {
     await this.publisher.publish(`video-workflow:${input.workflowId}`, JSON.stringify(event));
   }
 
-  private async progress(payload: RenderVideoJobPayload, progress: number): Promise<void> {
+  private async assertActive(payload: RenderVideoJobPayload): Promise<void> {
+    const videoJob = await this.repository.findVideoJob(payload.jobId);
+    if (
+      !videoJob ||
+      videoJob.status === "succeeded" ||
+      videoJob.status === "failed" ||
+      videoJob.status === "cancelled"
+    ) {
+      throw new RenderJobInactiveError(payload.jobId);
+    }
+  }
+
+  private async progress(
+    payload: RenderVideoJobPayload,
+    progress: number,
+    message: string,
+    eventKey: string,
+  ): Promise<void> {
     const boundedProgress = Math.max(1, Math.min(99, progress));
-    await this.repository.updateVideoJob(payload.jobId, { status: "running", progress: boundedProgress });
-    await this.repository.updateWorkflow(payload.workflowId, { status: "running" });
+    const isUpdated = await this.repository.updateVideoJobProgress(
+      payload.workflowId,
+      payload.jobId,
+      boundedProgress,
+    );
+    if (!isUpdated) throw new RenderJobInactiveError(payload.jobId);
     await this.event({
-      eventId: `${payload.jobId}:running:${boundedProgress}`,
+      eventId: payload.jobId + ":running:" + eventKey + ":" + boundedProgress,
       workflowId: payload.workflowId,
       requestId: payload.requestId,
       type: "job.progress",
-      data: { jobId: payload.jobId, status: "running", progress: boundedProgress },
+      data: {
+        jobId: payload.jobId,
+        status: "running",
+        progress: boundedProgress,
+        ...videoGenerationStep("running", message),
+      },
     });
   }
-
   private async downloadVideo(url: string): Promise<{ body: Uint8Array; contentType: string }> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
@@ -93,7 +140,138 @@ export class RenderProcessor {
     );
   }
 
+  private async generateCinematicVideo(
+    payload: RenderVideoJobPayload & { cinematic: NonNullable<RenderVideoJobPayload["cinematic"]> },
+    videoClient: SeedanceClient,
+  ): Promise<{ body: Uint8Array; contentType: string }> {
+    const clips: CinematicClip[] = [];
+    const sceneCount = payload.cinematic.scenes.length;
+    for (const [sceneIndex, scene] of payload.cinematic.scenes.entries()) {
+      const sceneJobId = `${payload.jobId}-scene-${scene.order}`;
+      const objectKey = `tenant/demo/project/demo/derived/${payload.jobId}/scene-${scene.order}.mp4`;
+      await this.repository.createCinematicSceneJob({
+        id: sceneJobId,
+        videoJobId: payload.jobId,
+        workflowId: payload.workflowId,
+        sceneOrder: scene.order,
+        objectKey,
+      });
+      const sceneJob = await this.repository.findCinematicSceneJob(sceneJobId);
+      if (!sceneJob) throw new Error(`Cinematic scene job ${scene.order} was not persisted.`);
+      await this.assertActive(payload);
+
+      if (sceneJob.status === "succeeded") {
+        clips.push({
+          body: await this.storage.getObject(sceneJob.objectKey),
+          durationSeconds: scene.durationSeconds,
+        });
+        continue;
+      }
+
+      let sceneStage = `场景 ${scene.order} · 初始化`;
+      try {
+        await this.repository.updateCinematicSceneJob(sceneJobId, {
+          status: "running",
+          progress: Math.max(1, sceneJob.progress),
+          errorMessage: null,
+        });
+        let providerTaskId = sceneJob.providerTaskId;
+        if (!providerTaskId) {
+          const prompt = [
+            scene.visualPrompt,
+            `Narrative beat: ${scene.narrativeBeat}.`,
+            `Camera: ${scene.camera}.`,
+            `Audio direction: ${scene.audio}.`,
+            `Create one continuous cinematic shot suitable for trimming to ${scene.durationSeconds} seconds.`,
+          ].join(" ");
+          sceneStage = `场景 ${scene.order} · 提交视频模型任务`;
+          await this.progress(
+            payload,
+            Math.round(5 + (sceneIndex / sceneCount) * 75),
+            "正在提交镜头 " + scene.order + "/" + sceneCount + " 的视频模型任务。",
+            "scene-" + scene.order + "-submit",
+          );
+          providerTaskId = await videoClient.submit(prompt, scene.generationDurationSeconds);
+          sceneStage = `场景 ${scene.order} · 保存供应商任务 ID`;
+          await this.repository.updateCinematicSceneJob(sceneJobId, { providerTaskId });
+          if (sceneIndex === 0) {
+            await this.repository.updateVideoJob(payload.jobId, { providerTaskId });
+          }
+        }
+        sceneStage = `场景 ${scene.order} · 等待视频模型生成`;
+        const task = await videoClient.waitForCompletion(providerTaskId, async (sceneProgress) => {
+          const overallProgress = Math.round(
+            5 + ((sceneIndex + sceneProgress / 100) / sceneCount) * 75,
+          );
+          await this.progress(
+            payload,
+            overallProgress,
+            "正在生成镜头 " + scene.order + "/" + sceneCount +
+              "（" + sceneProgress + "%）。",
+            "scene-" + scene.order + "-poll",
+          );
+          await this.repository.updateCinematicSceneJob(sceneJobId, {
+            status: "running",
+            progress: Math.max(1, Math.min(99, sceneProgress)),
+          });
+        });
+        await this.assertActive(payload);
+        sceneStage = `场景 ${scene.order} · 下载生成结果`;
+        await this.progress(
+          payload,
+          Math.round(5 + ((sceneIndex + 1) / sceneCount) * 75),
+          "镜头 " + scene.order + "/" + sceneCount + " 已生成，正在下载片段。",
+          "scene-" + scene.order + "-download",
+        );
+        const video = await this.downloadVideo(videoClient.resultUrl(task));
+        sceneStage = `场景 ${scene.order} · 保存生成片段`;
+        await this.assertActive(payload);
+        await this.storage.putObject({
+          objectKey,
+          body: video.body,
+          contentType: video.contentType,
+        });
+        await this.assertActive(payload);
+        await this.repository.updateCinematicSceneJob(sceneJobId, {
+          status: "succeeded",
+          progress: 100,
+          errorMessage: null,
+        });
+        await this.assertActive(payload);
+        clips.push({ body: video.body, durationSeconds: scene.durationSeconds });
+      } catch (error: unknown) {
+        const stagedError = renderStageError(sceneStage, error);
+        await this.repository.updateCinematicSceneJob(sceneJobId, {
+          status: "failed",
+          errorMessage: stagedError.message,
+        });
+        await this.storage.deleteObject(objectKey).catch(() => undefined);
+        throw stagedError;
+      }
+    }
+
+    await this.progress(payload, 85, "所有镜头已就绪，正在合成最终视频。", "compose");
+    let body: Uint8Array;
+    try {
+      body = await composeCinematicVideo({
+        ffmpegPath: this.config.ffmpegPath,
+        clips,
+        timeoutMs: Math.max(300_000, payload.cinematic.durationSeconds * 4_000),
+      });
+    } catch (error: unknown) {
+      throw renderStageError("成片合成 · FFmpeg", error);
+    }
+    await this.progress(payload, 95, "视频合成完成，正在准备保存。", "compose-completed");
+    return { body, contentType: "video/mp4" };
+  }
+
   private async fail(payload: RenderVideoJobPayload, message: string): Promise<void> {
+    const isClaimed = await this.repository.claimVideoJobFailure(
+      payload.workflowId,
+      payload.jobId,
+      message,
+    );
+    if (!isClaimed) return;
     await this.repository.updateVideoJob(payload.jobId, { status: "failed", errorMessage: message });
     await this.repository.updateWorkflow(payload.workflowId, { status: "failed", errorMessage: message });
     await this.event({ eventId: `${payload.jobId}:failed`, workflowId: payload.workflowId, requestId: payload.requestId, type: "job.failed", data: { jobId: payload.jobId, message } });
@@ -102,28 +280,69 @@ export class RenderProcessor {
   async process(job: Job<RenderVideoJobPayload>): Promise<void> {
     const payload = RenderVideoJobPayloadSchema.parse(job.data);
     const videoClient = new SeedanceClient(selectApimartVideoConfig(this.config.apimart, payload.videoModel));
+    let activeStage = "渲染任务初始化";
     try {
       const existing = await this.repository.findVideoJob(payload.jobId);
       if (existing?.status === "succeeded") {
         return;
       }
-      await this.progress(payload, existing?.progress ?? 1);
-      let providerTaskId = existing?.providerTaskId;
-      if (!providerTaskId) {
-        providerTaskId = await videoClient.submit(payload.videoPrompt);
-        await this.repository.updateVideoJob(payload.jobId, { providerTaskId });
+      await this.progress(payload, existing?.progress ?? 1, "正在初始化视频生成任务。", "initialize");
+      let video: { body: Uint8Array; contentType: string };
+      if (payload.cinematic) {
+        activeStage = "逐场景视频生成";
+        video = await this.generateCinematicVideo(
+          { ...payload, cinematic: payload.cinematic },
+          videoClient,
+        );
+      } else {
+        let providerTaskId = existing?.providerTaskId;
+        if (!providerTaskId) {
+          activeStage = "提交视频模型任务";
+          providerTaskId = await videoClient.submit(payload.videoPrompt);
+          activeStage = "保存供应商任务 ID";
+          await this.repository.updateVideoJob(payload.jobId, { providerTaskId });
+        }
+        activeStage = "等待视频模型生成";
+        const task = await videoClient.waitForCompletion(
+          providerTaskId,
+          (progress) => this.progress(
+            payload,
+            progress,
+            "视频模型正在生成成片（" + progress + "%）。",
+            "provider-poll",
+          ),
+        );
+        await this.assertActive(payload);
+        activeStage = "下载生成结果";
+        video = await this.downloadVideo(videoClient.resultUrl(task));
       }
-      const task = await videoClient.waitForCompletion(providerTaskId, (progress) => this.progress(payload, progress));
-      const video = await this.downloadVideo(videoClient.resultUrl(task));
+      await this.assertActive(payload);
+      activeStage = "保存最终视频";
+      await this.progress(payload, 98, "正在保存最终视频。", "save-output");
       await this.storage.putObject({ objectKey: payload.objectKey, body: video.body, contentType: video.contentType });
-      await this.repository.saveVideoOutput({ jobId: payload.jobId, objectKey: payload.objectKey, mimeType: video.contentType, sizeBytes: video.body.byteLength });
-      await this.repository.updateVideoJob(payload.jobId, { status: "succeeded", progress: 100, errorMessage: null });
-      await this.repository.updateWorkflow(payload.workflowId, { status: "succeeded", errorMessage: null });
+      await this.assertActive(payload);
+      activeStage = "记录视频输出";
+      const isCompleted = await this.repository.completeVideoJob({
+        jobId: payload.jobId,
+        workflowId: payload.workflowId,
+        objectKey: payload.objectKey,
+        mimeType: video.contentType,
+        sizeBytes: video.body.byteLength,
+      });
+      if (!isCompleted) throw new RenderJobInactiveError(payload.jobId);
       await this.event({ eventId: `${payload.jobId}:completed`, workflowId: payload.workflowId, requestId: payload.requestId, type: "job.completed", data: { jobId: payload.jobId } });
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Video generation failed.";
+      const message = renderFailureMessage(activeStage, error);
       const current = await this.repository.findVideoJob(payload.jobId);
-      if (current?.status === "succeeded") throw error;
+      if (current?.status === "succeeded") return;
+      if (
+        error instanceof RenderJobInactiveError ||
+        current?.status === "failed" ||
+        current?.status === "cancelled"
+      ) {
+        await this.storage.deleteObject(payload.objectKey).catch(() => undefined);
+        throw new UnrecoverableError(current?.errorMessage ?? message);
+      }
       const isFinalAttempt = error instanceof PermanentVideoError || job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
       if (isFinalAttempt) await this.fail(payload, message);
       if (error instanceof PermanentVideoError) throw new UnrecoverableError(message);

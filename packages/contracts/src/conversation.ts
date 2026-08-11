@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CinematicArtifactVersionSchema } from "./cinematic.js";
 
 import {
   StoryboardVersionSchema,
@@ -25,9 +26,18 @@ export const ConversationStoryboardEntrySchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
 }).strict();
 
+export const ConversationCinematicArtifactEntrySchema = z.object({
+  id: z.string().min(1).max(100),
+  type: z.literal("cinematic_artifact"),
+  workflowId: z.string().uuid(),
+  artifact: CinematicArtifactVersionSchema,
+  createdAt: z.string().datetime({ offset: true }),
+}).strict();
+
 export const ConversationEntrySchema = z.discriminatedUnion("type", [
   ConversationTextEntrySchema,
   ConversationStoryboardEntrySchema,
+  ConversationCinematicArtifactEntrySchema,
 ]);
 
 export const ConversationSummarySchema = z.object({

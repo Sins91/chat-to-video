@@ -3,6 +3,7 @@ const { join } = require("node:path");
 const { describe, it } = require("node:test");
 
 const {
+  disableNodeWebStorage,
   loadRepositoryEnvironment,
   parsePort,
   resolveRepositoryEnvironmentFile,
@@ -56,5 +57,19 @@ describe("repository environment startup helpers", () => {
     assert.equal(parsePort("WEB_PORT", "4000"), 4000);
     assert.throws(() => parsePort("WEB_PORT", "0"), /between 1 and 65535/u);
     assert.throws(() => parsePort("WEB_PORT", "invalid"), /between 1 and 65535/u);
+  });
+
+  it("disables Node web storage without discarding existing runtime options", () => {
+    assert.deepEqual(disableNodeWebStorage({}), {
+      NODE_OPTIONS: "--no-webstorage",
+    });
+    assert.deepEqual(
+      disableNodeWebStorage({ NODE_OPTIONS: "--trace-warnings" }),
+      { NODE_OPTIONS: "--trace-warnings --no-webstorage" },
+    );
+    assert.deepEqual(
+      disableNodeWebStorage({ NODE_OPTIONS: "--no-webstorage" }),
+      { NODE_OPTIONS: "--no-webstorage" },
+    );
   });
 });

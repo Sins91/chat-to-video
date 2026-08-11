@@ -112,6 +112,6 @@ export function ChatComposer({
         <PromptInputSubmit disabled={!input.trim() && !isGenerating} onStop={onStop} status={status} />
       </PromptInputFooter>
     </PromptInput>
-    <p className="mt-2 text-center text-[10px] text-zinc-600">普通内容保持聊天；明确表达生成视频意图后进入分镜，确认分镜才会创建真实任务。</p>
+    <p className="mt-2 text-center text-[10px] text-zinc-600">工作流运行期间仍可聊天；只有明确的确认或修改指令才会推进当前视频任务。</p>
   </div>;
 }

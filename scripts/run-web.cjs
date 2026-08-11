@@ -2,6 +2,7 @@ const { spawn } = require("node:child_process");
 const { join, resolve } = require("node:path");
 
 const {
+  disableNodeWebStorage,
   loadRepositoryEnvironment,
   parsePort,
 } = require("./repository-environment.cjs");
@@ -36,7 +37,7 @@ process.env.API_BASE_URL ??= `http://localhost:${apiPort}`;
 
 const child = spawn(process.execPath, [nextBin, mode, "--port", String(webPort)], {
   cwd: webDirectory,
-  env: process.env,
+  env: disableNodeWebStorage(process.env),
   stdio: "inherit",
 });
 

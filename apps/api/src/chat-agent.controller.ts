@@ -30,7 +30,7 @@ export class ChatAgentController {
     if (!parsed.success) {
       throw new BadRequestException({
         code: "INVALID_CHAT_AGENT_REQUEST",
-        message: "Chat agent request is invalid.",
+        message: "聊天请求格式无效。",
         issues: parsed.error.issues,
       });
     }
@@ -49,6 +49,7 @@ export class ChatAgentController {
         response,
         stream: result.stream,
         headers: {
+          "content-type": "text/event-stream; charset=utf-8",
           "x-conversation-id": result.conversationId,
           "x-request-id": result.requestId,
         },

@@ -70,6 +70,7 @@ FROM dependencies AS worker-build
 COPY tsconfig.base.json ./tsconfig.base.json
 COPY apps/worker ./apps/worker
 COPY packages/contracts ./packages/contracts
+COPY packages/media ./packages/media
 COPY packages/database ./packages/database
 COPY packages/storage ./packages/storage
 
@@ -78,7 +79,12 @@ RUN pnpm --filter @chat-to-video/worker... build
 FROM node:26.7.0-bookworm-slim AS worker-runtime
 
 ENV NODE_ENV=production
+ENV FFMPEG_PATH=/usr/bin/ffmpeg
 WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=worker-build --chown=node:node /app/node_modules ./node_modules
 COPY --from=worker-build --chown=node:node /app/apps/worker/node_modules ./apps/worker/node_modules

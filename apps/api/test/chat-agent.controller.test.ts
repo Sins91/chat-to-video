@@ -57,7 +57,7 @@ describe("ChatAgentController", () => {
     expect(response.writeHead).toHaveBeenCalledWith(
       200,
       expect.objectContaining({
-        "content-type": "text/event-stream",
+        "content-type": "text/event-stream; charset=utf-8",
         "x-conversation-id": "00000000-0000-4000-8000-000000000010",
         "x-request-id": "6bb22fe5-3cd7-4e20-b5f5-2da99928f84d",
         "x-vercel-ai-ui-message-stream": "v1",

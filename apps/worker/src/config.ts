@@ -68,6 +68,7 @@ export type ApimartVideoConfig = ApimartVideoCommonConfig & (
 
 export type WorkerConfig = {
   databaseUrl: string;
+  ffmpegPath: string;
   redisUrl: string;
   apimart: ApimartVideoConfig;
   storage: StorageConfig;
@@ -108,6 +109,7 @@ export const loadWorkerConfig = (): WorkerConfig => {
       };
   return {
     databaseUrl: required("DATABASE_URL"),
+    ffmpegPath: required("FFMPEG_PATH"),
     redisUrl: required("REDIS_URL"),
     apimart,
     storage: {
@@ -146,7 +148,7 @@ export const selectApimartVideoConfig = (
     : {
         ...common,
         model,
-        durationSeconds: 10,
+        durationSeconds: 15,
         resolution: "720p",
         size: "16:9",
       };

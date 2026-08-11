@@ -52,11 +52,11 @@ pnpm sdk:docs:ai -- "ToolLoopAgent"
 
 搜索结果会显示实际安装版本以及匹配文档的文件、行号和内容。
 
-## APIMart 纯文本聊天 Agent
+## LLM 纯文本聊天 Agent
 
-API 通过内部 `ModelGateway`、Mastra Agent 和 `@ai-sdk/openai-compatible` 适配 APIMart 的 OpenAI 兼容 Chat Completions。纯文本聊天不调用 BullMQ 或 Worker，也不保存会话。Web 仅保留创作中心，根路径会跳转到 `/studio`；`/studio/agent` 子页面通过 `/api/chat` BFF 消费该接口。页面只保留对话输入：普通内容进入聊天 Agent，只有“生成/制作视频”“把内容做成短片”等明确执行意图才创建视频工作流；咨询、脚本、文案、创意和分镜讨论继续作为普通聊天。
+API 通过内部 `ModelGateway`、Mastra Agent 和 `@ai-sdk/openai-compatible` 调用 OpenAI 兼容的文本模型。当前 `LLM_PROVIDER` 默认是 `apimart`，聊天、分镜和创作 Agent 使用 `APIMART_CHAT_MODEL`；DeepSeek 直连入口及其环境变量继续保留，仅在显式设置 `LLM_PROVIDER=deepseek` 时启用。APIMart 的账户余额和视频生成链路不受该开关影响。纯文本聊天不调用 BullMQ 或 Worker，也不保存会话。Web 仅保留创作中心，根路径会跳转到 `/studio`；`/studio/agent` 子页面通过 `/api/chat` BFF 消费该接口。页面只保留对话输入：普通内容进入聊天 Agent，只有“生成/制作视频”“把内容做成短片”等明确执行意图才创建视频工作流；咨询、脚本、文案、创意和分镜讨论继续作为普通聊天。
 
-如需验证聊天 Agent，复制 `.env.example` 为根目录 `.env.local`，填写 `APIMART_API_KEY`，并按 APIMart 账号实际可用模型调整 `APIMART_CHAT_MODEL`。API 在开发和生产启动时默认读取该文件；由操作系统或部署平台注入的环境变量优先。可使用以下命令同时启动 API 和 Web：
+如需验证聊天 Agent，复制 `.env.example` 为根目录 `.env.local`，填写 `APIMART_API_KEY`，并按账号实际可用模型调整 `APIMART_CHAT_MODEL`。只有需要启用保留的 DeepSeek 直连入口时，才设置 `LLM_PROVIDER=deepseek` 并填写 `DEEPSEEK_API_KEY`。API 在开发和生产启动时默认读取该文件；由操作系统或部署平台注入的环境变量优先。可使用以下命令同时启动 API 和 Web：
 
 对话页右上角通过 NestJS API 查询 APIMart 账户级余额；Web 只能读取经过共享 Schema 校验的余额快照，不会接触 `APIMART_API_KEY`。余额查询使用同一服务端密钥，无需新增环境变量。
 
@@ -102,9 +102,9 @@ Web、API、MySQL 和 Redis 的容器监听端口、宿主机映射端口、服�
 docker compose down
 ```
 
-## 两步式视频生成工作流
+## 电影化视频生产工作流
 
-`/studio/agent` 在对话内容明确表达视频生成意图后进入可恢复的两步流程：Agent 先将创意整理为结构化的 10 秒分镜；用户确认或提出修改后，API 才会将视频任务写入 `render-jobs`。独立 Worker 调用 APIMart Seedance 2.0、轮询异步任务，并把成片复制到私有 MinIO Bucket。Web 通过 SSE 恢复进度并在右栏播放结果。
+`/studio/agent` 在对话内容明确表达视频生成意图后进入可恢复的电影化生产流程：用户输入框不单独展示时长控件；用户可在对话中明确指定 4–300 秒成片总时长，未指定时由 API 内部的无工具时长决策 Agent 根据最近对话上下文判断；`cinematic-director` 依次生成创作研究、创意方案、脚本、场景和素材规划，并把超出所选模型单次上限的内容拆成连续镜头（Hailuo 最长 10 秒、Seedance 最长 15 秒）。在分镜审核点，用户还可逐镜头设置最终成片秒数；不符合供应商档位的时长会向上圆整（Hailuo 为 6/10 秒，Seedance 为 4–15 秒整数档），页面同时展示成片时长与模型生成档位并要求再次确认，Worker 生成后按成片时长裁切。用户在各审核点确认或提出修改后，API 才会生成剪辑决策并把视频任务写入 `render-jobs`。独立 Worker 沿用逐场景生成、对象存储缓存和 FFmpeg 拼接方案完成长视频。Web 通过 SSE 恢复进度并在右栏播放结果；对话区底部根据持久化步骤事件展示完整进度条和当前中文提示，覆盖需求理解、各创作审核阶段、逐镜头生成、合成与保存，旧事件则从工作流快照回退恢复。普通聊天仅在等待首个流式响应时显示临时“理解需求”提示，不写入聊天历史。每个渲染周期从视频任务入队起最多运行 12 小时；API 同时写入独立的 `cleanup-jobs` 延迟看门狗，到期后原子标记任务和工作流失败、发布 `job.failed`，并清理已生成的场景片段及最终对象。
 
 首次运行前复制 `.env.example` 为 `.env.local` 并填写 `APIMART_API_KEY`。使用 Docker Compose 启动时，`database-migrate` 一次性服务会在 MySQL 健康后应用尚未执行的 Drizzle 迁移；只有迁移成功后 API 和 Worker 才会启动。
 
@@ -121,3 +121,17 @@ pnpm --filter @chat-to-video/database db:migrate
 新增环境部署必须应用 `packages/database/migrations` 中的全部增量迁移；`0003_conversation_video_workflows.sql` 会将会话与视频工作流从一对一调整为一对多。当前 Demo 仍由 API 固定使用 `tenant/demo/project/demo`，客户端不能指定租户或项目。
 
 Docker Compose 已包含 MySQL、数据库迁移、Redis、MinIO、API、Worker 和 Web。详细协议、状态机、配置和 Demo 安全边界见 [`docs/两步式视频工作流.md`](docs/两步式视频工作流.md)。
+
+## Cinematic Agent 扩展
+
+API 内的 `chat-default` 与 `cinematic-director` 已接入首批 Mastra Skills 和四个白名单只读 Tools：`get_agent_capabilities`、`get_video_model_constraints`、`get_cinematic_context`、`estimate_cinematic_cost`。`cinematic-director` 按当前 `scene_plan` 等阶段只暴露对应 Skill 与 reviewer；媒体计算和付费视频生成仍只通过现有 `cinematic-production` 工作流、BullMQ 与 `render-jobs` 执行。
+
+APIMart 真实 Tool Calling 冒烟门禁尚未在本次变更中执行；验证 Chat Completions、工具循环、结构化输出、流式转换、取消/超时/限流/usage 语义前，不得以默认开启状态部署。
+
+服务端通过 `LLM_TOOL_CALLING_ENABLED=true|false` 控制 Skills/Tools 可见性。Agent 每次请求最多执行 8 步，Tool 串行调用；请求作用域来自服务端 `RequestContext`，执行结果写入审计表并复用现有 `agent.step` SSE。关闭开关时 Agent 不获得这些 Skills/Tools；网关不支持 Tool Calling 时返回明确错误，不静默降级。
+
+来源、改编范围和 AGPLv3 处理见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。实现计划见 [首批迁移计划](./docs/cinematic-agent-extension-first-batch.md)，候选能力见 [后续路线](./docs/cinematic-agent-extension-roadmap.md)。
+
+## License
+
+本项目采用 [GNU Affero General Public License v3.0](./LICENSE)。第三方归属见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。

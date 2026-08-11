@@ -103,6 +103,13 @@ services:
       target: api-runtime
     environment:
       API_PORT: "${API_PORT:-4101}"
+      LLM_PROVIDER: "${LLM_PROVIDER:-apimart}"
+      LLM_TOOL_CALLING_ENABLED: "${LLM_TOOL_CALLING_ENABLED:-true}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      DEEPSEEK_BASE_URL: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
+      DEEPSEEK_CHAT_MODEL: "${DEEPSEEK_CHAT_MODEL:-deepseek-v4-flash}"
+      DEEPSEEK_TIMEOUT_MS: "${DEEPSEEK_TIMEOUT_MS:-30000}"
+      DEEPSEEK_STORYBOARD_TIMEOUT_MS: "${DEEPSEEK_STORYBOARD_TIMEOUT_MS:-120000}"
       APIMART_API_KEY: "${APIMART_API_KEY:-}"
       APIMART_BASE_URL: "${APIMART_BASE_URL:-https://api.apimart.ai/v1}"
       APIMART_CHAT_MODEL: "${APIMART_CHAT_MODEL:-gpt-5-mini}"
@@ -156,6 +163,7 @@ services:
       APIMART_VIDEO_RESULT_HOSTS: "${APIMART_VIDEO_RESULT_HOSTS:-apimart.ai,getapib.org}"
       APIMART_VIDEO_TASK_TIMEOUT_MS: "${APIMART_VIDEO_TASK_TIMEOUT_MS:-900000}"
       DATABASE_URL: "mysql://${MYSQL_USER:-chat_to_video}:${MYSQL_PASSWORD:-chat_to_video}@mysql:${MYSQL_PORT:-4002}/${MYSQL_DATABASE:-chat_to_video}"
+      FFMPEG_PATH: "${FFMPEG_PATH:-/usr/bin/ffmpeg}"
       NODE_ENV: production
       REDIS_URL: "redis://redis:${REDIS_PORT:-4003}"
       S3_ENDPOINT: "http://minio:9000"

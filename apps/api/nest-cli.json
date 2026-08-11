@@ -4,6 +4,12 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "builder": "swc",
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "assets": [
+      {
+        "include": "agent-extensions/skills/**/*",
+        "watchAssets": true
+      }
+    ]
   }
 }

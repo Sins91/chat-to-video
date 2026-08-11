@@ -3,6 +3,7 @@ import type { ObjectStorage } from "@chat-to-video/storage";
 import { ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ModelGateway } from "../src/model-gateway/model-gateway.js";
 import {
   MastraRunNotResumableError,
   type MastraRuntimeService,
@@ -31,6 +32,9 @@ describe("VideoWorkflowService interactions", () => {
     claimInteraction: vi.fn(),
     createWorkflow: vi.fn(),
     findWorkflowVideoJob: vi.fn(),
+    findLatestStoryboard: vi.fn(),
+    findLatestCinematicArtifact: vi.fn(),
+    findVideoOutput: vi.fn(),
     findStoryboard: vi.fn(),
     claimVideoJobRetry: vi.fn(),
     updateVideoJob: vi.fn(),
@@ -38,13 +42,15 @@ describe("VideoWorkflowService interactions", () => {
     updateWorkflow: vi.fn(),
   };
   const storage = { createDownloadUrl: vi.fn() };
-  const conversations = { findActiveConversation: vi.fn(), appendMessage: vi.fn(), findWorkflow: vi.fn(), createWithUserMessage: vi.fn() };
+  const conversations = { findActiveConversation: vi.fn(), appendMessage: vi.fn(), findWorkflow: vi.fn(), createWithUserMessage: vi.fn(), listModelMessages: vi.fn() };
+  const modelGateway = { inferCinematicDuration: vi.fn() };
   const runtime = { resume: vi.fn(), start: vi.fn() };
   const events = { append: vi.fn() };
-  const operations = { retryVideo: vi.fn() };
+  const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn() };
   const service = new VideoWorkflowService(
     repository as unknown as VideoWorkflowRepository,
     conversations as unknown as ConversationRepository,
+    modelGateway as unknown as ModelGateway,
     storage as unknown as ObjectStorage,
     runtime as unknown as MastraRuntimeService,
     events as unknown as WorkflowEventService,
@@ -63,26 +69,55 @@ describe("VideoWorkflowService interactions", () => {
     repository.updateVideoModel.mockResolvedValue(true);
     repository.claimVideoJobRetry.mockResolvedValue(true);
     conversations.createWithUserMessage.mockResolvedValue(undefined);
+    conversations.listModelMessages.mockResolvedValue([]);
+    modelGateway.inferCinematicDuration.mockResolvedValue(30);
     runtime.start.mockResolvedValue("run-created");
     operations.retryVideo.mockResolvedValue(undefined);
+    operations.getRenderQueueAhead.mockResolvedValue(null);
   });
 
-  it("persists and starts the selected video model", async () => {
+  it("infers and persists duration before starting the selected video model", async () => {
     const created = await service.create({
       messageId: "message-1",
       prompt: "Generate a rainy night video",
       videoModel: "MiniMax-Hailuo-2.3",
     });
     expect(typeof created.workflowId).toBe("string");
+    expect(modelGateway.inferCinematicDuration).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: created.conversationId,
+      messages: [{ role: "user", content: "Generate a rainy night video" }],
+      videoModel: "MiniMax-Hailuo-2.3",
+    }));
     expect(repository.createWorkflow).toHaveBeenCalledWith(expect.objectContaining({
       videoModel: "MiniMax-Hailuo-2.3",
+      durationSeconds: 30,
     }));
     expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({
       videoModel: "MiniMax-Hailuo-2.3",
+      durationSeconds: 30,
     }), expect.any(Function));
+    expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
+      eventId: created.workflowId + ":understanding",
+      type: "agent.step",
+      data: {
+        status: "drafting",
+        stepId: "understanding",
+        stepLabel: "理解需求",
+        stepState: "running",
+        stepIndex: 1,
+        stepTotal: 8,
+        message: "正在理解你的需求并准备电影化创作流程。",
+      },
+    }));
   });
 
   it("creates another workflow in an existing conversation after the previous one is terminal", async () => {
+    conversations.listModelMessages.mockResolvedValue([
+      { role: "user", content: "先讨论一支节奏舒缓的品牌故事" },
+      { role: "assistant", content: "可以采用三个递进的叙事段落。" },
+    ]);
+    modelGateway.inferCinematicDuration.mockResolvedValue(24);
+
     const created = await service.create({
       conversationId: waitingWorkflow.conversationId,
       messageId: "message-2",
@@ -91,11 +126,32 @@ describe("VideoWorkflowService interactions", () => {
     });
 
     expect(created.conversationId).toBe(waitingWorkflow.conversationId);
+    expect(modelGateway.inferCinematicDuration).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [
+        { role: "user", content: "先讨论一支节奏舒缓的品牌故事" },
+        { role: "assistant", content: "可以采用三个递进的叙事段落。" },
+        { role: "user", content: "Generate a second rainy night video" },
+      ],
+    }));
     expect(repository.createWorkflow).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: waitingWorkflow.conversationId,
       message: { messageId: "message-2", content: "Generate a second rainy night video" },
+      durationSeconds: 24,
     }));
     expect(runtime.start).toHaveBeenCalledOnce();
+  });
+
+  it("does not persist a workflow when conversation-based duration inference fails", async () => {
+    modelGateway.inferCinematicDuration.mockRejectedValue(new Error("upstream unavailable"));
+
+    await expect(service.create({
+      messageId: "message-duration-failure",
+      prompt: "Generate a product story video",
+      videoModel: "MiniMax-Hailuo-2.3",
+    })).rejects.toMatchObject({ response: { code: "VIDEO_DURATION_INFERENCE_FAILED" } });
+    expect(conversations.createWithUserMessage).not.toHaveBeenCalled();
+    expect(repository.createWorkflow).not.toHaveBeenCalled();
+    expect(runtime.start).not.toHaveBeenCalled();
   });
 
   it("rejects a second workflow while another workflow is active", async () => {
@@ -110,12 +166,51 @@ describe("VideoWorkflowService interactions", () => {
     expect(runtime.start).not.toHaveBeenCalled();
   });
 
+  it("returns the live number of render jobs ahead in queued snapshots", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      status: "queued",
+      cinematicStage: "compose",
+      durationSeconds: 30,
+    });
+    repository.findLatestStoryboard.mockResolvedValue(null);
+    repository.findLatestCinematicArtifact.mockResolvedValue(null);
+    repository.findVideoOutput.mockResolvedValue(null);
+    repository.findWorkflowVideoJob.mockResolvedValue({
+      id: `${waitingWorkflow.id}-cinematic-v1`,
+      status: "queued",
+      progress: 0,
+      providerTaskId: null,
+      errorMessage: null,
+    });
+    operations.getRenderQueueAhead.mockResolvedValue(3);
+
+    const snapshot = await service.getSnapshot(waitingWorkflow.id);
+
+    expect(snapshot.videoJob?.queueAhead).toBe(3);
+    expect(operations.getRenderQueueAhead).toHaveBeenCalledWith(
+      `${waitingWorkflow.id}-cinematic-v1`,
+    );
+  });
+
   it("atomically claims and resumes an approval", async () => {
     await expect(service.interact(waitingWorkflow.id, { type: "approve" })).resolves.toEqual({
       accepted: true,
       intent: "approve",
     });
     expect(repository.claimInteraction).toHaveBeenCalledWith(waitingWorkflow.id, 1);
+    expect(runtime.resume).toHaveBeenCalledWith("run-1", { type: "approve" });
+  });
+
+  it("treats a natural next-stage message as approval", async () => {
+    await expect(service.interact(waitingWorkflow.id, {
+      type: "message",
+      messageId: "message-next-stage",
+      text: "继续下一个阶段",
+    })).resolves.toEqual({
+      accepted: true,
+      intent: "approve",
+    });
     expect(runtime.resume).toHaveBeenCalledWith("run-1", { type: "approve" });
   });
 

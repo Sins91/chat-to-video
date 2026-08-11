@@ -29,6 +29,27 @@
       "when": 1786531200000,
       "tag": "0003_conversation_video_workflows",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786617600000,
+      "tag": "0004_cinematic_pipeline",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786704000000,
+      "tag": "0005_cinematic_duration",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786790400000,
+      "tag": "0006_agent_extension_audit",
+      "breakpoints": true
     }
   ]
 }

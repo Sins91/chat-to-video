@@ -11,18 +11,37 @@ const balanceFormatter = new Intl.NumberFormat("zh-CN", {
   minimumFractionDigits: 0,
 });
 
+let pageLoadBalanceRequest: Promise<ApimartAccountBalance> | undefined;
+
+const getPageLoadBalance = (): Promise<ApimartAccountBalance> => {
+  pageLoadBalanceRequest ??= getApimartAccountBalance();
+  return pageLoadBalanceRequest;
+};
+
 export function ApimartBalanceIndicator() {
   const [balance, setBalance] = useState<ApimartAccountBalance | null>(null);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     let isActive = true;
-    void getApimartAccountBalance().then((nextBalance) => {
-      if (isActive) setBalance(nextBalance);
-    }).catch(() => {
-      if (isActive) setHasError(true);
-    });
-    return () => { isActive = false; };
+
+    const loadBalance = async () => {
+      try {
+        const nextBalance = await getPageLoadBalance();
+        if (isActive) {
+          setBalance(nextBalance);
+          setHasError(false);
+        }
+      } catch {
+        if (isActive) setHasError(true);
+      }
+    };
+
+    void loadBalance();
+
+    return () => {
+      isActive = false;
+    };
   }, []);
 
   const displayedBalance = hasError

@@ -16,6 +16,7 @@ export const VideoCreationWorkflowInputSchema = z.object({
   requestId: z.string().uuid(),
   initialPrompt: z.string().trim().min(1).max(4_000),
   videoModel: VideoModelSchema,
+  durationSeconds: z.literal(10).default(10),
 }).strict();
 
 const VideoCreationWorkflowOutputSchema = z.object({

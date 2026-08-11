@@ -14,6 +14,7 @@ type HistorySidebarProps = {
   collapsed: boolean;
   mobileOpen: boolean;
   onCloseMobile: () => void;
+  onConversationSwitch: (conversationId: string) => void;
 };
 
 const GROUPS = ["今天", "昨天", "过去 7 天", "更早"] as const;
@@ -35,6 +36,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar({
   collapsed,
   mobileOpen,
   onCloseMobile,
+  onConversationSwitch,
 }: HistorySidebarProps) {
   const router = useRouter();
   const [items, setItems] = useState<ConversationSummary[]>([]);
@@ -70,9 +72,10 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar({
   }, [items]);
 
   const selectConversation = useCallback((conversationId: string) => {
+    onConversationSwitch(conversationId);
     router.push(`/studio/agent?conversationId=${encodeURIComponent(conversationId)}`);
     onCloseMobile();
-  }, [onCloseMobile, router]);
+  }, [onCloseMobile, onConversationSwitch, router]);
 
   const removeConversation = useCallback(async (conversationId: string) => {
     try {
@@ -90,9 +93,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar({
       {GROUPS.map((group) => {
         const conversations = grouped.get(group) ?? [];
         return conversations.length > 0 ? <section className="mb-4" key={group}>
-          <h2 className="px-3 pb-1.5 text-[11px] font-medium text-zinc-600">{group}</h2>
+          <h2 className="px-3 pb-1.5 text-[13px] font-bold text-sidebar-section-foreground">{group}</h2>
           <ul className="space-y-0.5">{conversations.map((conversation) => <li className="group relative" key={conversation.conversationId}>
-            <button className={cn("flex h-9 w-full items-center rounded-lg px-3 pr-9 text-left text-sm text-zinc-400 group-hover:bg-white/6 group-hover:text-zinc-200", conversation.conversationId === activeConversationId && "bg-white/8 text-zinc-100")} onClick={() => selectConversation(conversation.conversationId)} type="button"><span className="truncate">{conversation.title}</span></button>
+            <button className={cn("flex h-9 w-full items-center rounded-lg px-3 pr-9 text-left text-sm text-muted-foreground group-hover:bg-accent group-hover:text-foreground", conversation.conversationId === activeConversationId && "bg-accent text-foreground")} onClick={() => selectConversation(conversation.conversationId)} type="button"><span className="truncate">{conversation.title}</span></button>
             <DropdownMenu>
               <DropdownMenuTrigger className="absolute right-1 top-1 grid size-7 cursor-pointer place-items-center rounded-md text-zinc-500 opacity-0 hover:[&_svg]:brightness-150 group-hover:opacity-100 data-popup-open:opacity-100" aria-label={`管理对话：${conversation.title}`}><MoreHorizontalIcon className="size-4" /></DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-32"><DropdownMenuItem onClick={() => void removeConversation(conversation.conversationId)} variant="destructive"><Trash2Icon />删除</DropdownMenuItem></DropdownMenuContent>

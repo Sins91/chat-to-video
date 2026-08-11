@@ -4,9 +4,9 @@ import type { UIMessageChunk } from "ai";
 import { randomUUID } from "node:crypto";
 
 import { ConversationService } from "./conversation/conversation.service.js";
-
 import {
   MODEL_GATEWAY,
+  ModelGatewayError,
   type ChatModelStream,
   type ModelGateway,
 } from "./model-gateway/model-gateway.js";
@@ -35,12 +35,18 @@ export class ChatAgentService {
       messageId: input.message.id,
       content: input.message.content,
     });
-    const messages: ChatAgentMessage[] = await this.conversations.listModelMessages(conversationId);
+    const [messages, scope]: [ChatAgentMessage[], Awaited<ReturnType<ConversationService["getScope"]>>] = await Promise.all([
+      this.conversations.listModelMessages(conversationId),
+      this.conversations.getScope(conversationId),
+    ]);
 
     try {
       const result = await this.modelGateway.streamChat({
         abortSignal,
         requestId,
+        conversationId,
+        tenantId: scope.tenantId,
+        projectId: scope.projectId,
         messages,
       });
 
@@ -67,11 +73,14 @@ export class ChatAgentService {
       return { conversationId, requestId, stream };
     } catch (error: unknown) {
       this.logger.error(
-        `APIMart chat request failed requestId=${requestId} error=${error instanceof Error ? error.name : "unknown"}`,
+        `LLM chat request failed requestId=${requestId} error=${error instanceof Error ? error.name : "unknown"}`,
       );
+      const code = error instanceof ModelGatewayError ? error.code : "MODEL_GATEWAY_FAILED";
       throw new BadGatewayException({
-        code: "MODEL_GATEWAY_FAILED",
-        message: "The chat model request failed.",
+        code,
+        message: code === "AGENT_TOOL_CALLING_UNSUPPORTED"
+          ? "当前模型网关不支持所需的工具调用，请关闭工具调用或更换兼容模型。"
+          : "聊天模型请求失败，请稍后重试。",
         requestId,
       });
     }

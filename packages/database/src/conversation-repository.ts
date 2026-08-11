@@ -3,6 +3,7 @@ import { and, asc, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 
 import type { Database } from "./client.js";
 import {
+  cinematicArtifactVersions,
   conversationMessages,
   conversations,
   storyboardVersions,
@@ -97,6 +98,20 @@ export class ConversationRepository {
       .innerJoin(videoWorkflows, eq(storyboardVersions.workflowId, videoWorkflows.id))
       .where(eq(videoWorkflows.conversationId, conversationId))
       .orderBy(asc(storyboardVersions.createdAt), asc(storyboardVersions.id));
+  }
+
+  async listCinematicArtifacts(conversationId: string) {
+    return this.database.select({
+      id: cinematicArtifactVersions.id,
+      workflowId: cinematicArtifactVersions.workflowId,
+      version: cinematicArtifactVersions.version,
+      revisionRequest: cinematicArtifactVersions.revisionRequest,
+      artifact: cinematicArtifactVersions.artifact,
+      createdAt: cinematicArtifactVersions.createdAt,
+    }).from(cinematicArtifactVersions)
+      .innerJoin(videoWorkflows, eq(cinematicArtifactVersions.workflowId, videoWorkflows.id))
+      .where(eq(videoWorkflows.conversationId, conversationId))
+      .orderBy(asc(cinematicArtifactVersions.createdAt), asc(cinematicArtifactVersions.id));
   }
 
   async findWorkflow(conversationId: string) {

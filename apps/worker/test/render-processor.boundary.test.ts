@@ -16,5 +16,10 @@ describe("RenderProcessor workflow boundary", () => {
     expect(source).toContain('`${payload.jobId}:failed`');
     expect(source).toContain("const DOWNLOAD_ATTEMPTS = 5");
     expect(source).toContain("APIMart video result download network request failed");
+    expect(source).toContain('"video-generation"');
+    expect(source).toContain('"正在生成镜头 "');
+    expect(source).toContain('"所有镜头已就绪，正在合成最终视频。"');
+    expect(source).toContain('"正在保存最终视频。"');
+    expect(source).toContain('eventKey + ":" + boundedProgress');
   });
 });

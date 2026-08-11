@@ -5,6 +5,7 @@ vi.mock("@mastra/ai-sdk", () => mastraAiSdk);
 
 import {
   ApimartModelGateway,
+  buildCinematicDurationPrompt,
   buildStoryboardPrompt,
   createApimartFetch,
   transformApimartRequestBody,
@@ -58,6 +59,23 @@ describe("createApimartFetch", () => {
   });
 });
 
+describe("buildCinematicDurationPrompt", () => {
+  it("uses the chronological conversation and selected model constraints", () => {
+    const prompt = buildCinematicDurationPrompt({
+      videoModel: "MiniMax-Hailuo-2.3",
+      messages: [
+        { role: "user", content: "先做一个三幕品牌故事" },
+        { role: "assistant", content: "可以先铺垫，再转折，最后收束。" },
+        { role: "user", content: "现在生成视频" },
+      ],
+    });
+
+    expect(prompt).toContain("total final duration");
+    expect(prompt).toContain("10 seconds per scene");
+    expect(prompt).toContain("三幕品牌故事");
+    expect(prompt).toContain("现在生成视频");
+  });
+});
 describe("buildStoryboardPrompt", () => {
   it("includes the complete JSON contract required when native structured outputs are unavailable", () => {
     const prompt = buildStoryboardPrompt({
@@ -97,6 +115,45 @@ describe("buildStoryboardPrompt", () => {
 });
 
 describe("ApimartModelGateway Mastra agents", () => {
+  it("returns a schema-validated duration from the dedicated no-tool agent", async () => {
+    const generate = vi.fn().mockResolvedValue({
+      object: {
+        durationSeconds: 24,
+        rationale: "三段叙事需要留出铺垫、转折和收束。",
+      },
+    });
+    const agents = {
+      durationPlanner: { generate },
+      providerName: "apimart",
+      storyboard: { generate: vi.fn() },
+      chat: { stream: vi.fn() },
+      structuredOutputModel: {},
+      timeoutMs: 30_000,
+      storyboardTimeoutMs: 120_000,
+    };
+    const gateway = new ApimartModelGateway(agents as unknown as MastraAgents);
+
+    await expect(gateway.inferCinematicDuration({
+      requestId: "00000000-0000-4000-8000-000000000001",
+      conversationId: "00000000-0000-4000-8000-000000000002",
+      tenantId: "tenant-1",
+      projectId: "project-1",
+      messages: [{ role: "user", content: "生成一支三幕品牌短片" }],
+      videoModel: "MiniMax-Hailuo-2.3",
+    })).resolves.toBe(24);
+    expect(generate).toHaveBeenCalledWith(
+      expect.stringContaining("三幕品牌短片"),
+      expect.objectContaining({
+        maxSteps: 1,
+        toolChoice: "none",
+        modelSettings: { maxRetries: 0 },
+      }),
+    );
+    expect(JSON.stringify(generate.mock.calls)).toContain(
+      '"jsonPromptInjection":"inline"',
+    );
+  });
+
   it("repairs one schema-invalid storyboard without framework retries", async () => {
     const agents = {
       storyboard: { generate: vi.fn()
@@ -110,6 +167,10 @@ describe("ApimartModelGateway Mastra agents", () => {
 
     await expect(gateway.generateStoryboard({
       requestId: "00000000-0000-4000-8000-000000000001",
+      workflowId: "00000000-0000-4000-8000-000000000004",
+      conversationId: "00000000-0000-4000-8000-000000000002",
+      tenantId: "tenant-1",
+      projectId: "project-1",
       initialPrompt: "雨夜来信",
     })).resolves.toEqual(storyboard);
     expect(agents.storyboard.generate).toHaveBeenCalledTimes(2);
@@ -135,6 +196,9 @@ describe("ApimartModelGateway Mastra agents", () => {
     await expect(gateway.streamChat({
       abortSignal: controller.signal,
       requestId: "00000000-0000-4000-8000-000000000001",
+      conversationId: "00000000-0000-4000-8000-000000000002",
+      tenantId: "tenant-1",
+      projectId: "project-1",
       messages: [{ role: "user", content: "hello" }],
     })).resolves.toEqual({ stream: uiStream });
     expect(passedSignal).toBeInstanceOf(AbortSignal);

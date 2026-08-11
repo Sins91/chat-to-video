@@ -66,6 +66,25 @@ export class ConversationService {
     return conversationId;
   }
 
+  async getScope(conversationId: string): Promise<{
+    conversationId: string;
+    tenantId: string;
+    projectId: string;
+  }> {
+    const conversation = await this.repository.findActiveConversation(conversationId);
+    if (!conversation) {
+      throw new NotFoundException({
+        code: "CONVERSATION_NOT_FOUND",
+        message: "Conversation not found.",
+      });
+    }
+    return {
+      conversationId: conversation.id,
+      tenantId: conversation.tenantId,
+      projectId: conversation.projectId,
+    };
+  }
+
   listModelMessages(conversationId: string) {
     return this.repository.listModelMessages(conversationId);
   }
@@ -99,9 +118,10 @@ export class ConversationService {
   async get(conversationId: string): Promise<ConversationDetail> {
     const conversation = await this.repository.findActiveConversation(conversationId);
     if (!conversation) throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
-    const [messages, storyboards, workflow] = await Promise.all([
+    const [messages, storyboards, cinematicArtifacts, workflow] = await Promise.all([
       this.repository.listMessages(conversationId),
       this.repository.listStoryboardVersions(conversationId),
+      this.repository.listCinematicArtifacts(conversationId),
       this.repository.findWorkflow(conversationId),
     ]);
     const entries = [
@@ -120,6 +140,18 @@ export class ConversationService {
           version: row.version,
           revisionRequest: row.revisionRequest,
           storyboard: row.storyboard,
+          createdAt: row.createdAt.toISOString(),
+        },
+        createdAt: row.createdAt.toISOString(),
+      })),
+      ...cinematicArtifacts.map((row) => ({
+        id: row.id,
+        type: "cinematic_artifact" as const,
+        workflowId: row.workflowId,
+        artifact: {
+          version: row.version,
+          revisionRequest: row.revisionRequest,
+          artifact: row.artifact,
           createdAt: row.createdAt.toISOString(),
         },
         createdAt: row.createdAt.toISOString(),

@@ -1,15 +1,20 @@
 import type {
+  CinematicArtifact,
+  CinematicGenerativeStage,
+  CinematicStage,
   Storyboard,
   VideoModel,
   VideoJobStatus,
   VideoWorkflowEvent,
   VideoWorkflowStatus,
 } from "@chat-to-video/contracts";
-import { and, asc, desc, eq, gt, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, notInArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import type { Database } from "./client.js";
 import {
+  cinematicArtifactVersions,
+  cinematicSceneJobs,
   storyboardVersions,
   conversationMessages,
   conversations,
@@ -25,6 +30,7 @@ type NewWorkflow = {
   requestId: string;
   initialPrompt: string;
   videoModel: VideoModel;
+  durationSeconds: number;
   message?: { messageId: string; content: string };
 };
 
@@ -67,6 +73,7 @@ export class VideoWorkflowRepository {
         requestId: input.requestId,
         initialPrompt: input.initialPrompt,
         videoModel: input.videoModel,
+        durationSeconds: input.durationSeconds,
         status: "drafting",
       });
       if (input.message) {
@@ -91,6 +98,7 @@ export class VideoWorkflowRepository {
   async updateWorkflow(workflowId: string, values: {
     status?: VideoWorkflowStatus;
     currentVersion?: number;
+    cinematicStage?: CinematicStage;
     errorMessage?: string | null;
   }): Promise<void> {
     await this.database.update(videoWorkflows).set({ ...values, updatedAt: new Date() }).where(eq(videoWorkflows.id, workflowId));
@@ -113,6 +121,7 @@ export class VideoWorkflowRepository {
       .where(and(
         eq(videoWorkflows.id, workflowId),
         eq(videoWorkflows.status, "awaiting_input"),
+        eq(videoWorkflows.cinematicStage, "proposal"),
       ));
     return readAffectedRows(result) === 1;
   }
@@ -120,6 +129,32 @@ export class VideoWorkflowRepository {
   async findWorkflow(workflowId: string) {
     const rows = await this.database.select().from(videoWorkflows).where(eq(videoWorkflows.id, workflowId)).limit(1);
     return rows[0] ?? null;
+  }
+
+  async findWorkflowScope(workflowId: string) {
+    const rows = await this.database.select({
+      workflow: videoWorkflows,
+      tenantId: conversations.tenantId,
+      projectId: conversations.projectId,
+    }).from(videoWorkflows)
+      .innerJoin(conversations, eq(videoWorkflows.conversationId, conversations.id))
+      .where(and(eq(videoWorkflows.id, workflowId), isNull(conversations.deletedAt)))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async findScopedWorkflow(workflowId: string, tenantId: string, projectId: string) {
+    const rows = await this.database.select({ workflow: videoWorkflows })
+      .from(videoWorkflows)
+      .innerJoin(conversations, eq(videoWorkflows.conversationId, conversations.id))
+      .where(and(
+        eq(videoWorkflows.id, workflowId),
+        eq(conversations.tenantId, tenantId),
+        eq(conversations.projectId, projectId),
+        isNull(conversations.deletedAt),
+      ))
+      .limit(1);
+    return rows[0]?.workflow ?? null;
   }
 
   async saveStoryboard(input: {
@@ -159,6 +194,100 @@ export class VideoWorkflowRepository {
     return rows[0] ?? null;
   }
 
+  async saveCinematicArtifact(input: {
+    workflowId: string;
+    stage: CinematicGenerativeStage;
+    version: number;
+    revisionRequest: string | null;
+    artifact: CinematicArtifact;
+  }): Promise<void> {
+    await this.database.insert(cinematicArtifactVersions).values({
+      id: randomUUID(),
+      ...input,
+    }).onDuplicateKeyUpdate({
+      set: {
+        revisionRequest: input.revisionRequest,
+        artifact: input.artifact,
+      },
+    });
+    const workflow = await this.findWorkflow(input.workflowId);
+    if (workflow?.conversationId) {
+      await this.database.update(conversations)
+        .set({ updatedAt: new Date() })
+        .where(eq(conversations.id, workflow.conversationId));
+    }
+  }
+
+  async findCinematicArtifact(workflowId: string, version: number) {
+    const rows = await this.database.select().from(cinematicArtifactVersions)
+      .where(and(
+        eq(cinematicArtifactVersions.workflowId, workflowId),
+        eq(cinematicArtifactVersions.version, version),
+      )).limit(1);
+    return rows[0] ?? null;
+  }
+
+  async findLatestCinematicArtifact(
+    workflowId: string,
+    stage?: CinematicGenerativeStage,
+  ) {
+    const condition = stage
+      ? and(
+          eq(cinematicArtifactVersions.workflowId, workflowId),
+          eq(cinematicArtifactVersions.stage, stage),
+        )
+      : eq(cinematicArtifactVersions.workflowId, workflowId);
+    const rows = await this.database.select().from(cinematicArtifactVersions)
+      .where(condition)
+      .orderBy(desc(cinematicArtifactVersions.version))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async listCinematicArtifacts(workflowId: string) {
+    return this.database.select().from(cinematicArtifactVersions)
+      .where(eq(cinematicArtifactVersions.workflowId, workflowId))
+      .orderBy(asc(cinematicArtifactVersions.version));
+  }
+
+  async createCinematicSceneJob(input: {
+    id: string;
+    videoJobId: string;
+    workflowId: string;
+    sceneOrder: number;
+    objectKey: string;
+  }): Promise<void> {
+    await this.database.insert(cinematicSceneJobs).values({
+      ...input,
+      status: "queued",
+      progress: 0,
+    }).onDuplicateKeyUpdate({ set: { updatedAt: new Date() } });
+  }
+
+  async findCinematicSceneJob(id: string) {
+    const rows = await this.database.select().from(cinematicSceneJobs)
+      .where(eq(cinematicSceneJobs.id, id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async listCinematicSceneJobs(videoJobId: string) {
+    return this.database.select().from(cinematicSceneJobs)
+      .where(eq(cinematicSceneJobs.videoJobId, videoJobId))
+      .orderBy(asc(cinematicSceneJobs.sceneOrder));
+  }
+
+  async updateCinematicSceneJob(id: string, values: {
+    status?: VideoJobStatus;
+    progress?: number;
+    providerTaskId?: string;
+    errorMessage?: string | null;
+  }): Promise<void> {
+    await this.database.update(cinematicSceneJobs)
+      .set({ ...values, updatedAt: new Date() })
+      .where(eq(cinematicSceneJobs.id, id));
+  }
+
   async createVideoJob(input: {
     id: string;
     workflowId: string;
@@ -189,6 +318,59 @@ export class VideoWorkflowRepository {
     await this.database.update(videoJobs).set({ ...values, updatedAt: new Date() }).where(eq(videoJobs.id, jobId));
   }
 
+  async updateVideoJobProgress(
+    workflowId: string,
+    jobId: string,
+    progress: number,
+  ): Promise<boolean> {
+    return this.database.transaction(async (transaction) => {
+      const result: unknown = await transaction.update(videoJobs)
+        .set({ status: "running", progress, updatedAt: new Date() })
+        .where(and(
+          eq(videoJobs.id, jobId),
+          eq(videoJobs.workflowId, workflowId),
+          notInArray(videoJobs.status, ["succeeded", "failed", "cancelled"]),
+        ));
+      if (readAffectedRows(result) !== 1) return false;
+      await transaction.update(videoWorkflows)
+        .set({ status: "running", updatedAt: new Date() })
+        .where(and(
+          eq(videoWorkflows.id, workflowId),
+          notInArray(videoWorkflows.status, ["succeeded", "failed", "cancelled"]),
+        ));
+      return true;
+    });
+  }
+
+  async claimVideoJobFailure(
+    workflowId: string,
+    jobId: string,
+    message: string,
+  ): Promise<boolean> {
+    return this.database.transaction(async (transaction) => {
+      const result: unknown = await transaction.update(videoJobs)
+        .set({ status: "failed", errorMessage: message, updatedAt: new Date() })
+        .where(and(
+          eq(videoJobs.id, jobId),
+          eq(videoJobs.workflowId, workflowId),
+          notInArray(videoJobs.status, ["succeeded", "failed", "cancelled"]),
+        ));
+      if (readAffectedRows(result) !== 1) return false;
+      await transaction.update(cinematicSceneJobs)
+        .set({ status: "failed", errorMessage: message, updatedAt: new Date() })
+        .where(and(
+          eq(cinematicSceneJobs.videoJobId, jobId),
+          notInArray(cinematicSceneJobs.status, ["succeeded", "failed", "cancelled"]),
+        ));
+      await transaction.update(videoWorkflows)
+        .set({ status: "failed", errorMessage: message, updatedAt: new Date() })
+        .where(and(
+          eq(videoWorkflows.id, workflowId),
+          notInArray(videoWorkflows.status, ["succeeded", "failed", "cancelled"]),
+        ));
+      return true;
+    });
+  }
   async claimVideoJobRetry(workflowId: string, jobId: string): Promise<boolean> {
     return this.database.transaction(async (transaction) => {
       const result: unknown = await transaction.update(videoJobs)
@@ -209,6 +391,42 @@ export class VideoWorkflowRepository {
   async saveVideoOutput(input: { jobId: string; objectKey: string; mimeType: string; sizeBytes: number }): Promise<void> {
     await this.database.insert(videoOutputs).values({ id: randomUUID(), ...input }).onDuplicateKeyUpdate({
       set: { objectKey: input.objectKey, mimeType: input.mimeType, sizeBytes: input.sizeBytes },
+    });
+  }
+
+  async completeVideoJob(input: {
+    jobId: string;
+    workflowId: string;
+    objectKey: string;
+    mimeType: string;
+    sizeBytes: number;
+  }): Promise<boolean> {
+    return this.database.transaction(async (transaction) => {
+      const result: unknown = await transaction.update(videoJobs)
+        .set({ status: "succeeded", progress: 100, errorMessage: null, updatedAt: new Date() })
+        .where(and(
+          eq(videoJobs.id, input.jobId),
+          eq(videoJobs.workflowId, input.workflowId),
+          notInArray(videoJobs.status, ["succeeded", "failed", "cancelled"]),
+        ));
+      if (readAffectedRows(result) !== 1) return false;
+      await transaction.insert(videoOutputs).values({
+        id: randomUUID(),
+        jobId: input.jobId,
+        objectKey: input.objectKey,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+      }).onDuplicateKeyUpdate({
+        set: {
+          objectKey: input.objectKey,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
+        },
+      });
+      await transaction.update(videoWorkflows)
+        .set({ status: "succeeded", errorMessage: null, updatedAt: new Date() })
+        .where(eq(videoWorkflows.id, input.workflowId));
+      return true;
     });
   }
 

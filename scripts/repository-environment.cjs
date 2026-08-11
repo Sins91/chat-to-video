@@ -4,6 +4,24 @@ const { loadEnvFile } = require("node:process");
 
 const DEFAULT_ENV_FILE = ".env.local";
 const ENV_FILE_NAME_PATTERN = /^\.env(?:\.[a-zA-Z0-9_-]+)*$/;
+const NODE_WEB_STORAGE_DISABLE_OPTION = "--no-webstorage";
+const NODE_WEB_STORAGE_DISABLE_PATTERN =
+  /(?:^|\s)--no-webstorage(?:\s|$)/u;
+
+const disableNodeWebStorage = (environment = process.env) => {
+  const nodeOptions = environment.NODE_OPTIONS?.trim();
+
+  if (nodeOptions && NODE_WEB_STORAGE_DISABLE_PATTERN.test(nodeOptions)) {
+    return { ...environment };
+  }
+
+  return {
+    ...environment,
+    NODE_OPTIONS: nodeOptions
+      ? `${nodeOptions} ${NODE_WEB_STORAGE_DISABLE_OPTION}`
+      : NODE_WEB_STORAGE_DISABLE_OPTION,
+  };
+};
 
 const resolveRepositoryEnvironmentFile = (
   repositoryRoot,
@@ -57,6 +75,7 @@ const parsePort = (name, value) => {
 };
 
 module.exports = {
+  disableNodeWebStorage,
   loadRepositoryEnvironment,
   parsePort,
   resolveRepositoryEnvironmentFile,

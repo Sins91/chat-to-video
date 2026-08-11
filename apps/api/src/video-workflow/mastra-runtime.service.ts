@@ -1,16 +1,17 @@
 import { Inject, Injectable, type OnModuleDestroy } from "@nestjs/common";
+import type { VideoWorkflowInteraction } from "@chat-to-video/contracts";
 import { Mastra } from "@mastra/core/mastra";
 import { RedisStore } from "@mastra/redis";
 import { RedisStreamsPubSub } from "@mastra/redis-streams";
 
 import { MASTRA_AGENTS, type MastraAgents } from "../model-gateway/mastra-agents.js";
 import {
-  createVideoCreationWorkflow,
-  initialVideoCreationState,
-  VIDEO_CREATION_WORKFLOW_ID,
-  VIDEO_REVIEW_STEP_ID,
-  type VideoCreationWorkflowInput,
-} from "../workflows/video-creation.workflow.js";
+  CINEMATIC_DIRECTOR_STEP_ID,
+  CINEMATIC_WORKFLOW_ID,
+  createCinematicWorkflow,
+  initialCinematicState,
+  type CinematicWorkflowInput,
+} from "../workflows/cinematic-production.workflow.js";
 import { loadRedisUrl } from "./video-workflow.config.js";
 import { VideoWorkflowOperations } from "./video-workflow.operations.js";
 
@@ -47,13 +48,15 @@ export class MastraRuntimeService implements OnModuleDestroy {
       streamIdleTtlMs: 7 * 24 * 60 * 60 * 1_000,
       maxDeliveryAttempts: 5,
     });
-    this.workflow = createVideoCreationWorkflow(operations);
+    this.workflow = createCinematicWorkflow(operations);
     this.mastra = new Mastra({
       agents: {
         chatDefault: agents.chat,
         storyboardAgent: agents.storyboard,
+        cinematicDirector: agents.cinematic,
+        cinematicDurationPlanner: agents.durationPlanner,
       },
-      workflows: { videoCreation: this.workflow },
+      workflows: { cinematicProduction: this.workflow },
       storage: this.storage,
       pubsub: this.pubsub,
       logger: false,
@@ -65,24 +68,24 @@ export class MastraRuntimeService implements OnModuleDestroy {
     return this.initialized;
   }
 
-  async start(input: VideoCreationWorkflowInput, persistRunId: (runId: string) => Promise<void>): Promise<string> {
+  async start(input: CinematicWorkflowInput, persistRunId: (runId: string) => Promise<void>): Promise<string> {
     await this.initialize();
     const run = await this.workflow.createRun({ pubsub: this.pubsub });
     await persistRunId(run.runId);
-    await run.startAsync({ inputData: input, initialState: initialVideoCreationState() });
+    await run.startAsync({ inputData: input, initialState: initialCinematicState() });
     return run.runId;
   }
 
-  async resume(runId: string, interaction: { type: "approve" } | { type: "message"; text: string }): Promise<void> {
+  async resume(runId: string, interaction: VideoWorkflowInteraction): Promise<void> {
     await this.initialize();
     const workflows = await this.storage.getStore("workflows");
     const snapshot = await workflows?.loadWorkflowSnapshot({
-      workflowName: VIDEO_CREATION_WORKFLOW_ID,
+      workflowName: CINEMATIC_WORKFLOW_ID,
       runId,
     });
     if (!snapshot) throw new MastraRunNotResumableError(runId);
     const run = await this.workflow.createRun({ runId, pubsub: this.pubsub });
-    await run.resumeAsync({ step: VIDEO_REVIEW_STEP_ID, resumeData: interaction });
+    await run.resumeAsync({ step: CINEMATIC_DIRECTOR_STEP_ID, resumeData: interaction });
   }
 
   async onModuleDestroy(): Promise<void> {

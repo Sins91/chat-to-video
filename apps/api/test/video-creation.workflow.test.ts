@@ -13,6 +13,7 @@ const input = {
   requestId: "00000000-0000-4000-8000-000000000002",
   initialPrompt: "A letter arriving on a rainy night",
   videoModel: "MiniMax-Hailuo-2.3" as const,
+  durationSeconds: 10 as const,
 };
 
 const storyboard = {

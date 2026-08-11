@@ -1,6 +1,7 @@
 import {
   ApimartVideoSubmissionSchema,
   ApimartVideoTaskSchema,
+  VIDEO_MODEL_DURATION_OPTIONS,
   type ApimartVideoTask,
 } from "@chat-to-video/contracts";
 
@@ -38,13 +39,23 @@ const requestFailure = (operation: string, error: unknown): Error => {
 export class SeedanceClient {
   constructor(private readonly config: WorkerConfig["apimart"]) {}
 
-  private submissionBody(prompt: string): Record<string, string | number | boolean> {
+  private submissionBody(
+    prompt: string,
+    durationSeconds: number,
+  ): Record<string, string | number | boolean> {
+    if (!VIDEO_MODEL_DURATION_OPTIONS[this.config.model].some(
+      (option) => option === durationSeconds,
+    )) {
+      throw new PermanentVideoError(
+        "Duration " + durationSeconds + " is not supported by " + this.config.model + ".",
+      );
+    }
     if (this.config.model === "MiniMax-Hailuo-2.3") {
       return {
         model: this.config.model,
         prompt,
         resolution: this.config.resolution,
-        duration: this.config.durationSeconds,
+        duration: durationSeconds,
         prompt_optimizer: this.config.promptOptimizer,
         fast_pretreatment: this.config.fastPretreatment,
         watermark: this.config.watermark,
@@ -55,7 +66,7 @@ export class SeedanceClient {
       prompt,
       resolution: this.config.resolution,
       size: this.config.size,
-      duration: this.config.durationSeconds,
+      duration: durationSeconds,
       generate_audio: this.config.seedanceGenerateAudio,
     };
   }
@@ -95,10 +106,10 @@ export class SeedanceClient {
     throw requestFailure(operation, lastError);
   }
 
-  async submit(prompt: string): Promise<string> {
+  async submit(prompt: string, durationSeconds = this.config.durationSeconds): Promise<string> {
     const response = ApimartVideoSubmissionSchema.parse(await this.request("/videos/generations", "submission", {
       method: "POST",
-      body: JSON.stringify(this.submissionBody(prompt)),
+      body: JSON.stringify(this.submissionBody(prompt, durationSeconds)),
     }));
     const taskId = response.data[0]?.task_id;
     if (!taskId) throw new PermanentVideoError("APIMart did not return a task ID.");

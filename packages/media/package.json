@@ -12,5 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "clean": "rimraf dist coverage"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0"
   }
 }

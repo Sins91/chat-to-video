@@ -20,4 +20,14 @@ describe("API SWC configuration", () => {
 
     expect(packageJson.scripts?.start).toBe("node dist/main.js");
   });
+  it("copies packaged Mastra Skill assets", async () => {
+    const source = await readFile(resolve(import.meta.dirname, "../nest-cli.json"), "utf8");
+    const config = JSON.parse(source) as {
+      compilerOptions?: { assets?: Array<{ include?: string }> };
+    };
+
+    expect(config.compilerOptions?.assets).toContainEqual(expect.objectContaining({
+      include: "agent-extensions/skills/**/*",
+    }));
+  });
 });

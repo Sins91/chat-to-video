@@ -54,14 +54,51 @@ describe("fetchApimartAccountBalance", () => {
     expect(Number.isNaN(Date.parse(result.refreshedAt))).toBe(false);
   });
 
-  it("rejects unsuccessful or malformed upstream responses", async () => {
+  it("accepts a finite balance when APIMart omits unlimited_quota", async () => {
+    const fetchMock = vi.fn<FetchImplementation>().mockResolvedValue(Response.json({
+      success: true,
+      remain_balance: 74.75,
+      used_balance: 25.5,
+    }));
+
+    await expect(fetchApimartAccountBalance(config, fetchMock)).resolves.toMatchObject({
+      remainingBalance: 74.75,
+      isUnlimited: false,
+    });
+  });
+
+  it("infers unlimited quota from APIMart's negative-one sentinel", async () => {
+    const fetchMock = vi.fn<FetchImplementation>().mockResolvedValue(Response.json({
+      success: true,
+      remain_balance: -1,
+      used_balance: 25.5,
+    }));
+
+    await expect(fetchApimartAccountBalance(config, fetchMock)).resolves.toMatchObject({
+      remainingBalance: null,
+      isUnlimited: true,
+    });
+  });
+
+  it("preserves the reason from a successful HTTP response rejected by APIMart", async () => {
     const fetchMock = vi.fn<FetchImplementation>().mockResolvedValue(Response.json({
       success: false,
-      message: "failed",
+      message: "Failed to get user quota",
     }));
 
     await expect(fetchApimartAccountBalance(config, fetchMock)).rejects.toThrow(
-      "APIMart account balance request failed",
+      "status=200 reason=upstream_failure message=Failed to get user quota",
+    );
+  });
+
+  it("distinguishes a malformed successful response", async () => {
+    const fetchMock = vi.fn<FetchImplementation>().mockResolvedValue(Response.json({
+      success: true,
+      remain_balance: "100.25",
+    }));
+
+    await expect(fetchApimartAccountBalance(config, fetchMock)).rejects.toThrow(
+      "status=200 reason=invalid_response issues=remain_balance:",
     );
   });
 });

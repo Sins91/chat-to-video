@@ -30,9 +30,22 @@ describe("Studio UI shell", () => {
     expect(studioShell).toContain("2,480 积分");
   });
 
-  it("scopes the dark theme to the Studio layout", async () => {
-    const studioLayout = await readFile(resolve(webRoot, "app/(studio)/studio/layout.tsx"), "utf8");
-    expect(studioLayout).toContain("dark studio-theme");
+  it("supports persisted light and dark design tokens", async () => {
+    const [rootLayout, studioLayout, studioShell, globals] = await Promise.all([
+      readFile(resolve(webRoot, "app/layout.tsx"), "utf8"),
+      readFile(resolve(webRoot, "app/(studio)/studio/layout.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/ported/studio-shell.tsx"), "utf8"),
+      readFile(resolve(webRoot, "app/globals.css"), "utf8"),
+    ]);
+
+    expect(rootLayout).toContain("filfil-theme");
+    expect(rootLayout).toContain("prefers-color-scheme: dark");
+    expect(studioLayout).toContain('className="studio-theme min-h-dvh bg-background text-foreground"');
+    expect(studioLayout).not.toContain("dark studio-theme");
+    expect(studioShell).toContain("ThemeToggle");
+    expect(globals).toContain(":root {");
+    expect(globals).toContain(".dark {");
+    expect(globals).toContain("--color-sidebar: var(--sidebar)");
   });
 
   it("uses the default submit icon for the error state", async () => {
@@ -47,6 +60,12 @@ describe("Studio UI shell", () => {
     expect(workspace).toContain('minSize="50%"');
     expect(workspace).toContain('maxSize="72%"');
     expect(workspace).toContain("ResizableHandle");
+  });
+
+  it("keeps the active conversation at the hover highlight color", async () => {
+    const sidebar = await readFile(resolve(webRoot, "components/chat/chat-history-sidebar.tsx"), "utf8");
+    expect(sidebar).toContain("group-hover:bg-accent group-hover:text-foreground");
+    expect(sidebar).toContain('activeConversationId && "bg-accent text-foreground"');
   });
 
   it("keeps a vertical separator narrow for a horizontal panel group", async () => {
@@ -64,6 +83,10 @@ describe("Studio UI shell", () => {
 
     expect(panel).toContain("ApimartBalanceIndicator");
     expect(balanceIndicator).toContain("getApimartAccountBalance");
+    expect(balanceIndicator).toContain("pageLoadBalanceRequest ??=");
+    expect(balanceIndicator).not.toContain("setInterval");
+    expect(balanceIndicator).not.toContain('window.addEventListener("focus"');
+    expect(balanceIndicator).not.toContain('document.addEventListener("visibilitychange"');
     expect(balanceIndicator).toContain("APIMart 余额");
   });
 

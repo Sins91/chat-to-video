@@ -34,3 +34,9 @@ artifacts/
 
 # Local project documentation
 /docs/
+!/docs/
+/docs/*
+!/docs/cinematic-workflow.md
+
+!/docs/cinematic-agent-extension-first-batch.md
+!/docs/cinematic-agent-extension-roadmap.md

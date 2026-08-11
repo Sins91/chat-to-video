@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export type StorageConfig = {
@@ -41,6 +41,22 @@ export class ObjectStorage {
       Body: input.body,
       ContentLength: input.body.byteLength,
       ContentType: input.contentType,
+    }));
+  }
+
+  async getObject(objectKey: string): Promise<Uint8Array> {
+    const response = await this.client.send(new GetObjectCommand({
+      Bucket: this.config.bucket,
+      Key: assertSafeObjectKey(objectKey),
+    }));
+    if (!response.Body) throw new Error("Object storage response has no body.");
+    return new Uint8Array(await response.Body.transformToByteArray());
+  }
+
+  async deleteObject(objectKey: string): Promise<void> {
+    await this.client.send(new DeleteObjectCommand({
+      Bucket: this.config.bucket,
+      Key: assertSafeObjectKey(objectKey),
     }));
   }
 

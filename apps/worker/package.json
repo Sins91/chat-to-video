@@ -20,6 +20,7 @@
   "dependencies": {
     "@chat-to-video/contracts": "workspace:*",
     "@chat-to-video/database": "workspace:*",
+    "@chat-to-video/media": "workspace:*",
     "@chat-to-video/storage": "workspace:*",
     "bullmq": "6.0.9",
     "ioredis": "6.0.0"

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ChatAgentService } from "../src/chat-agent.service.js";
 
-const createGateway = () => ({ streamChat: vi.fn(), generateStoryboard: vi.fn() });
+const createGateway = () => ({ inferCinematicDuration: vi.fn(), streamChat: vi.fn(), generateStoryboard: vi.fn(), generateCinematicArtifact: vi.fn() });
 const createConversations = () => ({
   ensureUserMessage: vi.fn().mockResolvedValue("00000000-0000-4000-8000-000000000010"),
   listModelMessages: vi.fn().mockResolvedValue([{ role: "user", content: "hello" }]),
