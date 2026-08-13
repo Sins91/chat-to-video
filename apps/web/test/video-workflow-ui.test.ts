@@ -12,24 +12,79 @@ describe("two-step video workflow UI", () => {
   });
 
   it("renders conversational review guidance and all video preview states", async () => {
-    const [conversation, preview] = await Promise.all([
+    const [conversation, preview, artifactCard, storyboardCard] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-conversation.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/video-preview.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/cinematic-artifact-card.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/storyboard-artifact-card.tsx"), "utf8"),
     ]);
-    expect(conversation).toContain("回复“确认生成”");
+    expect(conversation).toContain("阶段完成：");
+    expect(conversation).toContain("完整结构化产物已同步到右侧展示区");
+    expect(conversation).toContain("该阶段无需确认，将自动进入下一阶段。");
+    expect(conversation).toContain("stageDefinition?.isRestartable === false");
+    expect(conversation).toContain("automaticStageNotice(entry.artifact)");
+    expect(conversation).toContain("/(无需确认|确认|修改|取消)/u");
+    expect(conversation).toContain('part === "无需确认" || part === "确认" || part === "修改" || part === "取消" ? "text-warning-foreground"');
     expect(conversation).not.toContain("onApprove");
+    expect(conversation).not.toContain("CinematicArtifactCard");
+    expect(conversation).not.toContain("StoryboardArtifactCard");
+    expect(conversation).toContain("completedVideoSummary");
+    expect(conversation).toContain("insertConversationTimelineMarker");
+    expect(conversation).toContain('item.type === "workflow_completion"');
+    expect(conversation).toContain('snapshot?.status === "succeeded"');
+    expect(conversation).toContain('snapshot.videoJob?.status === "succeeded"');
+    expect(conversation).toContain("本次成片已完成");
+    expect(conversation).toContain("成片已同步到右侧预览区");
+    expect(conversation).toContain("hasCompletedVideo ? null");
+    expect(preview).toContain("CinematicArtifactCard");
+    expect(preview).toContain("StoryboardArtifactCard");
+    expect(preview).toContain('aria-label="结构化创作工作区"');
+    expect(preview.indexOf("{stepProgress ? <WorkflowStepStatusCard")).toBeLessThan(preview.indexOf("{snapshot.currentArtifact ?"));
+    expect(preview).not.toContain("submitSceneDurations");
+    expect(artifactCard).not.toContain("SceneDurationEditor");
+    expect(artifactCard).not.toContain("<details");
+    expect(storyboardCard).toContain("<details");
+    expect(storyboardCard).toContain("group-open:hidden");
+    expect(storyboardCard).toContain("aria-expanded={areShotsExpanded}");
+    expect(storyboardCard).toContain("open={areShotsExpanded}");
+    expect(storyboardCard).toContain("onClick={collapseExpandedDetails}");
+    expect(artifactCard).not.toContain("ClapperboardIcon");
+    expect(storyboardCard).not.toContain("SparklesIcon");
+    expect(artifactCard).toContain("请在左侧对话中直接说明");
     expect(preview).toContain("queued");
     expect(preview).toContain("running");
     expect(preview).toContain("succeeded");
     expect(preview).toContain("failed");
+    expect(preview).toContain("<VideoDownloadContextMenu");
+    expect(preview).toContain('title: job.videoTitle ?? "视频成片"');
+  });
+
+  it("plays an archived video without rolling back the active workflow", async () => {
+    const [provider, preview, shelf] = await Promise.all([
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/video-preview.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/generated-video-shelf.tsx"), "utf8"),
+    ]);
+
+    expect(provider).toContain("previewVideo");
+    expect(provider).toContain("openGeneratedVideo");
+    expect(provider).toContain("previewReturnLocationRef");
+    expect(provider).toContain("const returnToCurrentVideo");
+    expect(provider).toContain("setChatScrollRestoreRequest");
+    expect(preview).toContain("if (previewVideo)");
+    expect(preview).toContain("previewVideo.playbackUrl");
+    expect(preview).toContain("视频 · 回看");
+    expect(preview).toContain("onClick={() => void returnToCurrentVideo()}");
+    expect(preview).toContain("返回当前");
+    expect(shelf).toContain("await openGeneratedVideo(video)");
   });
 
   it("routes conversation by content without a separate video action", async () => {
     const panel = await readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8");
 
     expect(panel).toContain("createChatTransport");
-    expect(panel).toContain("sendMessage({ text: trimmed })");
-    expect(panel).toContain("isVideoCreationIntent(trimmed)");
+    expect(panel).toContain("sendMessage({ text })");
+    expect(panel).toContain("isVideoCreationIntent(text)");
     expect(panel).not.toContain("handleCreateVideo");
     expect(panel).toContain("isReviewingStoryboard");
     expect(panel).toContain("workflow.retryWorkflow()");
@@ -47,15 +102,63 @@ describe("two-step video workflow UI", () => {
     expect(retryRoute).toContain("proxyVideoWorkflow");
   });
 
+  it("offers watchdog recovery through the dedicated recovery endpoint", async () => {
+    const [provider, conversation, client, recoverRoute] = await Promise.all([
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/chat/chat-conversation.tsx"), "utf8"),
+      readFile(resolve(webRoot, "lib/video-workflow-client.ts"), "utf8"),
+      readFile(resolve(webRoot, "app/api/video-workflows/[workflowId]/recover/route.ts"), "utf8"),
+    ]);
+    expect(provider).toContain("recoverVideoWorkflow(workflowId)");
+    expect(conversation).toContain("恢复任务");
+    expect(client).toContain("/recover");
+    expect(recoverRoute).toContain("proxyVideoWorkflow");
+  });
+
+  it("moves the preview to the selected stage immediately after restart confirmation", async () => {
+    const provider = await readFile(
+      resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"),
+      "utf8",
+    );
+
+    expect(provider).toContain('result.intent === "restart_confirmed" && cinematicRestartTarget.success');
+    expect(provider).toContain("currentStage: cinematicRestartTarget.data");
+    expect(provider).toContain("currentArtifact: null");
+    expect(provider).toContain("videoJob: null");
+    expect(provider).toContain("正在从所选步骤重新生成，旧版本已保留为历史记录。");
+    expect(provider).toContain("await refresh()");
+  });
+
+  it("refreshes a persisted assistant explanation when a previous workflow is read-only", async () => {
+    const provider = await readFile(
+      resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"),
+      "utf8",
+    );
+
+    expect(provider).toContain('result.intent === "restart_unavailable"');
+    expect(provider).toContain("await refresh()");
+  });
+
   it("starts a new terminal-following workflow and refreshes it in the same conversation", async () => {
     const [panel, provider] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
     ]);
-    expect(panel).toContain("void workflow.startWorkflow(trimmed, crypto.randomUUID())");
+    expect(panel).toContain("await workflow.startWorkflow(text, crypto.randomUUID())");
     expect(panel).not.toContain('workflowStatus === "failed" && workflow.snapshot?.videoJob');
-    expect(provider).toContain("created.conversationId === conversationId");
+    expect(provider).toContain("created.conversationId === loadedConversationId");
     expect(provider).toContain("await refresh()");
+  });
+
+  it("keeps earlier workflow stages isolated when another video starts in the same conversation", async () => {
+    const conversation = await readFile(
+      resolve(webRoot, "components/chat/chat-conversation.tsx"),
+      "utf8",
+    );
+
+    expect(conversation).toContain("entry.workflowId === snapshot.workflowId");
+    expect(conversation).toContain("该轮生成阶段和成片已保留");
+    expect(conversation).not.toContain("历史成片 · 已由重新开始替代");
   });
 
   it("renders the AI Elements model selector and submits the selected model", async () => {
@@ -65,6 +168,15 @@ describe("two-step video workflow UI", () => {
       readFile(resolve(webRoot, "lib/video-models.ts"), "utf8"),
     ]);
     expect(composer).toContain("ModelSelector");
+    expect(composer).toContain('<PromptInputFooter className="font-sans">');
+    expect(composer).toContain('ModelSelectorContent className="font-sans"');
+    expect(composer).toContain("font-sans text-xs font-medium normal-case tracking-normal");
+    expect(composer).toContain("font-sans text-xs font-normal tracking-normal");
+    expect(composer).not.toContain("font-mono text-[10px] uppercase tracking-[0.06em]");
+    expect(composer).toContain("focus-within:ring-foreground/15");
+    expect(composer).not.toContain("focus-within:border-foreground");
+    expect(composer).not.toContain("focus-within:border-ring");
+    expect(composer).not.toContain("focus-within:ring-ring");
     expect(models).toContain("MiniMax-Hailuo-2.3");
     expect(models).toContain("doubao-seedance-2.0");
     expect(provider).toContain("videoModel,");
@@ -88,25 +200,79 @@ describe("two-step video workflow UI", () => {
   });
 
   it("renders data-driven workflow progress and compact chat status", async () => {
-    const [provider, conversation, card] = await Promise.all([
+    const [provider, conversation, card, tooltip] = await Promise.all([
       readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/chat/chat-conversation.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/workflow-step-status-card.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/ui/tooltip.tsx"), "utf8"),
     ]);
 
     expect(provider).toContain("workflowStepFromEventData");
     expect(provider).toContain("legacyWorkflowStep");
     expect(provider).toContain("stepProgress");
-    expect(conversation).toContain("WorkflowStepStatusCard");
+    expect(conversation).toContain("WorkflowActivityText");
+    expect(conversation).toContain("<ChainOfThought defaultOpen>");
+    expect(conversation).toContain("<ChainOfThoughtHeader");
+    expect(conversation).toContain("<ChainOfThoughtContent");
+    expect(conversation).toContain("<ChainOfThoughtStep");
+    expect(conversation).toContain("isAnimated={false}");
+    expect(conversation).toContain('key="workflow-activity"');
+    expect(conversation).toContain("<Shimmer");
+    expect(conversation).toContain("WORKFLOW_PROGRESS_STALL_THRESHOLD_MS = 90_000");
+    expect(conversation).toContain("可能阻塞");
+    expect(conversation).toContain("showProgressMeta && activity ? <span");
+    expect(conversation).toContain('showProgressMeta={false}');
+    expect(conversation).toContain("lastAutoScrolledInputKeyRef");
+    expect(conversation).toContain("conversationContextRef.current?.scrollToBottom");
+    expect(conversation).toContain("hasReviewableWorkflowAnswer");
+    expect(conversation).toContain('workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer');
+    expect(conversation).toContain("visibleWorkflowStepProgress ? <WorkflowActivityText");
+    expect(conversation).toContain("workflowReviewNotice");
+    expect(conversation).toContain("当前规划已完成，等待确认或提出修改。");
+    expect(conversation).toContain("WorkflowReviewNotice");
+    expect(conversation).toContain("WORKFLOW_REVIEW_ACTION_PATTERN");
+    expect(conversation).toContain('part === "无需确认" || part === "确认" || part === "修改" || part === "取消" ? "text-warning-foreground"');
+    expect(conversation).toContain('text-muted-foreground" role="status"');
+    expect(conversation).toContain("notice={canReview ? workflowReviewNotice : undefined}");
+    expect(conversation).toContain("splitRestartConfirmationMessage(entry.content)");
+    expect(conversation).toContain("notice={message.notice}");
+    expect(conversation).toContain('const RESTART_CONFIRMATION_NOTICE = "请回复“确认”或“取消”。"');
+    expect(conversation).not.toContain("RestartConfirmationNotice");
+    expect(conversation).not.toContain("restartConfirmationText");
+    expect(conversation).not.toContain("border border-warning/30 bg-warning-muted px-4 py-3");
+    expect(conversation).not.toContain("WorkflowStepStatusCard");
     expect(conversation).toContain("正在理解你的问题并组织回复。");
     expect(conversation).not.toContain("正在生成结构化分镜");
     expect(card).toContain("progress.stepTotal");
     expect(card).toContain("progress.stepLabel");
+    expect(card).toContain("currentStepLabel");
+    expect(card).toContain("DEFAULT_WORKFLOW_STEP_LABELS[progress.stepIndex - 1]");
     expect(card).toContain("progress.message");
+    expect(card).toContain("videoOutputEstimate.duration");
+    expect(card).toContain("videoOutputEstimate.resolution");
+    expect(card).toContain("预计 {videoOutputEstimate.duration} · {videoOutputEstimate.resolution}");
+    expect(card).not.toContain("<dl");
+    expect(card).not.toContain("预计码率");
     expect(provider).toContain("toolActivity: source.toolActivity");
+    expect(provider).toContain("isWorkflowEventHistoricalReplay(workflowEvent.timestamp, initialSnapshotTimestampMs)");
     expect(card).toContain("ToolActivityIcon");
     expect(card).toContain("progress.toolActivity.toolLabel");
     expect(card).toContain("progress.toolActivity.summary");
+    expect(card).toContain('progress.stepState === "running"');
+    expect(card).toContain('aria-label="Agent 思考状态"');
+    expect(card).toContain("正在处理当前步骤，完成前将保持此处稳定。");
+    expect(card).toContain("min-h-[62px]");
+    expect(card).toContain('progress.stepState === "awaiting_input"');
+    expect(card).toContain("当前步骤 {progress.stepIndex} / {progress.stepTotal}");
+    expect(card).not.toContain("displayedStepIndex");
+    expect(card).not.toContain("completedSteps");
+    expect(card).not.toContain("StateIcon");
+    expect(card).toContain("DEFAULT_WORKFLOW_STEP_LABELS");
+    expect(card).toContain("<TooltipContent>{stepLabel}</TooltipContent>");
+    expect(card).toContain("tabIndex={0}");
+    expect(card).toContain("before:-inset-x-0.5 before:-inset-y-3");
+    expect(tooltip).toContain("border-border bg-popover");
+    expect(tooltip).toContain("text-popover-foreground shadow-md");
   });
 
   it("polls and renders the live number of jobs ahead while queued", async () => {
@@ -139,16 +305,32 @@ describe("two-step video workflow UI", () => {
       readFile(resolve(webRoot, "components/chat/agent-workspace.tsx"), "utf8"),
     ]);
 
-    expect(panel).toContain("conversationId={workflow.conversationId}");
-    expect(conversation).toContain('initial="instant"');
+    expect(panel).toContain("conversationId={activeSession.conversationId}");
+    expect(conversation).toContain('initial={hasFocusedVideo ? false : "instant"}');
     expect(conversation).toContain('resize="smooth"');
     expect(conversation).toContain("viewportKey");
-    expect(provider).toContain("loadedConversationId === conversationId");
-    expect(provider).toContain("setLoadedConversationId(null)");
-    expect(panel).toContain("onConversationSwitch={workflow.prepareConversationSwitch}");
+    expect(provider).toContain("conversationId: loadedConversationId");
+    expect(provider).toContain("const activeEntries = entries");
+    expect(provider).toContain("await loadConversation(nextConversationId)");
+    expect(provider).toContain("preparedConversationIdRef.current !== null && preparedConversationIdRef.current === loadedConversationId");
+    expect(provider).not.toContain("setLoadedConversationId(null);\n    setIsSubmitting(false)");
+    expect(provider).toContain("setIsSubmitting(false)");
+    expect(panel).toContain("onConversationSwitch={handleConversationSwitch}");
     expect(provider).toContain("snapshot: activeSnapshot");
     expect(preview).toContain("if (isLoading)");
+    expect(preview).toContain("PREVIEW_LOADING_DELAY_MS");
+    expect(preview).toContain("isSpinnerVisible ?");
+    expect(preview).toContain('aria-label="正在加载可视化内容"');
+    expect(preview).toContain('className="animate-spin text-zinc-500"');
     expect(preview).not.toContain("正在切换对话");
+    expect(preview).toContain("WorkflowStepStatusCard");
+    expect(preview).toContain('<ScrollArea className="h-full min-w-0">');
+    expect(preview).not.toContain("overflow-y-auto");
+    expect(preview).toContain("if (stepProgress)");
+    expect(preview).not.toContain("absolute inset-x-4 bottom-4");
+    expect(workspace).toContain("VideoWorkflowVisualization");
+    expect(workspace).not.toContain("AgentVisualizationPanel");
+    expect(workspace).toContain("min-h-[720px] min-w-[1380px]");
     expect(workspace).toContain("min-h-0 min-w-0 overflow-hidden max-xl:[display:none!important]");
   });
 
@@ -161,7 +343,11 @@ describe("two-step video workflow UI", () => {
     expect(provider).toContain('workflowEvent.type === "job.progress"');
     expect(provider).toContain("progress: workflowEvent.data.progress");
     expect(preview).toContain("snapshot.durationSeconds");
+    expect(preview).toContain("getVideoOutputEstimate(snapshot?.durationSeconds)");
+    expect(preview).toContain("预计成片 {videoOutputEstimate.duration} · {videoOutputEstimate.resolution}");
+    expect(preview).not.toContain("VideoOutputEstimateDetails");
     expect(preview).toContain("generationMessage");
+    expect(preview).toContain('className="w-full max-w-md rounded-xl');
     expect(preview).toContain('aria-live="polite"');
   });
 });

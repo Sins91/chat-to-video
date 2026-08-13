@@ -2,14 +2,25 @@ import { describe, expect, it } from "vitest";
 
 import {
   ApimartVideoSubmissionSchema,
+  ActiveWorkflowRunContextSchema,
   CreateVideoWorkflowRequestSchema,
+  createGeneratedVideoFilename,
   RenderVideoJobPayloadSchema,
+  RecoverVideoWorkflowResponseSchema,
   RetryVideoWorkflowResponseSchema,
   UpdateVideoWorkflowModelRequestSchema,
   StoryboardSchema,
+  ConversationEntrySchema,
+  PendingVideoWorkflowRestartSchema,
   VideoWorkflowInteractionSchema,
+  VideoWorkflowInteractionResultSchema,
   VideoWorkflowEventSchema,
   WorkflowStepProgressSchema,
+  WorkflowUserIntentSchema,
+  defineWorkflowPipeline,
+  getPreviousWorkflowStage,
+  getWorkflowStagesFrom,
+  parseWorkflowRestartTarget,
 } from "../src/index.js";
 
 const storyboard = {
@@ -23,6 +34,46 @@ const storyboard = {
 };
 
 describe("video workflow contracts", () => {
+  it("validates structured workflow user intents", () => {
+    expect(WorkflowUserIntentSchema.parse({ type: "approve", stageId: "proposal" }))
+      .toEqual({ type: "approve", stageId: "proposal" });
+    expect(WorkflowUserIntentSchema.safeParse({
+      type: "restart_from",
+      stageId: "proposal",
+      feedback: "",
+      invalidates: ["script"],
+    }).success).toBe(false);
+  });
+  it("validates persisted active run recovery context", () => {
+    expect(ActiveWorkflowRunContextSchema.parse({ kind: "start", baseVersion: 0 }))
+      .toEqual({ kind: "start", baseVersion: 0 });
+    expect(ActiveWorkflowRunContextSchema.safeParse({
+      kind: "restart",
+      restartRequestId: "not-a-uuid",
+      targetStage: "proposal",
+      text: "重新生成方案",
+      baseVersion: 4,
+      previousArtifactVersion: 2,
+    }).success).toBe(false);
+  });
+
+  it("creates a safe generated-video filename from the generated content title", () => {
+    expect(createGeneratedVideoFilename("雨夜来信：女孩 / 旧街", "job-12345678"))
+      .toBe("雨夜来信-女孩 - 旧街.mp4");
+    expect(createGeneratedVideoFilename("   ", "job-12345678"))
+      .toBe("video-job-1234.mp4");
+    expect(createGeneratedVideoFilename("雨夜来信..终版", "job-12345678"))
+      .toBe("雨夜来信.终版.mp4");
+    expect(RenderVideoJobPayloadSchema.safeParse({
+      workflowId: "00000000-0000-4000-8000-000000000001",
+      requestId: "00000000-0000-4000-8000-000000000002",
+      jobId: "job-1",
+      storyboardVersion: 1,
+      videoPrompt: "Rainy night",
+      objectKey: "tenant/demo/project/demo/render/job-1/雨夜来信-女孩 - 旧街.mp4",
+    }).success).toBe(true);
+  });
+
   it("accepts a contiguous storyboard totaling ten seconds", () => {
     expect(StoryboardSchema.parse(storyboard)).toEqual(storyboard);
   });
@@ -36,14 +87,97 @@ describe("video workflow contracts", () => {
     expect(VideoWorkflowInteractionSchema.safeParse({ type: "message", messageId: "message-1", text: "" }).success).toBe(false);
   });
 
+  it("validates restart requests, confirmations, cancellations, and pending state", () => {
+    const restartRequestId = "00000000-0000-4000-8000-000000000099";
+    const messageId = "restart-message";
+    expect(VideoWorkflowInteractionSchema.parse({
+      type: "restart_request",
+      messageId,
+      targetStage: "script",
+      text: "从脚本重新开始，并把旁白改得更克制",
+    })).toMatchObject({ type: "restart_request", targetStage: "script" });
+    expect(VideoWorkflowInteractionSchema.parse({
+      type: "restart_confirm",
+      messageId,
+      restartRequestId,
+    }).type).toBe("restart_confirm");
+    expect(VideoWorkflowInteractionSchema.parse({
+      type: "restart_cancel",
+      messageId,
+      restartRequestId,
+    }).type).toBe("restart_cancel");
+    expect(VideoWorkflowInteractionResultSchema.parse({
+      accepted: true,
+      intent: "restart_unavailable",
+    }).intent).toBe("restart_unavailable");
+
+    const pending = PendingVideoWorkflowRestartSchema.parse({
+      restartRequestId,
+      targetStage: "script",
+      text: "从脚本重新开始",
+      expectedVersion: 7,
+      requestedAt: "2026-08-12T01:00:00.000Z",
+      expiresAt: "2026-08-12T01:15:00.000Z",
+    });
+    expect(pending.expectedVersion).toBe(7);
+  });
+
+  it("derives restart behavior from one pipeline definition", () => {
+    const pipeline = defineWorkflowPipeline({
+      id: "audio-story",
+      stages: [
+        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "outline", label: "大纲", aliases: ["大纲"], stepId: "outline", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["大纲"], ownedArtifactKinds: ["outline"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "voice", label: "配音", aliases: ["配音"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "mix", label: "混音", aliases: ["混音"], stepId: "mix", producesArtifact: false, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["混音"], ownedArtifactKinds: ["mix"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+      ],
+    });
+
+    expect(parseWorkflowRestartTarget(pipeline, "voice")?.label).toBe("配音");
+    expect(parseWorkflowRestartTarget(pipeline, "mix")).toBeNull();
+    expect(getPreviousWorkflowStage(pipeline, "voice")?.id).toBe("outline");
+    expect(getWorkflowStagesFrom(pipeline, "outline").map((stage) => stage.id))
+      .toEqual(["outline", "voice", "mix"]);
+  });
+
+  it("validates persisted restart events and read-only archived videos", () => {
+    const eventBase = {
+      eventId: "restart-event",
+      sequence: 8,
+      workflowId: "00000000-0000-4000-8000-000000000001",
+      requestId: "00000000-0000-4000-8000-000000000002",
+      timestamp: "2026-08-12T01:00:00.000Z",
+    };
+    expect(VideoWorkflowEventSchema.safeParse({
+      ...eventBase,
+      type: "workflow.restart.started",
+      data: {
+        restartRequestId: "00000000-0000-4000-8000-000000000099",
+        targetStage: "scene_plan",
+        previousRunId: "old-run",
+        runId: "new-run",
+      },
+    }).success).toBe(true);
+    expect(ConversationEntrySchema.safeParse({
+      id: "archived-video-job-1",
+      type: "archived_video",
+      workflowId: eventBase.workflowId,
+      jobId: "job-1",
+      storyboardVersion: 7,
+      videoTitle: "雨夜来信",
+      playbackUrl: "https://storage.example/video.mp4?signature=short-lived",
+      createdAt: eventBase.timestamp,
+    }).success).toBe(true);
+  });
+
   it("accepts structured workflow steps and legacy events", () => {
     expect(WorkflowStepProgressSchema.parse({
       stepId: "scene-plan",
-      stepLabel: "分镜规划",
+      stepLabel: "分镜写作",
       stepState: "awaiting_input",
       stepIndex: 5,
       stepTotal: 8,
-      message: "分镜规划已完成。",
+      message: "分镜写作已完成。",
     }).stepIndex).toBe(5);
 
     const eventBase = {
@@ -63,7 +197,7 @@ describe("video workflow contracts", () => {
       data: {
         status: "drafting",
         stepId: "scene-plan",
-        stepLabel: "分镜规划",
+        stepLabel: "分镜写作",
         stepState: "running",
         stepIndex: 5,
         stepTotal: 8,
@@ -199,9 +333,13 @@ describe("video workflow contracts", () => {
   });
 
   it("validates explicit video recovery responses", () => {
-    expect(RetryVideoWorkflowResponseSchema.parse({ accepted: true, jobId: "workflow-v1" }))
-      .toEqual({ accepted: true, jobId: "workflow-v1" });
-    expect(RetryVideoWorkflowResponseSchema.safeParse({ accepted: false, jobId: "workflow-v1" }).success)
+    expect(RetryVideoWorkflowResponseSchema.parse({ accepted: true, jobId: "workflow-version-1" }))
+      .toEqual({ accepted: true, jobId: "workflow-version-1" });
+    expect(RetryVideoWorkflowResponseSchema.safeParse({ accepted: false, jobId: "workflow-version-1" }).success)
       .toBe(false);
+    expect(RecoverVideoWorkflowResponseSchema.parse({
+      accepted: true,
+      workflowId: "00000000-0000-4000-8000-000000000001",
+    })).toMatchObject({ accepted: true });
   });
 });

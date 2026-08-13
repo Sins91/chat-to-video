@@ -15,7 +15,9 @@ describe("Chinese UI localization", () => {
     );
 
     expect(card).toContain("电影化创作");
-    expect(card).toContain("查看结构化详情");
+    expect(card).toContain("请在左侧对话中直接说明");
+    expect(card).not.toContain("SceneDurationEditor");
+    expect(card).not.toContain("查看原始 JSON");
     expect(card).toContain("当前方案等待确认");
     expect(card).not.toContain("???");
   });

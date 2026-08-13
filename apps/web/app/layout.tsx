@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 import "@fontsource-variable/noto-sans-sc/wght.css";
+import "@fontsource-variable/roboto-mono/wght.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

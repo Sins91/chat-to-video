@@ -1,3 +1,3 @@
-import { ProjectsPage } from "@/components/ported/studio-pages";
+import { redirect } from "next/navigation";
 
-export default function Page() { return <ProjectsPage />; }
+export default function Page() { redirect("/studio/agent"); }

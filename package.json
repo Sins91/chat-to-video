@@ -11,6 +11,7 @@
     "preinstall": "node scripts/enforce-pnpm.cjs",
     "package-manager:check": "node scripts/enforce-pnpm.cjs",
     "deps:install:cn": "node scripts/install-with-registry-fallback.cjs",
+    "db:seed:history": "pnpm --filter @chat-to-video/database db:seed:history",
     "sdk:docs:ai": "node scripts/search-sdk-docs.cjs ai",
     "build": "turbo run build",
     "dev": "turbo run dev",

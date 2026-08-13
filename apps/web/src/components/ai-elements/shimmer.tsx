@@ -43,12 +43,15 @@ const ShimmerComponent = ({
 
   return (
     <MotionComponent
-      animate={{ opacity: shouldReduceMotion ? 1 : [0.45, 1, 0.45] }}
-      className={cn("relative inline-block text-muted-foreground", className)}
-      initial={{ opacity: 0.45 }}
+      animate={{ backgroundPosition: shouldReduceMotion ? "50% 0" : ["100% 0", "0% 0"] }}
+      className={cn(
+        "relative inline-block bg-[linear-gradient(90deg,var(--muted-foreground)_0%,var(--muted-foreground)_35%,var(--foreground)_50%,var(--muted-foreground)_65%,var(--muted-foreground)_100%)] bg-[length:250%_100%] bg-clip-text text-transparent",
+        className
+      )}
+      initial={{ backgroundPosition: "100% 0" }}
       transition={{
         duration: shouldReduceMotion ? 0 : duration,
-        ease: "easeInOut",
+        ease: "linear",
         repeat: Number.POSITIVE_INFINITY,
       }}
     >

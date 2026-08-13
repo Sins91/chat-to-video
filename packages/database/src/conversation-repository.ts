@@ -7,13 +7,16 @@ import {
   conversationMessages,
   conversations,
   storyboardVersions,
+  videoJobs,
+  videoOutputs,
   videoWorkflows,
+  workflowStageCheckpoints,
 } from "./schema.js";
 
 export const DEMO_TENANT_ID = "demo";
 export const DEMO_PROJECT_ID = "demo";
 
-type ConversationCursor = { updatedAt: Date; id: string };
+type ConversationCursor = { createdAt: Date; id: string };
 
 const parseMessageRole = (role: string): "user" | "assistant" => {
   if (role === "user" || role === "assistant") return role;
@@ -107,11 +110,39 @@ export class ConversationRepository {
       version: cinematicArtifactVersions.version,
       revisionRequest: cinematicArtifactVersions.revisionRequest,
       artifact: cinematicArtifactVersions.artifact,
+      supersededAt: workflowStageCheckpoints.supersededAt,
       createdAt: cinematicArtifactVersions.createdAt,
     }).from(cinematicArtifactVersions)
+      .innerJoin(workflowStageCheckpoints, and(
+        eq(workflowStageCheckpoints.workflowId, cinematicArtifactVersions.workflowId),
+        eq(workflowStageCheckpoints.version, cinematicArtifactVersions.version),
+      ))
       .innerJoin(videoWorkflows, eq(cinematicArtifactVersions.workflowId, videoWorkflows.id))
       .where(eq(videoWorkflows.conversationId, conversationId))
       .orderBy(asc(cinematicArtifactVersions.createdAt), asc(cinematicArtifactVersions.id));
+  }
+
+  async listArchivedVideoOutputs(conversationId: string, currentWorkflowId: string | null) {
+    return this.database.select({
+      id: videoOutputs.id,
+      workflowId: videoJobs.workflowId,
+      jobId: videoJobs.id,
+      storyboardVersion: videoJobs.storyboardVersion,
+      objectKey: videoOutputs.objectKey,
+      createdAt: videoOutputs.createdAt,
+    }).from(videoOutputs)
+      .innerJoin(videoJobs, eq(videoOutputs.jobId, videoJobs.id))
+      .innerJoin(videoWorkflows, eq(videoJobs.workflowId, videoWorkflows.id))
+      .where(and(
+        eq(videoWorkflows.conversationId, conversationId),
+        currentWorkflowId
+          ? or(
+              sql`${videoJobs.supersededAt} is not null`,
+              sql`${videoJobs.workflowId} <> ${currentWorkflowId}`,
+            )
+          : undefined,
+      ))
+      .orderBy(asc(videoOutputs.createdAt), asc(videoOutputs.id));
   }
 
   async findWorkflow(conversationId: string) {
@@ -129,8 +160,8 @@ export class ConversationRepository {
       isNull(conversations.deletedAt),
     );
     const cursorCondition = cursor ? or(
-      lt(conversations.updatedAt, cursor.updatedAt),
-      and(eq(conversations.updatedAt, cursor.updatedAt), lt(conversations.id, cursor.id)),
+      lt(conversations.createdAt, cursor.createdAt),
+      and(eq(conversations.createdAt, cursor.createdAt), lt(conversations.id, cursor.id)),
     ) : undefined;
     return this.database.select({
       id: conversations.id,
@@ -146,7 +177,7 @@ export class ConversationRepository {
       )`,
     }).from(conversations)
       .where(and(scope, cursorCondition))
-      .orderBy(desc(conversations.updatedAt), desc(conversations.id))
+      .orderBy(desc(conversations.createdAt), desc(conversations.id))
       .limit(limit + 1);
   }
 

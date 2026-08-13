@@ -34,7 +34,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Streamdown } from "streamdown";
+import { Streamdown, type Components } from "streamdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -60,7 +60,7 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-sm",
+      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-[13px]",
       "group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-3 group-[.is-user]:py-1.5 group-[.is-user]:text-foreground",
       "group-[.is-assistant]:text-foreground",
       className
@@ -107,7 +107,7 @@ export const MessageAction = ({
     return (
       <TooltipProvider>
         <Tooltip>
-          <TooltipTrigger>{button}</TooltipTrigger>
+          <TooltipTrigger render={button} />
           <TooltipContent>
             <p>{tooltip}</p>
           </TooltipContent>
@@ -328,14 +328,37 @@ export const MessageBranchPage = ({
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { cjk, code, math, mermaid };
+const withoutMarkdownNode = <Props extends { node?: unknown }>(props: Props): Omit<Props, "node"> => {
+  const elementProps = { ...props };
+  delete elementProps.node;
+  return elementProps;
+};
+const messageResponseComponents: Components = {
+  h1: ({ className, ...props }) => <h1 className={cn("mb-2 mt-5 text-lg font-semibold tracking-tight", className)} {...withoutMarkdownNode(props)} />,
+  h2: ({ className, ...props }) => <h2 className={cn("mb-2 mt-5 text-base font-semibold tracking-tight", className)} {...withoutMarkdownNode(props)} />,
+  h3: ({ className, ...props }) => <h3 className={cn("mb-1.5 mt-4 text-sm font-semibold", className)} {...withoutMarkdownNode(props)} />,
+  h4: ({ className, ...props }) => <h4 className={cn("mb-1.5 mt-4 text-[13px] font-semibold", className)} {...withoutMarkdownNode(props)} />,
+  ol: ({ className, ...props }) => <ol className={cn("my-3 list-outside list-decimal space-y-1.5 pl-6 marker:font-medium marker:text-muted-foreground", className)} {...withoutMarkdownNode(props)} />,
+  ul: ({ className, ...props }) => <ul className={cn("my-3 list-outside list-disc space-y-1.5 pl-5 marker:text-muted-foreground [&>li]:pl-1", className)} {...withoutMarkdownNode(props)} />,
+  li: ({ className, ...props }) => <li className={cn("leading-[1.35] [&>ol]:mb-1 [&>ol]:mt-1.5 [&>p]:inline [&>ul]:mb-1 [&>ul]:mt-1.5", className)} {...withoutMarkdownNode(props)} />,
+  p: ({ className, ...props }) => <p className={cn("leading-[1.35]", className)} {...withoutMarkdownNode(props)} />,
+  table: ({ className, ...props }) => <div className="my-4 max-w-full overflow-x-auto rounded-lg border border-border"><table className={cn("w-full border-collapse text-left text-[13px]", className)} {...withoutMarkdownNode(props)} /></div>,
+  thead: ({ className, ...props }) => <thead className={cn("bg-muted/70", className)} {...withoutMarkdownNode(props)} />,
+  tbody: ({ className, ...props }) => <tbody className={cn("bg-card", className)} {...withoutMarkdownNode(props)} />,
+  tr: ({ className, ...props }) => <tr className={cn("border-b border-border last:border-b-0", className)} {...withoutMarkdownNode(props)} />,
+  th: ({ className, ...props }) => <th className={cn("border-r border-border px-3 py-2 font-semibold text-foreground last:border-r-0", className)} {...withoutMarkdownNode(props)} />,
+  td: ({ className, ...props }) => <td className={cn("border-r border-border px-3 py-2 align-top leading-5 text-foreground/90 last:border-r-0", className)} {...withoutMarkdownNode(props)} />,
+};
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
-        "chat-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "chat-markdown size-full space-y-1.5 text-[13px] text-foreground/80 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
+      components={messageResponseComponents}
+      controls={{ table: false }}
       plugins={streamdownPlugins}
       {...props}
     />

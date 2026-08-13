@@ -9,6 +9,7 @@ export const AgentExtensionAgentIdSchema = z.enum([
   "chat-default",
   "storyboard-agent",
   "cinematic-director",
+  "workflow-intent-router",
 ]);
 
 const requestContextBase = {
@@ -36,6 +37,12 @@ export const CinematicAgentRequestContextSchema = z.object({
   stage: CinematicGenerativeStageSchema,
 }).strict();
 
+export const WorkflowIntentAgentRequestContextSchema = z.object({
+  ...requestContextBase,
+  agentId: z.literal("workflow-intent-router"),
+  workflowId: z.string().uuid(),
+}).strict();
+
 export const AgentExtensionRequestContextSchema = z.discriminatedUnion(
   "agentId",
   [ChatAgentRequestContextSchema, CinematicAgentRequestContextSchema],
@@ -45,6 +52,28 @@ export type ChatAgentRequestContext = z.infer<typeof ChatAgentRequestContextSche
 export type StoryboardAgentRequestContext = z.infer<typeof StoryboardAgentRequestContextSchema>;
 export type CinematicAgentRequestContext = z.infer<typeof CinematicAgentRequestContextSchema>;
 export type AgentExtensionRequestContext = z.infer<typeof AgentExtensionRequestContextSchema>;
+export type WorkflowIntentAgentRequestContext = z.infer<typeof WorkflowIntentAgentRequestContextSchema>;
+
+export const createWorkflowIntentAgentRequestContext = (input: {
+  requestId: string;
+  conversationId: string;
+  workflowId: string;
+  tenantId: string;
+  projectId: string;
+}): RequestContext<WorkflowIntentAgentRequestContext> => {
+  const parsed = WorkflowIntentAgentRequestContextSchema.parse({
+    ...input,
+    agentId: "workflow-intent-router",
+  });
+  const context = new RequestContext<WorkflowIntentAgentRequestContext>();
+  context.set("requestId", parsed.requestId);
+  context.set("conversationId", parsed.conversationId);
+  context.set("workflowId", parsed.workflowId);
+  context.set("tenantId", parsed.tenantId);
+  context.set("projectId", parsed.projectId);
+  context.set("agentId", parsed.agentId);
+  return context;
+};
 
 export const createChatAgentRequestContext = (
   input: ChatAgentRequestContext,

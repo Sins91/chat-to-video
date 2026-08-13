@@ -51,7 +51,7 @@ export function SceneDurationEditor({
     roundedDurations.every((duration) => duration !== null);
 
   return (
-    <section className="mt-5 rounded-xl border border-amber-400/20 bg-amber-400/[0.06] p-4">
+    <section className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] p-4">
       <div className="flex flex-wrap items-center gap-2">
         <div>
           <h3 className="text-sm font-medium text-amber-100">逐镜头设置成片时长</h3>
@@ -60,7 +60,7 @@ export function SceneDurationEditor({
           </p>
         </div>
         <span className={
-          "ml-auto rounded-full px-2.5 py-1 text-xs " +
+          "ml-auto rounded-full px-2.5 py-1 font-numeric text-xs tabular-nums " +
           (totalDurationSeconds === scenePlan.durationSeconds
             ? "bg-emerald-400/10 text-emerald-300"
             : "bg-red-400/10 text-red-300")
@@ -71,16 +71,16 @@ export function SceneDurationEditor({
       <div className="mt-4 grid gap-2">
         {scenePlan.scenes.map((scene, index) => (
           <label
-            className="grid grid-cols-[minmax(0,1fr)_5.5rem_auto] items-center gap-3 rounded-lg border border-white/8 bg-black/15 px-3 py-2"
+            className="grid grid-cols-[minmax(0,1fr)_5.5rem_auto] items-center gap-3 rounded-md border border-white/8 bg-black/15 px-3 py-2"
             key={scene.order}
           >
-            <span className="truncate text-xs text-zinc-300">
+            <span className="truncate font-numeric text-xs tabular-nums text-zinc-300">
               镜头 {scene.order} · {scene.narrativeBeat}
             </span>
             <span className="flex items-center gap-1">
               <input
                 aria-label={"镜头 " + scene.order + " 成片时长"}
-                className="w-16 rounded-md border border-white/10 bg-black/30 px-2 py-1 text-right text-sm text-zinc-100 outline-none focus:border-amber-300/50"
+                className="w-16 rounded-md border border-white/10 bg-black/30 px-2 py-1 text-right font-numeric text-sm tabular-nums text-zinc-100 outline-none focus:border-amber-300/50"
                 disabled={disabled}
                 max={maxDurationSeconds}
                 min={1}
@@ -98,7 +98,7 @@ export function SceneDurationEditor({
               />
               <span className="text-xs text-zinc-500">秒</span>
             </span>
-            <span className="min-w-24 text-right text-[11px] text-zinc-500">
+            <span className="min-w-24 text-right font-numeric text-[11px] tabular-nums text-zinc-500">
               模型档位 {roundedDurations[index] ?? "—"} 秒
             </span>
           </label>

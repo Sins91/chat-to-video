@@ -50,6 +50,48 @@
       "when": 1786790400000,
       "tag": "0006_agent_extension_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786876800000,
+      "tag": "0007_workflow_stage_restart",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786963200000,
+      "tag": "0008_workflow_orchestrator_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787049600000,
+      "tag": "0009_workflow_progress_watchdog",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787136000000,
+      "tag": "0010_remove_workflow_orchestrator_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787222400000,
+      "tag": "0011_workflow_user_intent",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787308800000,
+      "tag": "0012_cinematic_asset_execution",
+      "breakpoints": true
     }
   ]
 }

@@ -1,30 +1,35 @@
 import {
   CreateVideoWorkflowResponseSchema,
+  RecoverVideoWorkflowResponseSchema,
   RetryVideoWorkflowResponseSchema,
   UpdateVideoWorkflowModelResponseSchema,
   VideoWorkflowInteractionResultSchema,
   VideoWorkflowSnapshotSchema,
+  ResolveWorkflowUserIntentResponseSchema,
   type CreateVideoWorkflowResponse,
   type CreateVideoWorkflowRequest,
+  type RecoverVideoWorkflowResponse,
   type RetryVideoWorkflowResponse,
   type UpdateVideoWorkflowModelRequest,
   type UpdateVideoWorkflowModelResponse,
   type VideoWorkflowInteraction,
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
+  type ResolveWorkflowUserIntentResponse,
 } from "@chat-to-video/contracts";
 import { createAlova } from "alova";
 import adapterFetch from "alova/fetch";
+
+import { createVideoWorkflowRequestError } from "./video-workflow-error";
 
 const videoApi = createAlova({
   baseURL: "/api",
   requestAdapter: adapterFetch(),
   cacheFor: null,
   responded: async (response) => {
-    const body = await response.json() as unknown;
+    const body = await response.json().catch(() => null) as unknown;
     if (!response.ok) {
-      const message = typeof body === "object" && body && "message" in body && typeof body.message === "string" ? body.message : "请求失败，请稍后重试。";
-      throw new Error(message);
+      throw createVideoWorkflowRequestError(body, response.status, response.statusText);
     }
     return body;
   },
@@ -36,6 +41,11 @@ export const createVideoWorkflow = async (request: CreateVideoWorkflowRequest): 
 export const retryVideoWorkflow = async (workflowId: string): Promise<RetryVideoWorkflowResponse> =>
   RetryVideoWorkflowResponseSchema.parse(
     await videoApi.Post(`/video-workflows/${encodeURIComponent(workflowId)}/retry`).send(),
+  );
+
+export const recoverVideoWorkflow = async (workflowId: string): Promise<RecoverVideoWorkflowResponse> =>
+  RecoverVideoWorkflowResponseSchema.parse(
+    await videoApi.Post(`/video-workflows/${encodeURIComponent(workflowId)}/recover`).send(),
   );
 
 export const getVideoWorkflow = async (workflowId: string): Promise<VideoWorkflowSnapshot> =>
@@ -51,3 +61,10 @@ export const updateVideoWorkflowModel = async (
 
 export const interactWithVideoWorkflow = async (workflowId: string, interaction: VideoWorkflowInteraction): Promise<VideoWorkflowInteractionResult> =>
   VideoWorkflowInteractionResultSchema.parse(await videoApi.Post(`/video-workflows/${encodeURIComponent(workflowId)}/interactions`, interaction).send());
+
+export const resolveWorkflowUserIntent = async (
+  workflowId: string,
+  request: { messageId: string; text: string },
+): Promise<ResolveWorkflowUserIntentResponse> => ResolveWorkflowUserIntentResponseSchema.parse(
+  await videoApi.Post(`/video-workflows/${encodeURIComponent(workflowId)}/intent`, request).send(),
+);

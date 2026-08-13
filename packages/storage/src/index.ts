@@ -10,7 +10,7 @@ export type StorageConfig = {
   forcePathStyle: boolean;
 };
 
-const DEMO_OBJECT_KEY_PATTERN = /^tenant\/demo\/project\/demo\/(?:source|derived|render|temp)\/[a-zA-Z0-9/_\-.]+$/u;
+const DEMO_OBJECT_KEY_PATTERN = /^tenant\/demo\/project\/demo\/(?:source|derived|render|temp)\/[\p{L}\p{N}/ _\-.]+$/u;
 
 export const assertSafeObjectKey = (objectKey: string): string => {
   if (!DEMO_OBJECT_KEY_PATTERN.test(objectKey) || objectKey.includes("..")) {

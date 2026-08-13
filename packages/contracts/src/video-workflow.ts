@@ -3,49 +3,21 @@ import {
   CinematicRenderPlanSchema,
   CinematicStageSchema,
 } from "./cinematic.js";
+import { WorkflowPipelineIdSchema, WorkflowStageIdSchema } from "./workflow-pipeline.js";
+import { WorkflowCapabilityResolutionSchema } from "./workflow-capability.js";
+import { CinematicAssetBatchSchema } from "./cinematic-assets.js";
+import {
+  VIDEO_MODEL_DURATION_OPTIONS,
+  VideoJobIdSchema,
+  VideoJobStatusSchema,
+  VideoModelSchema,
+  VideoWorkflowIdSchema,
+} from "./video-workflow-common.js";
+export * from "./video-workflow-common.js";
 import { z } from "zod";
 
 const RelatedConversationIdSchema = z.string().uuid();
 const RelatedMessageIdSchema = z.string().trim().min(1).max(100);
-
-export const VideoWorkflowIdSchema = z.string().uuid();
-export const VideoJobIdSchema = z.string().min(1).max(100);
-export const VideoModelSchema = z.enum([
-  "MiniMax-Hailuo-2.3",
-  "doubao-seedance-2.0",
-]);
-export type VideoModel = z.infer<typeof VideoModelSchema>;
-
-export const VIDEO_MODEL_MAX_DURATION_SECONDS = {
-  "MiniMax-Hailuo-2.3": 10,
-  "doubao-seedance-2.0": 15,
-} as const satisfies Record<VideoModel, number>;
-
-export const VIDEO_MODEL_DURATION_OPTIONS = {
-  "MiniMax-Hailuo-2.3": [6, 10],
-  "doubao-seedance-2.0": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-} as const satisfies Record<VideoModel, readonly number[]>;
-
-export const roundVideoModelDurationSeconds = (
-  model: VideoModel,
-  requestedDurationSeconds: number,
-): number => {
-  if (!Number.isInteger(requestedDurationSeconds) || requestedDurationSeconds < 1) {
-    throw new Error("Requested scene duration must be a positive integer.");
-  }
-  const duration = VIDEO_MODEL_DURATION_OPTIONS[model].find(
-    (option) => option >= requestedDurationSeconds,
-  );
-  if (duration === undefined) {
-    throw new Error(
-      `Requested scene duration exceeds the ${getVideoModelMaxDurationSeconds(model)} second model limit.`,
-    );
-  }
-  return duration;
-};
-
-export const getVideoModelMaxDurationSeconds = (model: VideoModel): number =>
-  VIDEO_MODEL_MAX_DURATION_SECONDS[model];
 
 export const StoryboardShotSchema = z
   .object({
@@ -109,12 +81,23 @@ export const VideoWorkflowStatusSchema = z.enum([
   "cancelled",
 ]);
 
-export const VideoJobStatusSchema = z.enum([
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "cancelled",
+export const VideoWorkflowFailureCodeSchema = z.enum([
+  "AGENT_PROGRESS_STALLED",
+  "QUEUE_PROGRESS_STALLED",
+  "VIDEO_PROGRESS_STALLED",
+  "WORKFLOW_RUN_NOT_RECOVERABLE",
+]);
+
+export const ActiveWorkflowRunContextSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("start"), baseVersion: z.literal(0) }).strict(),
+  z.object({
+    kind: z.literal("restart"),
+    restartRequestId: z.string().uuid(),
+    targetStage: WorkflowStageIdSchema,
+    text: z.string().trim().min(1).max(2_000),
+    baseVersion: z.number().int().positive(),
+    previousArtifactVersion: z.number().int().positive().nullable(),
+  }).strict(),
 ]);
 
 export const WorkflowStepStateSchema = z.enum([
@@ -241,16 +224,31 @@ export const VideoJobSnapshotSchema = z
     queueAhead: z.number().int().nonnegative().max(1_000_000).nullable().default(null),
     providerTaskId: z.string().min(1).max(200).nullable(),
     errorMessage: z.string().max(1_000).nullable(),
+    videoTitle: z.string().trim().min(1).max(120).nullable().default(null),
     playbackUrl: z.string().url().nullable(),
   })
   .strict();
 
+// Compatibility alias: restart targets are pipeline-defined stage IDs, not a global enum.
+export const VideoWorkflowRestartStageSchema = WorkflowStageIdSchema;
+
+export const PendingVideoWorkflowRestartSchema = z.object({
+  restartRequestId: z.string().uuid(),
+  targetStage: VideoWorkflowRestartStageSchema,
+  text: z.string().trim().min(1).max(2_000),
+  expectedVersion: z.number().int().nonnegative(),
+  requestedAt: z.string().datetime({ offset: true }),
+  expiresAt: z.string().datetime({ offset: true }),
+}).strict();
+
 export const VideoWorkflowSnapshotSchema = z
   .object({
     workflowId: VideoWorkflowIdSchema,
-    pipeline: z.literal("cinematic").default("cinematic"),
-    cinematicStage: CinematicStageSchema.default("research"),
+    pipeline: WorkflowPipelineIdSchema.default("cinematic"),
+    currentStage: WorkflowStageIdSchema.default("research"),
+    cinematicStage: CinematicStageSchema.optional(),
     currentArtifact: CinematicArtifactVersionSchema.nullable().default(null),
+    assetBatch: CinematicAssetBatchSchema.nullable().default(null),
     requestId: z.string().uuid(),
     videoModel: VideoModelSchema,
     durationSeconds: CinematicRenderPlanSchema.shape.durationSeconds.default(10),
@@ -259,7 +257,11 @@ export const VideoWorkflowSnapshotSchema = z
     currentVersion: z.number().int().nonnegative(),
     storyboard: StoryboardVersionSchema.nullable(),
     videoJob: VideoJobSnapshotSchema.nullable(),
+    pendingRestart: PendingVideoWorkflowRestartSchema.nullable().default(null),
     errorMessage: z.string().max(1_000).nullable(),
+    lastProgressAt: z.string().datetime({ offset: true }).optional(),
+    failureCode: VideoWorkflowFailureCodeSchema.nullable().optional(),
+    canRecover: z.boolean().optional(),
     createdAt: z.string().datetime({ offset: true }),
     updatedAt: z.string().datetime({ offset: true }),
   })
@@ -294,6 +296,10 @@ export const RetryVideoWorkflowResponseSchema = z
   .object({ accepted: z.literal(true), jobId: VideoJobIdSchema })
   .strict();
 
+export const RecoverVideoWorkflowResponseSchema = z
+  .object({ accepted: z.literal(true), workflowId: VideoWorkflowIdSchema })
+  .strict();
+
 export const VideoWorkflowInteractionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("approve") }).strict(),
   z
@@ -320,10 +326,37 @@ export const VideoWorkflowInteractionSchema = z.discriminatedUnion("type", [
         .max(60),
     })
     .strict(),
+  z.object({
+    type: z.literal("restart_request"),
+    messageId: RelatedMessageIdSchema,
+    targetStage: VideoWorkflowRestartStageSchema,
+    text: z.string().trim().min(1).max(2_000),
+  }).strict(),
+  z.object({
+    type: z.literal("restart_confirm"),
+    messageId: RelatedMessageIdSchema,
+    restartRequestId: z.string().uuid(),
+  }).strict(),
+  z.object({
+    type: z.literal("restart_cancel"),
+    messageId: RelatedMessageIdSchema,
+    restartRequestId: z.string().uuid(),
+  }).strict(),
 ]);
 
 export const VideoWorkflowInteractionResultSchema = z
-  .object({ accepted: z.literal(true), intent: z.enum(["approve", "revise"]) })
+  .object({
+    accepted: z.literal(true),
+    intent: z.enum([
+      "approve",
+      "revise",
+      "restart_requested",
+      "restart_confirmed",
+      "restart_cancelled",
+      "restart_unavailable",
+    ]),
+    restartRequestId: z.string().uuid().optional(),
+  })
   .strict();
 
 const eventBase = {
@@ -340,6 +373,17 @@ export const VideoWorkflowEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("storyboard.completed"), data: StoryboardVersionSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("cinematic.artifact.completed"), data: CinematicArtifactVersionSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("cinematic.approval.required"), data: z.object({ stage: CinematicStageSchema, version: z.number().int().positive() }).strict() }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.restart.requested"), data: PendingVideoWorkflowRestartSchema }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.restart.started"), data: z.object({
+    restartRequestId: z.string().uuid(),
+    targetStage: VideoWorkflowRestartStageSchema,
+    previousRunId: z.string().min(1).max(200).nullable(),
+    runId: z.string().min(1).max(200),
+  }).strict() }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.restart.cancelled"), data: z.object({
+    restartRequestId: z.string().uuid(),
+    targetStage: VideoWorkflowRestartStageSchema,
+  }).strict() }).strict(),
   z.object({ ...eventBase, type: z.literal("job.progress"), data: JobProgressEventDataSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("job.completed"), data: z.object({ jobId: VideoJobIdSchema }).strict() }).strict(),
   z.object({ ...eventBase, type: z.literal("job.failed"), data: z.object({ jobId: VideoJobIdSchema, message: z.string().min(1).max(1_000) }).strict() }).strict(),
@@ -360,7 +404,10 @@ export const RenderVideoJobPayloadSchema = z
     storyboardVersion: z.number().int().positive(),
     videoModel: VideoModelSchema.default("doubao-seedance-2.0"),
     videoPrompt: z.string().trim().min(1).max(4_000),
-    objectKey: z.string().regex(/^tenant\/demo\/project\/demo\/render\/[a-zA-Z0-9-]+\/video\.mp4$/u),
+    capabilityResolutions: z.array(WorkflowCapabilityResolutionSchema).default([]),
+    objectKey: z.string()
+      .regex(/^tenant\/demo\/project\/demo\/render\/[a-zA-Z0-9-]+\/(?:video|[\p{L}\p{N}][\p{L}\p{N} _.-]{0,95})\.mp4$/u)
+      .refine((objectKey) => !objectKey.includes(".."), "Object key cannot contain parent path segments."),
   })
   .strict()
   .superRefine((payload, context) => {
@@ -420,16 +467,20 @@ export const ApimartVideoTaskSchema = z
 export type Storyboard = z.infer<typeof StoryboardSchema>;
 export type StoryboardVersion = z.infer<typeof StoryboardVersionSchema>;
 export type VideoWorkflowStatus = z.infer<typeof VideoWorkflowStatusSchema>;
-export type VideoJobStatus = z.infer<typeof VideoJobStatusSchema>;
+export type VideoWorkflowFailureCode = z.infer<typeof VideoWorkflowFailureCodeSchema>;
+export type ActiveWorkflowRunContext = z.infer<typeof ActiveWorkflowRunContextSchema>;
 export type WorkflowStepState = z.infer<typeof WorkflowStepStateSchema>;
 export type WorkflowToolActivity = z.infer<typeof WorkflowToolActivitySchema>;
 export type WorkflowStepProgress = z.infer<typeof WorkflowStepProgressSchema>;
 export type VideoWorkflowSnapshot = z.infer<typeof VideoWorkflowSnapshotSchema>;
+export type VideoWorkflowRestartStage = z.infer<typeof VideoWorkflowRestartStageSchema>;
+export type PendingVideoWorkflowRestart = z.infer<typeof PendingVideoWorkflowRestartSchema>;
 export type CreateVideoWorkflowRequest = z.infer<typeof CreateVideoWorkflowRequestSchema>;
 export type CreateVideoWorkflowResponse = z.infer<typeof CreateVideoWorkflowResponseSchema>;
 export type UpdateVideoWorkflowModelRequest = z.infer<typeof UpdateVideoWorkflowModelRequestSchema>;
 export type UpdateVideoWorkflowModelResponse = z.infer<typeof UpdateVideoWorkflowModelResponseSchema>;
 export type RetryVideoWorkflowResponse = z.infer<typeof RetryVideoWorkflowResponseSchema>;
+export type RecoverVideoWorkflowResponse = z.infer<typeof RecoverVideoWorkflowResponseSchema>;
 export type VideoWorkflowInteraction = z.infer<typeof VideoWorkflowInteractionSchema>;
 export type VideoWorkflowInteractionResult = z.infer<typeof VideoWorkflowInteractionResultSchema>;
 export type VideoWorkflowEvent = z.infer<typeof VideoWorkflowEventSchema>;

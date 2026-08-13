@@ -10,6 +10,8 @@ import { VideoWorkflowService } from "./video-workflow.service.js";
 import { MASTRA_RUNTIME, VIDEO_OBJECT_STORAGE } from "./video-workflow.tokens.js";
 import { WorkflowEventService } from "./workflow-event.service.js";
 import { VideoWorkflowOperations } from "./video-workflow.operations.js";
+import { WorkflowRecoveryService } from "./workflow-recovery.service.js";
+import { UserIntentResolverService } from "./user-intent-resolver.service.js";
 
 @Module({
   imports: [DatabaseModule, ModelGatewayModule],
@@ -19,6 +21,8 @@ import { VideoWorkflowOperations } from "./video-workflow.operations.js";
     WorkflowEventService,
     VideoWorkflowOperations,
     MastraRuntimeService,
+    WorkflowRecoveryService,
+    UserIntentResolverService,
     { provide: MASTRA_RUNTIME, useExisting: MastraRuntimeService },
     { provide: VIDEO_OBJECT_STORAGE, useFactory: () => new ObjectStorage(loadStorageConfig()) },
   ],

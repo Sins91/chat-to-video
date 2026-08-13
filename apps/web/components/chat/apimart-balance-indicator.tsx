@@ -15,7 +15,10 @@ let pageLoadBalanceRequest: Promise<ApimartAccountBalance> | undefined;
 
 const getPageLoadBalance = (): Promise<ApimartAccountBalance> => {
   pageLoadBalanceRequest ??= getApimartAccountBalance();
-  return pageLoadBalanceRequest;
+  return pageLoadBalanceRequest.catch((error: unknown) => {
+    pageLoadBalanceRequest = undefined;
+    throw error;
+  });
 };
 
 export function ApimartBalanceIndicator() {
@@ -57,12 +60,12 @@ export function ApimartBalanceIndicator() {
 
   return <div
     aria-live="polite"
-    className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2 text-[11px] text-zinc-400"
+    className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2 font-sans text-[10px] text-muted-foreground"
     role="status"
     title={title}
   >
-    <WalletCardsIcon className="size-3.5 text-zinc-500" />
+    <WalletCardsIcon className="size-3.5 text-muted-foreground" />
     <span className="hidden md:inline">APIMart 余额</span>
-    <span className="font-medium tabular-nums text-zinc-200">{displayedBalance}</span>
+    <span className="font-numeric font-medium tabular-nums text-foreground">{displayedBalance}</span>
   </div>;
 }

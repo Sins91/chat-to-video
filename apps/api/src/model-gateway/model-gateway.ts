@@ -5,6 +5,8 @@ import type {
   Storyboard,
   VideoModel,
   WorkflowToolActivity,
+  WorkflowUserIntent,
+  WorkflowStageId,
 } from "@chat-to-video/contracts";
 import type { UIMessageChunk } from "ai";
 
@@ -23,6 +25,24 @@ export type ModelToolActivityCallback =
   (activity: ModelToolActivity) => void | Promise<void>;
 
 export interface ModelGateway {
+  classifyWorkflowIntent(request: {
+    requestId: string;
+    workflowId: string;
+    conversationId: string;
+    tenantId: string;
+    projectId: string;
+    userMessage: string;
+    workflowStatus: string;
+    currentStage: WorkflowStageId;
+    currentVersion: number;
+    currentArtifactSummary: string;
+    stages: ReadonlyArray<{
+      id: WorkflowStageId;
+      label: string;
+      intentTopics: readonly string[];
+      isRestartable: boolean;
+    }>;
+  }): Promise<WorkflowUserIntent>;
   inferCinematicDuration(request: {
     requestId: string;
     conversationId: string;

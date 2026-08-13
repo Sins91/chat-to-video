@@ -34,10 +34,22 @@ export const ConversationCinematicArtifactEntrySchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
 }).strict();
 
+export const ConversationArchivedVideoEntrySchema = z.object({
+  id: z.string().min(1).max(100),
+  type: z.literal("archived_video"),
+  workflowId: z.string().uuid(),
+  jobId: z.string().min(1).max(100),
+  storyboardVersion: z.number().int().positive(),
+  videoTitle: z.string().trim().min(1).max(120).nullable().default(null),
+  playbackUrl: z.string().url(),
+  createdAt: z.string().datetime({ offset: true }),
+}).strict();
+
 export const ConversationEntrySchema = z.discriminatedUnion("type", [
   ConversationTextEntrySchema,
   ConversationStoryboardEntrySchema,
   ConversationCinematicArtifactEntrySchema,
+  ConversationArchivedVideoEntrySchema,
 ]);
 
 export const ConversationSummarySchema = z.object({

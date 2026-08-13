@@ -1,3 +1,5 @@
+import { fetchUpstreamRead } from "@/lib/upstream-readiness";
+
 const DEFAULT_API_BASE_URL = "http://localhost:4101";
 
 const getApiBaseUrl = (): string => {
@@ -13,7 +15,7 @@ export const proxyApimartAccountBalance = async (
   request: Request,
 ): Promise<Response> => {
   try {
-    const upstream = await fetch(`${getApiBaseUrl()}/apimart/account/balance`, {
+    const upstream = await fetchUpstreamRead(`${getApiBaseUrl()}/apimart/account/balance`, {
       method: "GET",
       cache: "no-store",
       signal: request.signal,

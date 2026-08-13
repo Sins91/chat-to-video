@@ -1,10 +1,22 @@
 import { Inject, Injectable, type OnModuleDestroy } from "@nestjs/common";
 import {
+  CinematicAssetJobPayloadSchema,
+  CINEMATIC_PIPELINE_DEFINITION,
   CinematicArtifactSchema,
   CinematicStageSchema,
+  createGeneratedVideoFilename,
+  findMissingWorkflowCapabilities,
+  findWorkflowStage,
+  getRequiredWorkflowCapabilities,
   type CinematicArtifact,
+  type CinematicAssetJobPayload,
   type CinematicGenerativeStage,
+  getWorkflowStageIndex,
   type CinematicStage,
+  type WorkflowCapabilityFacts,
+  type WorkflowCapabilityResolution,
+  WorkflowCapabilitySnapshotSchema,
+  WORKFLOW_CAPABILITY_SNAPSHOT_KEY,
 } from "@chat-to-video/contracts";
 import {
   RENDER_JOB_TIMEOUT_MS,
@@ -43,6 +55,12 @@ type WorkflowInput = {
   durationSeconds: number;
 };
 
+const isUpstreamStage = (
+  candidate: CinematicGenerativeStage,
+  current: CinematicGenerativeStage,
+): boolean => getWorkflowStageIndex(CINEMATIC_PIPELINE_DEFINITION, candidate) <
+  getWorkflowStageIndex(CINEMATIC_PIPELINE_DEFINITION, current);
+
 const CINEMATIC_RUNNING_MESSAGE: Record<CinematicGenerativeStage, string> = {
   research: "正在分析需求并整理视觉研究。",
   proposal: "正在生成并比较电影化创意方案。",
@@ -56,7 +74,7 @@ const CINEMATIC_AWAITING_MESSAGE: Record<CinematicGenerativeStage, string> = {
   research: "创作研究已完成。",
   proposal: "创意方案已完成，等待你确认或提出修改。",
   script: "脚本已完成，等待你确认或提出修改。",
-  scene_plan: "分镜规划已完成，可调整逐镜头时长或确认继续。",
+  scene_plan: "分镜写作已完成，可调整逐镜头时长或确认继续。",
   assets: "素材规划已完成，等待你确认或提出修改。",
   edit: "剪辑方案已完成。",
 };
@@ -64,7 +82,13 @@ const CINEMATIC_AWAITING_MESSAGE: Record<CinematicGenerativeStage, string> = {
 @Injectable()
 export class VideoWorkflowOperations implements OnModuleDestroy {
   private readonly queueConnection = new Redis(loadRedisUrl(), { maxRetriesPerRequest: 1 });
-  private readonly renderQueue = new Queue<RenderVideoJobPayload>("render-jobs", {
+  private readonly renderQueue = new Queue<RenderVideoJobPayload | CinematicAssetJobPayload>("render-jobs", {
+    connection: this.queueConnection,
+  });
+  private readonly imageQueue = new Queue<CinematicAssetJobPayload>("image-jobs", {
+    connection: this.queueConnection,
+  });
+  private readonly agentQueue = new Queue<CinematicAssetJobPayload>("agent-jobs", {
     connection: this.queueConnection,
   });
   private readonly cleanupQueue = new Queue<RenderTimeoutCleanupJobPayload>("cleanup-jobs", {
@@ -76,6 +100,272 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     @Inject(MODEL_GATEWAY) private readonly modelGateway: ModelGateway,
     @Inject(WorkflowEventService) private readonly events: WorkflowEventService,
   ) {}
+
+  private async capabilityResolutions(): Promise<WorkflowCapabilityResolution[]> {
+    const raw = await this.queueConnection.get(WORKFLOW_CAPABILITY_SNAPSHOT_KEY);
+    if (!raw) return [];
+    try {
+      const parsed = WorkflowCapabilitySnapshotSchema.safeParse(JSON.parse(raw) as unknown);
+      return parsed.success ? parsed.data.resolutions : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async cinematicCapabilityContext(workflowId: string): Promise<{
+    facts: WorkflowCapabilityFacts;
+    scenePlan: Extract<CinematicArtifact, { stage: "scene_plan" }>;
+    assets: Extract<CinematicArtifact, { stage: "assets" }>;
+  }> {
+    const [sceneRow, assetRow] = await Promise.all([
+      this.repository.findLatestCinematicArtifact(workflowId, "scene_plan"),
+      this.repository.findLatestCinematicArtifact(workflowId, "assets"),
+    ]);
+    if (!sceneRow || !assetRow) {
+      throw new Error("Cinematic capability preflight requires scene and asset plans.");
+    }
+    const scenePlan = CinematicArtifactSchema.parse(sceneRow.artifact);
+    const assets = CinematicArtifactSchema.parse(assetRow.artifact);
+    if (scenePlan.stage !== "scene_plan" || assets.stage !== "assets") {
+      throw new Error("Cinematic capability preflight received invalid artifacts.");
+    }
+    return {
+      scenePlan,
+      assets,
+      facts: {
+        hasMotionWithoutSourceVideo: scenePlan.data.scenes.some(
+          (scene) => scene.motionRequired && scene.sourceType !== "supplied_video",
+        ),
+        hasGeneratedImage: scenePlan.data.scenes.some(
+          (scene) => scene.sourceType === "generated_image",
+        ) || assets.data.assets.some(
+          (asset) => asset.kind === "image" && asset.sourceMode === "generate",
+        ),
+        hasTitleCard: scenePlan.data.scenes.some(
+          (scene) => scene.sourceType === "title_card",
+        ) || assets.data.assets.some((asset) => asset.kind === "title_card"),
+        generatesMusic: assets.data.music.sourceMode === "generate",
+        hasAudioAsset: assets.data.music.sourceMode !== "supplied" ||
+          assets.data.assets.some((asset) => asset.kind === "audio"),
+      },
+    };
+  }
+
+  async preflightStageExecution(input: WorkflowInput & {
+    stage: CinematicGenerativeStage;
+    version: number;
+  }): Promise<boolean> {
+    const definition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, input.stage);
+    if (!definition) throw new Error(`Cinematic stage ${input.stage} is not registered.`);
+    const { facts, scenePlan, assets } = await this.cinematicCapabilityContext(input.workflowId);
+    const sceneOrders = new Set(scenePlan.data.scenes.map((scene) => scene.order));
+    const plannedOrders = assets.data.assets
+      .filter((asset) => asset.kind !== "audio")
+      .map((asset) => asset.sceneOrder);
+    const structuralIssue = assets.data.assets.some((asset) => asset.sourceMode !== "generate") ||
+      assets.data.music.sourceMode !== "generate"
+      ? "当前部署只允许执行已声明为 generate 的素材和音乐；library/supplied 必须先提供已授权对象键。"
+      : assets.data.assets.some((asset) => asset.kind === "audio")
+        ? "当前素材执行器不支持逐镜音效生成，请只保留一条背景音乐。"
+        : assets.data.slideshowRisk >= 4
+          ? "素材规划的幻灯片风险过高，请先调整镜头素材。"
+          : plannedOrders.length !== sceneOrders.size ||
+              new Set(plannedOrders).size !== plannedOrders.length ||
+              plannedOrders.some((order) => !sceneOrders.has(order))
+            ? "素材规划必须为每个镜头提供且只提供一个视觉素材。"
+            : assets.data.assets.some((asset) => {
+                const scene = scenePlan.data.scenes.find(
+                  (candidate) => candidate.order === asset.sceneOrder,
+                );
+                if (!scene || asset.kind === "audio") return false;
+                return (scene.sourceType === "generated_video" && asset.kind !== "video") ||
+                  (scene.sourceType === "generated_image" && asset.kind !== "image") ||
+                  (scene.sourceType === "title_card" && asset.kind !== "title_card");
+              })
+              ? "素材类型必须与已批准分镜的 sourceType 一致。"
+            : scenePlan.data.scenes.some((scene) =>
+                scene.motionRequired &&
+                (scene.sourceType === "generated_image" || scene.sourceType === "title_card")
+              )
+              ? "需要运动的镜头不能降级为静态图片或标题卡。"
+              : null;
+    const required = getRequiredWorkflowCapabilities(definition.capabilities, facts);
+    const missing = findMissingWorkflowCapabilities(
+      required,
+      await this.capabilityResolutions(),
+    );
+    if (missing.length === 0 && structuralIssue === null) return true;
+    const message = structuralIssue ??
+      `当前部署缺少素材执行能力：${missing.join("、")}。请完成配置后再次确认，或修改素材规划。`;
+    await this.repository.updateWorkflow(input.workflowId, {
+      status: "awaiting_input",
+      currentStageId: input.stage,
+      currentVersion: input.version,
+      failureCode: null,
+      errorMessage: message,
+    });
+    await this.events.append({
+      eventId: `${input.workflowId}:capabilities:blocked:${input.stage}:v${input.version}`,
+      workflowId: input.workflowId,
+      requestId: input.requestId,
+      type: "agent.step",
+      data: {
+        status: "awaiting_input",
+        ...videoWorkflowStep(input.stage, "awaiting_input", message),
+      },
+    });
+    return false;
+  }
+
+  async enqueueCinematicAssetBatch(input: WorkflowInput & {
+    version: number;
+  }): Promise<void> {
+    const { scenePlan, assets, facts } = await this.cinematicCapabilityContext(input.workflowId);
+    if (assets.data.assets.some((asset) => asset.sourceMode !== "generate") ||
+        assets.data.music.sourceMode !== "generate") {
+      throw new Error(
+        "Current cinematic execution requires generated assets; supplied and library assets need verified object keys.",
+      );
+    }
+    if (assets.data.assets.some((asset) => asset.kind === "audio")) {
+      throw new Error("Per-scene generated audio is not supported; use the approved music track.");
+    }
+    const definition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "assets");
+    if (!definition) throw new Error("Cinematic assets stage is not registered.");
+    const resolutions = await this.capabilityResolutions();
+    const required = getRequiredWorkflowCapabilities(definition.capabilities, facts);
+    const missing = findMissingWorkflowCapabilities(required, resolutions);
+    if (missing.length > 0) {
+      throw new Error(`Cinematic asset capabilities are unavailable: ${missing.join(", ")}.`);
+    }
+    const resolutionFor = (capabilityId: WorkflowCapabilityResolution["capabilityId"]) => {
+      const resolution = resolutions.find((candidate) =>
+        candidate.capabilityId === capabilityId && candidate.status === "available"
+      );
+      if (!resolution) throw new Error(`No adapter resolved for ${capabilityId}.`);
+      return resolution;
+    };
+    const batchId = `${input.workflowId}-assets-v${input.version}`;
+    const jobs: CinematicAssetJobPayload[] = assets.data.assets.map((asset, index) => {
+      const scene = scenePlan.data.scenes.find((candidate) => candidate.order === asset.sceneOrder);
+      if (!scene) throw new Error(`Asset plan references missing scene ${asset.sceneOrder}.`);
+      const assetId = `${batchId}-${index + 1}`;
+      if (asset.kind === "video") {
+        return CinematicAssetJobPayloadSchema.parse({
+          workflowId: input.workflowId,
+          requestId: input.requestId,
+          batchId,
+          assetId,
+          planVersion: input.version,
+          sceneOrder: asset.sceneOrder,
+          kind: "video",
+          prompt: asset.prompt,
+          objectKey: `tenant/demo/project/demo/derived/${batchId}/${assetId}.mp4`,
+          capabilityResolution: resolutionFor("video.generate"),
+          videoModel: input.videoModel,
+          durationSeconds: scene.generationDurationSeconds ?? scene.durationSeconds,
+        });
+      }
+      const kind = asset.kind === "title_card" ? "title_card" as const : "image" as const;
+      const capabilityId = kind === "title_card"
+        ? "image.render.title-card" as const
+        : "image.generate" as const;
+      return CinematicAssetJobPayloadSchema.parse({
+        workflowId: input.workflowId,
+        requestId: input.requestId,
+        batchId,
+        assetId,
+        planVersion: input.version,
+        sceneOrder: asset.sceneOrder,
+        kind,
+        prompt: asset.prompt,
+        objectKey: `tenant/demo/project/demo/derived/${batchId}/${assetId}.png`,
+        capabilityResolution: resolutionFor(capabilityId),
+        aspectRatio: scenePlan.data.aspectRatio,
+      });
+    });
+    const musicId = `${batchId}-music`;
+    jobs.push(CinematicAssetJobPayloadSchema.parse({
+      workflowId: input.workflowId,
+      requestId: input.requestId,
+      batchId,
+      assetId: musicId,
+      planVersion: input.version,
+      sceneOrder: null,
+      kind: "music",
+      prompt: assets.data.music.direction,
+      objectKey: `tenant/demo/project/demo/derived/${batchId}/${musicId}.wav`,
+      capabilityResolution: resolutionFor("music.generate"),
+      generationDurationSeconds: Math.min(input.durationSeconds, 240),
+      finalDurationSeconds: input.durationSeconds,
+    }));
+    await this.repository.createCinematicAssetBatch({
+      batchId,
+      workflowId: input.workflowId,
+      planVersion: input.version,
+      jobs,
+    });
+    for (const job of jobs) {
+      try {
+        const queue = job.kind === "music"
+          ? this.agentQueue
+          : job.kind === "video"
+            ? this.renderQueue
+            : this.imageQueue;
+        await queue.add("generate-cinematic-asset", job, {
+          jobId: job.assetId,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5_000 },
+          removeOnComplete: 100,
+          removeOnFail: 500,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error
+          ? `Asset queue handoff failed: ${error.message}`.slice(0, 1_000)
+          : "Asset queue handoff failed.";
+        await this.repository.failCinematicAssetJob({
+          assetId: job.assetId,
+          batchId,
+          workflowId: input.workflowId,
+          message,
+        });
+        throw error;
+      }
+    }
+    await this.events.append({
+      eventId: `${batchId}:queued`,
+      workflowId: input.workflowId,
+      requestId: input.requestId,
+      type: "job.progress",
+      data: {
+        jobId: batchId,
+        status: "queued",
+        progress: 0,
+        ...videoWorkflowStep("assets", "running", "素材生产任务已进入隔离队列。"),
+      },
+    });
+  }
+
+  private async assertComposeCapabilities(workflowId: string): Promise<
+    WorkflowCapabilityResolution[]
+  > {
+    const assetDefinition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "assets");
+    const composeDefinition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "compose");
+    if (!assetDefinition || !composeDefinition) {
+      throw new Error("Cinematic execution stages are not registered.");
+    }
+    const { facts } = await this.cinematicCapabilityContext(workflowId);
+    const resolutions = await this.capabilityResolutions();
+    const required = [...new Set([
+      ...getRequiredWorkflowCapabilities(assetDefinition.capabilities, facts),
+      ...getRequiredWorkflowCapabilities(composeDefinition.capabilities, facts),
+    ])];
+    const missing = findMissingWorkflowCapabilities(required, resolutions);
+    if (missing.length > 0) {
+      throw new Error(`Cinematic compose capabilities became unavailable: ${missing.join(", ")}.`);
+    }
+    return resolutions.filter((resolution) => required.includes(resolution.capabilityId));
+  }
 
   private withGenerationDurations(
     artifact: CinematicArtifact,
@@ -157,10 +447,34 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     return await job.getState() === "active" ? 0 : null;
   }
 
+  async getRenderJobState(workflowId: string): Promise<string | null> {
+    const videoJob = await this.repository.findWorkflowVideoJob(workflowId);
+    if (videoJob) {
+      const job = await this.renderQueue.getJob(videoJob.id);
+      return job ? job.getState() : null;
+    }
+    const batch = await this.repository.findLatestCinematicAssetBatch(workflowId);
+    if (!batch || (batch.status !== "queued" && batch.status !== "running")) return null;
+    const assets = await this.repository.listCinematicAssetJobs(batch.id);
+    for (const asset of assets) {
+      const queue = asset.kind === "music"
+        ? this.agentQueue
+        : asset.kind === "video"
+          ? this.renderQueue
+          : this.imageQueue;
+      const job = await queue.getJob(asset.id);
+      if (!job) continue;
+      const state = await job.getState();
+      if (["active", "waiting", "delayed", "prioritized"].includes(state)) return state;
+    }
+    return null;
+  }
+
   async generateCinematicArtifact(input: WorkflowInput & {
     stage: CinematicGenerativeStage;
     version: number;
     previousArtifact?: CinematicArtifact;
+    previousArtifactVersion?: number;
     revisionRequest?: string;
   }): Promise<CinematicArtifact> {
     const existing = await this.repository.findCinematicArtifact(input.workflowId, input.version);
@@ -168,7 +482,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
 
     await this.repository.updateWorkflow(input.workflowId, {
       status: "drafting",
-      cinematicStage: input.stage,
+      currentStageId: input.stage,
       errorMessage: null,
     });
     await this.events.append({
@@ -188,7 +502,12 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       },
     });
 
-    const rows = await this.repository.listCinematicArtifacts(input.workflowId);
+    const [rows, previousArtifactRow] = await Promise.all([
+      this.repository.listCinematicArtifacts(input.workflowId),
+      input.previousArtifactVersion
+        ? this.repository.findCinematicArtifact(input.workflowId, input.previousArtifactVersion)
+        : Promise.resolve(null),
+    ]);
     const latestByStage = new Map<CinematicGenerativeStage, CinematicArtifact>();
     for (const row of rows) {
       const artifact = CinematicArtifactSchema.parse(row.artifact);
@@ -235,9 +554,11 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         durationSeconds: input.durationSeconds,
         modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(selectedVideoModel),
         stage: input.stage,
-        previousArtifact: input.previousArtifact,
+        previousArtifact: input.previousArtifact ?? (previousArtifactRow
+          ? CinematicArtifactSchema.parse(previousArtifactRow.artifact)
+          : undefined),
         approvedArtifacts: [...latestByStage.values()].filter(
-          (artifact) => artifact.stage !== input.stage,
+          (artifact) => isUpstreamStage(artifact.stage, input.stage),
         ),
         revisionRequest: input.revisionRequest,
         onToolActivity,
@@ -307,6 +628,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
   }): Promise<void> {
     await this.repository.saveCinematicArtifact({
       workflowId: input.workflowId,
+      pipelineId: CINEMATIC_PIPELINE_DEFINITION.id,
       stage: input.artifact.stage,
       version: input.version,
       revisionRequest: input.revisionRequest ?? null,
@@ -314,7 +636,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     });
     await this.repository.updateWorkflow(input.workflowId, {
       status: input.requiresApproval ? "awaiting_input" : "drafting",
-      cinematicStage: input.artifact.stage,
+      currentStageId: input.artifact.stage,
       currentVersion: input.version,
       errorMessage: null,
     });
@@ -322,6 +644,8 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       version: input.version,
       revisionRequest: input.revisionRequest ?? null,
       artifact: input.artifact,
+      isSuperseded: false,
+      supersededAt: null,
       createdAt: new Date().toISOString(),
     };
     await this.events.append({
@@ -376,20 +700,18 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     version: number;
     edit: Extract<CinematicArtifact, { stage: "edit" }>;
   }): Promise<void> {
-    const sceneRow = await this.repository.findLatestCinematicArtifact(
-      input.workflowId,
-      "scene_plan",
-    );
-    const assetRow = await this.repository.findLatestCinematicArtifact(
-      input.workflowId,
-      "assets",
-    );
-    if (!sceneRow || !assetRow) {
-      throw new Error("Cinematic render requires approved scene and asset plans.");
+    const [scriptRow, sceneRow, assetRow] = await Promise.all([
+      this.repository.findLatestCinematicArtifact(input.workflowId, "script"),
+      this.repository.findLatestCinematicArtifact(input.workflowId, "scene_plan"),
+      this.repository.findLatestCinematicArtifact(input.workflowId, "assets"),
+    ]);
+    if (!scriptRow || !sceneRow || !assetRow) {
+      throw new Error("Cinematic render requires approved script, scene, and asset plans.");
     }
+    const script = CinematicArtifactSchema.parse(scriptRow.artifact);
     const scenePlan = CinematicArtifactSchema.parse(sceneRow.artifact);
     const assets = CinematicArtifactSchema.parse(assetRow.artifact);
-    if (scenePlan.stage !== "scene_plan" || assets.stage !== "assets") {
+    if (script.stage !== "script" || scenePlan.stage !== "scene_plan" || assets.stage !== "assets") {
       throw new Error("Cinematic render artifacts have invalid stages.");
     }
     if (assets.data.slideshowRisk >= 4) {
@@ -402,10 +724,25 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       throw new Error("Motion-required cinematic scenes cannot use still-image fallback.");
     }
 
+    const assetBatch = await this.repository.findLatestCinematicAssetBatch(input.workflowId);
+    if (!assetBatch || assetBatch.status !== "approved") {
+      throw new Error("Cinematic render requires an approved executed-asset batch.");
+    }
+    const executedAssets = await this.repository.listCinematicAssetJobs(assetBatch.id);
+    if (executedAssets.length < 1 || executedAssets.some(
+      (asset) => asset.status !== "succeeded" || !asset.mimeType || !asset.sizeBytes,
+    )) {
+      throw new Error("Cinematic executed assets are incomplete.");
+    }
+    const music = executedAssets.find((asset) => asset.kind === "music");
+    if (!music?.mimeType) throw new Error("Cinematic render requires approved music.");
+
     const jobId = `${input.workflowId}-cinematic-v${input.version}`;
-    const workflow = await this.repository.findWorkflow(input.workflowId);
-    if (!workflow) throw new Error("Cinematic workflow not found while enqueueing.");
+    const workflowScope = await this.repository.findWorkflowScope(input.workflowId);
+    if (!workflowScope) throw new Error("Cinematic workflow not found while enqueueing.");
+    const workflow = workflowScope.workflow;
     const selectedVideoModel = VideoModelSchema.parse(workflow.videoModel);
+    const capabilityResolutions = await this.assertComposeCapabilities(input.workflowId);
     const payload = RenderVideoJobPayloadSchema.parse({
       workflowId: input.workflowId,
       requestId: input.requestId,
@@ -413,28 +750,47 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       storyboardVersion: input.version,
       videoModel: selectedVideoModel,
       videoPrompt: input.edit.data.renderPrompt,
+      capabilityResolutions,
       cinematic: {
         rendererFamily: "ffmpeg",
         durationSeconds: input.durationSeconds,
         modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(selectedVideoModel),
         scenes: scenePlan.data.scenes.map((scene) => ({
           ...scene,
+          ...(() => {
+            const asset = executedAssets.find((candidate) =>
+              candidate.sceneOrder === scene.order && candidate.kind !== "music"
+            );
+            if (!asset?.mimeType) {
+              throw new Error(`Approved asset for scene ${scene.order} is missing.`);
+            }
+            return {
+              assetObjectKey: asset.objectKey,
+              assetMimeType: asset.mimeType,
+            };
+          })(),
           generationDurationSeconds: roundVideoModelDurationSeconds(
             selectedVideoModel,
             scene.durationSeconds,
           ),
         })),
+        music: {
+          objectKey: music.objectKey,
+          mimeType: music.mimeType,
+          gainDb: -12,
+        },
       },
-      objectKey: `tenant/demo/project/demo/render/${jobId}/video.mp4`,
+      objectKey: `tenant/demo/project/demo/render/${jobId}/${createGeneratedVideoFilename(script.data.title, jobId)}`,
     });
     await this.repository.createVideoJob({
       id: payload.jobId,
       workflowId: payload.workflowId,
       storyboardVersion: payload.storyboardVersion,
       objectKey: payload.objectKey,
+      capabilityResolutions,
     });
     await this.repository.updateWorkflow(input.workflowId, {
-      cinematicStage: "compose" satisfies CinematicStage,
+      currentStageId: "compose" satisfies CinematicStage,
     });
     await this.enqueueRenderJob("generate-cinematic-video", payload);
     const queueAhead = await this.getRenderQueueAhead(payload.jobId);
@@ -451,6 +807,23 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         ...videoWorkflowStep("compose", "running", "视频任务已进入队列，正在等待生成资源。"),
       },
     });
+  }
+
+  async enqueueCinematicVideoVersion(input: WorkflowInput & {
+    version: number;
+  }): Promise<void> {
+    const editRow = await this.repository.findCinematicArtifact(
+      input.workflowId,
+      input.version,
+    );
+    if (!editRow) {
+      throw new Error("Cinematic edit artifact was not found while enqueueing.");
+    }
+    const artifact = CinematicArtifactSchema.parse(editRow.artifact);
+    if (artifact.stage !== "edit") {
+      throw new Error("Cinematic render version does not reference an edit artifact.");
+    }
+    await this.enqueueCinematicVideo({ ...input, edit: artifact });
   }
 
   async generateStoryboard(input: WorkflowInput & {
@@ -541,8 +914,13 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
 
   async enqueueVideo(input: WorkflowInput & { version: number; storyboard: Storyboard }): Promise<void> {
     const jobId = `${input.workflowId}-v${input.version}`;
-    const workflow = await this.repository.findWorkflow(input.workflowId);
-    if (!workflow) throw new Error("Video workflow not found while enqueueing.");
+    const workflowScope = await this.repository.findWorkflowScope(input.workflowId);
+    if (!workflowScope) throw new Error("Video workflow not found while enqueueing.");
+    const workflow = workflowScope.workflow;
+    const resolutions = await this.capabilityResolutions();
+    const required = ["video.generate"] as const;
+    const missing = findMissingWorkflowCapabilities(required, resolutions);
+    if (missing.length > 0) throw new Error("Video generation capability is unavailable.");
     const payload = RenderVideoJobPayloadSchema.parse({
       workflowId: input.workflowId,
       requestId: input.requestId,
@@ -550,13 +928,17 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       storyboardVersion: input.version,
       videoModel: VideoModelSchema.parse(workflow.videoModel),
       videoPrompt: input.storyboard.videoPrompt,
-      objectKey: `tenant/demo/project/demo/render/${jobId}/video.mp4`,
+      capabilityResolutions: resolutions.filter(
+        (resolution) => required.includes(resolution.capabilityId as "video.generate"),
+      ),
+      objectKey: `tenant/demo/project/demo/render/${jobId}/${createGeneratedVideoFilename(input.storyboard.title, jobId)}`,
     });
     await this.repository.createVideoJob({
       id: payload.jobId,
       workflowId: payload.workflowId,
       storyboardVersion: payload.storyboardVersion,
       objectKey: payload.objectKey,
+      capabilityResolutions: payload.capabilityResolutions,
     });
     await this.enqueueRenderJob("generate-video", payload);
     const queueAhead = await this.getRenderQueueAhead(payload.jobId);
@@ -607,7 +989,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
 
   async fail(input: WorkflowInput, error: unknown): Promise<void> {
     const workflow = await this.repository.findWorkflow(input.workflowId);
-    const parsedStage = CinematicStageSchema.safeParse(workflow?.cinematicStage);
+    const parsedStage = CinematicStageSchema.safeParse(workflow?.currentStageId);
     const cinematicStage = parsedStage.success ? parsedStage.data : null;
     const stageLabel = cinematicStage
       ? videoWorkflowStepLabel(cinematicStage)
@@ -639,7 +1021,12 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await Promise.all([this.renderQueue.close(), this.cleanupQueue.close()]);
+    await Promise.all([
+      this.renderQueue.close(),
+      this.imageQueue.close(),
+      this.agentQueue.close(),
+      this.cleanupQueue.close(),
+    ]);
     await this.queueConnection.quit();
   }
 }

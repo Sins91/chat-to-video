@@ -1,4 +1,7 @@
 import {
+  CINEMATIC_PIPELINE_DEFINITION,
+  findMissingWorkflowCapabilities,
+  findWorkflowStage,
   RenderVideoJobPayloadSchema,
   type RenderVideoJobPayload,
   type VideoWorkflowEvent,
@@ -14,6 +17,7 @@ import { Redis } from "ioredis";
 import { selectApimartVideoConfig, type WorkerConfig } from "./config.js";
 import { renderFailureMessage, renderStageError } from "./render-error.js";
 import { PermanentVideoError, SeedanceClient } from "./seedance-client.js";
+import { resolveWorkerCapabilities, workerCapabilityId } from "./workflow-capability.registry.js";
 
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
 const DOWNLOAD_ATTEMPTS = 5;
@@ -38,14 +42,20 @@ const retryDelay = (milliseconds: number): Promise<void> =>
 const videoGenerationStep = (
   stepState: WorkflowStepState,
   message: string,
-): WorkflowStepProgress => ({
-  stepId: "video-generation",
-  stepLabel: "视频生成",
-  stepState,
-  stepIndex: 8,
-  stepTotal: 8,
-  message,
-});
+): WorkflowStepProgress => {
+  const stage = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "compose");
+  if (!stage) throw new Error("Cinematic compose stage is not registered.");
+  return {
+    stepId: stage.stepId,
+    stepLabel: stage.stepLabel ?? stage.label,
+    stepState,
+    stepIndex: CINEMATIC_PIPELINE_DEFINITION.stages.findIndex(
+      (definition) => definition.id === stage.id,
+    ) + 2,
+    stepTotal: CINEMATIC_PIPELINE_DEFINITION.stages.length + 1,
+    message,
+  };
+};
 
 export class RenderProcessor {
   private readonly repository: VideoWorkflowRepository;
@@ -56,6 +66,47 @@ export class RenderProcessor {
     this.repository = new VideoWorkflowRepository(createDatabase(config.databaseUrl));
     this.storage = new ObjectStorage(config.storage);
     this.publisher = new Redis(config.redisUrl, { maxRetriesPerRequest: 1 });
+  }
+
+  private assertPayloadCapabilities(payload: RenderVideoJobPayload): void {
+    const required = payload.cinematic
+      ? [...new Set([
+          "video.compose.ffmpeg" as const,
+          ...payload.cinematic.scenes.map((scene) =>
+            scene.sourceType === "generated_image"
+              ? "image.generate" as const
+              : scene.sourceType === "title_card"
+                ? "image.render.title-card" as const
+                : "video.generate" as const
+          ),
+        ])]
+      : ["video.generate" as const];
+    const unselected = findMissingWorkflowCapabilities(
+      required,
+      payload.capabilityResolutions,
+    );
+    if (unselected.length > 0) {
+      throw new PermanentVideoError(
+        `Job did not select required capability adapters: ${unselected.join(", ")}.`,
+      );
+    }
+    const local = resolveWorkerCapabilities(this.config, workerCapabilityId()).resolutions;
+    const missing = findMissingWorkflowCapabilities(required, local);
+    if (missing.length > 0) {
+      throw new PermanentVideoError(
+        `Worker is missing required capabilities: ${missing.join(", ")}.`,
+      );
+    }
+    for (const selected of payload.capabilityResolutions) {
+      const current = local.find(
+        (resolution) => resolution.capabilityId === selected.capabilityId,
+      );
+      if (!current || current.adapterId !== selected.adapterId) {
+        throw new PermanentVideoError(
+          `Worker adapter mismatch for ${selected.capabilityId}.`,
+        );
+      }
+    }
   }
 
   private async event(input: {
@@ -73,6 +124,7 @@ export class RenderProcessor {
     const videoJob = await this.repository.findVideoJob(payload.jobId);
     if (
       !videoJob ||
+      videoJob.supersededAt !== null ||
       videoJob.status === "succeeded" ||
       videoJob.status === "failed" ||
       videoJob.status === "cancelled"
@@ -117,6 +169,13 @@ export class RenderProcessor {
           if (response.status >= 400 && response.status < 500) throw new PermanentVideoError(message);
           throw new Error(message);
         }
+        const finalUrl = new URL(response.url);
+        const hostname = finalUrl.hostname.toLowerCase();
+        if (finalUrl.protocol !== "https:" || !this.config.apimart.resultHosts.some(
+          (host) => hostname === host || hostname.endsWith(`.${host}`),
+        )) {
+          throw new PermanentVideoError("APIMart result redirected to an untrusted host.");
+        }
         const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
         if (!contentType.startsWith("video/")) throw new PermanentVideoError("APIMart result is not a video MIME type.");
         const declaredSize = Number(response.headers.get("content-length") ?? 0);
@@ -147,6 +206,21 @@ export class RenderProcessor {
     const clips: CinematicClip[] = [];
     const sceneCount = payload.cinematic.scenes.length;
     for (const [sceneIndex, scene] of payload.cinematic.scenes.entries()) {
+      if (scene.assetObjectKey && scene.assetMimeType) {
+        await this.assertActive(payload);
+        clips.push({
+          body: await this.storage.getObject(scene.assetObjectKey),
+          durationSeconds: scene.durationSeconds,
+          mimeType: scene.assetMimeType,
+        });
+        await this.progress(
+          payload,
+          Math.round(5 + ((sceneIndex + 1) / sceneCount) * 75),
+          `已加载审核通过的镜头素材 ${scene.order}/${sceneCount}。`,
+          `scene-${scene.order}-approved-asset`,
+        );
+        continue;
+      }
       const sceneJobId = `${payload.jobId}-scene-${scene.order}`;
       const objectKey = `tenant/demo/project/demo/derived/${payload.jobId}/scene-${scene.order}.mp4`;
       await this.repository.createCinematicSceneJob({
@@ -253,9 +327,17 @@ export class RenderProcessor {
     await this.progress(payload, 85, "所有镜头已就绪，正在合成最终视频。", "compose");
     let body: Uint8Array;
     try {
+      const music = payload.cinematic.music
+        ? {
+            body: await this.storage.getObject(payload.cinematic.music.objectKey),
+            mimeType: payload.cinematic.music.mimeType,
+            gainDb: payload.cinematic.music.gainDb,
+          }
+        : undefined;
       body = await composeCinematicVideo({
         ffmpegPath: this.config.ffmpegPath,
         clips,
+        music,
         timeoutMs: Math.max(300_000, payload.cinematic.durationSeconds * 4_000),
       });
     } catch (error: unknown) {
@@ -279,6 +361,7 @@ export class RenderProcessor {
 
   async process(job: Job<RenderVideoJobPayload>): Promise<void> {
     const payload = RenderVideoJobPayloadSchema.parse(job.data);
+    this.assertPayloadCapabilities(payload);
     const videoClient = new SeedanceClient(selectApimartVideoConfig(this.config.apimart, payload.videoModel));
     let activeStage = "渲染任务初始化";
     try {

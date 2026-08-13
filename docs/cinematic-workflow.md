@@ -69,3 +69,57 @@ FFMPEG_PATH=ffmpeg
 ```
 
 ???????????? FFmpeg ???????????
+
+## Stage restart checkpoint model
+
+工作流阶段重启采用 OpenMontage 风格的 checkpoint 历史模型，但不会倒放或修改旧的 Redis snapshot。用户在 `awaiting_input`、`failed` 或 `succeeded` 状态下，可以明确要求从 `proposal`、`script`、`scene_plan` 或 `assets` 的当前或更早阶段重新开始。第一次请求仅创建 15 分钟有效的待确认记录；确认后才在数据库事务内声明该请求并创建新的 Mastra run。
+
+重启基础设施不维护任何管线专属阶段枚举或顺序表。每条管线只通过一个 `WorkflowPipelineDefinition` 注册有序阶段、展示名称、自然语言别名和是否可重启；服务端校验、前端命令解析、阶段展示、上游选择及下游失效都从该定义派生。新增管线不需要修改通用重启协议、数据库事务或解析器。
+
+聊天中的阶段重启命令由“明确回退动作 + 唯一阶段目标”组成。回退动作覆盖“回到、返回、退回、回退、跳回、切回、撤回、回滚、从某步开始/重来、重做、重跑、重新执行/运行/生成、重启”，以及对应的 `go back`、`return`、`roll back`、`jump back`、`rewind`、`restart`、`start over`、`rerun`、`redo`、`repeat`、`regenerate` 等英文表达。目标既可以使用管线注册的阶段别名，也可以使用以下序数形式：
+
+- 阿拉伯数字：`步骤2`、`第 2 步`、`第2个阶段`、`step #2`、`2nd stage`；
+- 中文数字：`第二步`、`步骤二`、`第二个环节`，并支持十、百、千位组合；
+- 英文数字或序数：`step two`、`the second stage`、`phase twenty`。
+
+数字按 `WorkflowPipelineDefinition.stages` 的注册顺序解析，阶段数扩展时无需修改解析器。疑问句、多目标、越界编号、不可重启阶段、编号与阶段别名冲突，以及“第二个镜头”“第二个方案”这类非步骤编号仍走普通聊天，不会触发重启。完整的可识别表达目录和反例维护在 `apps/web/test/workflow-chat-routing.test.ts`，新增表达时必须同步补充该表格化测试。
+
+事务会将目标阶段及下游的通用 `workflow_stage_checkpoints` 和视频任务写入 `superseded_at` / `superseded_by_restart_id`，同时保留管线自己的业务产物、所有对象、输出和审计事件。版本号跨 run 单调递增；新 run 只读取目标阶段之前仍有效的 checkpoint，目标阶段最近的历史版本仅可作为修改参考。当前快照、渲染入队和 Worker 状态写回均过滤已替代记录，旧成片则作为只读历史条目继续提供短时效签名下载链接。
+
+`drafting`、`queued`、`running` 和 `cancelled` 状态拒绝重启。存在待确认请求时，审批、当前阶段修改、视频重试和模型切换暂停；新明确重启命令可以替换旧请求，确认与取消都通过持久化 SSE 事件触发客户端刷新。
+
+同一会话创建后续工作流后，之前已经完成的工作流只作为只读阶段与成片历史保留。用户明确要求返回前一个工作流，或请求的阶段尚未出现在当前工作流但存在于前一个已完成工作流时，服务端不会对当前工作流错误发起阶段重启，也不会返回操作失败卡片；它会在会话中持久化一条助手说明，告知旧工作流不能恢复，并建议新建对话后重新发起生成。跨工作流分支若未来开放，必须先引入显式的源工作流选择和分支业务模型，不能隐式激活两个工作流。
+
+## Mastra 单一执行生命周期
+
+电影化生产只注册 `cinematic-production` 一个工作流，执行 `research -> proposal -> script -> scene-plan -> assets -> edit -> video-generation` 原生步骤图。启动、恢复和阶段重启不再按编排版本分流，也不提供运行时版本回退开关。
+
+审批步骤在产物和 checkpoint 写入 MySQL 后暂停。恢复时先通过 Mastra 状态读取器取得真实暂停步骤，再校验暂停载荷中的 workflow ID、阶段和产物版本与 MySQL 当前状态一致；并发声明仍由 `claimInteraction` 在数据库中完成。阶段重启会失效下游并创建新的 run，早期步骤依据 `restart.targetStage` 无副作用跳过，不使用 `timeTravel()` 建立生产分支。
+
+MySQL 始终是业务事实来源。Mastra state 只保存 workflow ID、当前版本、重启起点和当前产物引用，完整产物仍从 MySQL 读取；Redis 只持久化默认执行引擎的恢复快照和运行事件。BullMQ、Worker、REST、SSE 及渲染载荷协议未改变，Mastra 和付费生成步骤的自动 retry 均为零。
+
+旧单步骤执行图的 Redis snapshot 不与当前多步骤图兼容。部署本次收敛前必须确认没有仍需恢复的旧活动 run，并完成 Redis 快照保留期与回滚窗口审计；当前版本不启用 Studio、Mastra HTTP 路由、evented engine、Inngest 或 Temporal。
+
+数据库迁移 `0010_remove_workflow_orchestrator_version.sql` 删除不再使用的 `orchestrator_version` 字段及其状态索引；执行前应先完成上述活动 run 审计。该迁移不会删除 Redis snapshot，也不会操作业务产物或视频输出。
+# 重启恢复与静默进度看门狗
+
+- API 启动时会扫描仍处于 `drafting` 且持有 Mastra `runId` 的执行，并使用公开的 run `restart()` 恢复同一运行；已持久化的阶段检查点、版本和产物继续复用。
+- 活动 run 的启动或阶段重启上下文以共享 Schema 校验后写入 MySQL。多 API 实例通过 `watchdog_claim_token` 与 `watchdog_claim_until` 条件领取短租约，避免同时处理同一工作流。
+- API 每分钟检查一次 `drafting`、`queued`、`running`。只有从 `last_progress_at` 起连续 30 分钟没有 Agent 事件、队列活动或 Worker/供应商心跳时才确认阻塞；`awaiting_input` 不参与检查。
+- 确认阻塞后写入对应 `failure_code` 并发送失败的 `agent.step` 事件。系统不会自动创建新的付费模型或视频任务；人工恢复仅重启原 Mastra run，或在已有 `providerTaskId` 时重新领取原视频任务。现有 12 小时视频硬超时仍保留。
+# 素材执行能力与双审批
+
+`WorkflowPipelineDefinition` 继续作为阶段顺序、审批和重启的单一事实源，并新增稳定领域 capability ID。`assets` 声明条件能力，`compose` 声明 FFmpeg 与混音能力；声明不直接引用 OpenMontage 工具名或供应商 SDK。
+
+Worker 每 30 秒向 Redis 发布一个带 TTL 的能力快照。API 在素材规划批准前和最终入队前执行 preflight，Worker 在消费任务时再次校验所选 `adapterId`，禁止静默切换供应商。实际选择同时写入素材任务和最终视频任务的 MySQL 记录。
+
+素材阶段使用两个业务审批点，但不让 Mastra 等待 Worker：
+
+1. 初始 Mastra run 生成并暂停在素材规划。
+2. 用户批准规划后，run 幂等创建素材批次、写入隔离队列，然后结束。
+3. Worker 通过 `image-jobs`、`agent-jobs` 和 `render-jobs` 生成对象存储素材；MySQL 是批次状态事实源。
+4. 全部素材成功后，工作流状态变为 `awaiting_input`，Web 使用短时效签名 URL 展示实际素材。
+5. 用户批准实际素材后，API 原子 claim 批次并创建新的 Mastra continuation run，从 `edit` 开始。
+6. 最终 render payload 只携带已批准素材对象键和持久化 adapter 选择；Worker 再校验后合成。
+
+素材重启采用软失效：批次和未完成任务标记为 `cancelled`/`superseded`，历史对象不删除，但失效任务不能重新写回当前工作流。

@@ -1,3 +1,5 @@
+import { fetchUpstreamRead } from "@/lib/upstream-readiness";
+
 const DEFAULT_API_BASE_URL = "http://localhost:4101";
 
 const getApiBaseUrl = (): string => {
@@ -9,11 +11,14 @@ const getApiBaseUrl = (): string => {
 
 export const proxyConversationRequest = async (request: Request, path: string): Promise<Response> => {
   try {
-    const upstream = await fetch(`${getApiBaseUrl()}${path}`, {
+    const requestInit: RequestInit = {
       method: request.method,
       cache: "no-store",
       signal: request.signal,
-    });
+    };
+    const upstream = request.method === "GET"
+      ? await fetchUpstreamRead(`${getApiBaseUrl()}${path}`, requestInit)
+      : await fetch(`${getApiBaseUrl()}${path}`, requestInit);
     return new Response(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,

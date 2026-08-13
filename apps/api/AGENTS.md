@@ -2,6 +2,13 @@
 
 本文件适用于 `apps/api/**`，作为仓库根目录 `AGENTS.md` 的补充。发生冲突时，以更具体且更严格的安全、运行时和资产约束为准。
 
+## Mastra Agent 与 Workflow 实现约束
+
+- `apps/api` 内新增或修改 Agent、Agent Tool/Skill 接入、结构化输出、流式响应适配、Workflow 步骤、暂停/恢复或运行状态管理时，必须优先使用并扩展项目已安装版本的 Mastra 公开 API、原语和现有运行时适配层，不得为方便另建与 Mastra 并行的 Agent/Workflow 编排实现，也不得直接引入同类框架。
+- 开始实现前必须先检查已安装 Mastra 版本的内嵌文档、类型定义和项目现有封装，确认现有能力与限制；不得仅凭过时经验判断 Mastra 无法满足需求。
+- 只有确认 Mastra 现有公开框架能力无法满足相关需求时，才可以考虑自定义旁路、替代实现或新增同类框架。采取该方案前必须暂停实现，向用户说明具体能力缺口、已核查的 Mastra 方案、拟采用方案及其对架构边界和迁移的影响，并取得用户明确确认；未经确认不得实施。
+- 使用 Mastra 不改变既有职责边界：模型调用仍位于 `ModelGateway` 之后，媒体与其他资源密集型任务仍通过 BullMQ 交给 Worker，MySQL 仍是业务事实来源，跨 workspace 协议不得暴露 Mastra 运行时类型，并继续禁止公开 Mastra 原生路由、Studio 或 MCP。
+
 ## Mastra Skill 与非 TypeScript 运行时资产
 
 - `src/agent-extensions/skills/**/SKILL.md` 是 NestJS API 的运行时资产，不是仅供开发参考的文档。

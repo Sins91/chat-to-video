@@ -33,4 +33,16 @@ describe("loadApimartConfig", () => {
     vi.stubEnv("APIMART_BASE_URL", "file:///tmp/provider");
     expect(() => loadApimartConfig()).toThrow("HTTP or HTTPS");
   });
+
+  it("accepts a ten-minute chat timeout and rejects larger values", () => {
+    vi.stubEnv("APIMART_API_KEY", "secret");
+    vi.stubEnv("APIMART_BASE_URL", "https://api.apimart.ai/v1");
+    vi.stubEnv("APIMART_CHAT_MODEL", "gpt-5-mini");
+    vi.stubEnv("APIMART_TIMEOUT_MS", "600000");
+
+    expect(loadApimartConfig().timeoutMs).toBe(600_000);
+
+    vi.stubEnv("APIMART_TIMEOUT_MS", "600001");
+    expect(() => loadApimartConfig()).toThrow("between 1000 and 600000");
+  });
 });

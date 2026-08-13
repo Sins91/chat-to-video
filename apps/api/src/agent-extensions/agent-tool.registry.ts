@@ -1,4 +1,4 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, type OnModuleDestroy } from "@nestjs/common";
 import {
   CinematicArtifactSchema,
   CinematicGenerativeStageSchema,
@@ -9,10 +9,13 @@ import {
   type CinematicArtifact,
   type CinematicGenerativeStage,
   type VideoModel,
+  WorkflowCapabilitySnapshotSchema,
+  WORKFLOW_CAPABILITY_SNAPSHOT_KEY,
 } from "@chat-to-video/contracts";
 import type { VideoWorkflowRepository } from "@chat-to-video/database";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { Redis } from "ioredis";
 
 import { VIDEO_WORKFLOW_REPOSITORY } from "../video-workflow/video-workflow.tokens.js";
 import {
@@ -40,6 +43,8 @@ export const AgentCapabilitySchema = z.object({
   provider: z.string().trim().min(1).max(100).nullable(),
   risk: CapabilityRiskSchema,
   relatedSkillIds: z.array(z.string().trim().min(1).max(100)).max(20),
+  adapterId: z.string().trim().min(1).max(100).nullable().optional(),
+  executionBoundary: z.string().trim().min(1).max(100).nullable().optional(),
 }).strict();
 
 export const GetAgentCapabilitiesInputSchema = z.object({
@@ -239,7 +244,57 @@ const stageIndex = (stage: CinematicGenerativeStage): number =>
   CinematicGenerativeStageSchema.options.indexOf(stage);
 
 @Injectable()
-export class AgentToolRegistry {
+export class AgentToolRegistry implements OnModuleDestroy {
+  private capabilityRedis?: Redis;
+
+  private async listRuntimeCapabilities(filter?: string) {
+    const redisUrl = process.env.REDIS_URL?.trim();
+    if (!redisUrl) return listAgentCapabilities(filter);
+    this.capabilityRedis ??= new Redis(redisUrl, {
+      maxRetriesPerRequest: 1,
+      lazyConnect: true,
+    });
+    let runtime: ReturnType<typeof listAgentCapabilities>["capabilities"] = [];
+    try {
+      if (this.capabilityRedis.status === "wait") await this.capabilityRedis.connect();
+      const raw = await this.capabilityRedis.get(WORKFLOW_CAPABILITY_SNAPSHOT_KEY);
+      if (raw) {
+        const snapshot = WorkflowCapabilitySnapshotSchema.safeParse(JSON.parse(raw) as unknown);
+        if (snapshot.success) {
+          runtime = snapshot.data.resolutions.map((resolution) => ({
+            id: resolution.capabilityId,
+            description: resolution.reason ?? `由 ${resolution.adapterId ?? "未配置适配器"} 提供。`,
+            status: resolution.status === "available"
+              ? "available" as const
+              : resolution.status === "unconfigured"
+                ? "unconfigured" as const
+                : "disabled" as const,
+            provider: resolution.provider,
+            risk: resolution.capabilityId === "video.probe"
+              ? "read_only" as const
+              : resolution.provider === "local"
+                ? "mutating" as const
+                : "paid" as const,
+            relatedSkillIds: [CHAT_CAPABILITIES_SKILL_ID, CINEMATIC_REVIEWER_SKILL_ID],
+            adapterId: resolution.adapterId,
+            executionBoundary: resolution.executionBoundary,
+          }));
+        }
+      }
+    } catch {
+      runtime = [];
+    }
+    const combined = [...listAgentCapabilities().capabilities, ...runtime];
+    const normalized = filter?.trim().toLocaleLowerCase("en-US");
+    return GetAgentCapabilitiesOutputSchema.parse({
+      capabilities: normalized
+        ? combined.filter((capability) =>
+            capability.id.toLocaleLowerCase("en-US").includes(normalized) ||
+            capability.description.toLocaleLowerCase("zh-CN").includes(normalized)
+          )
+        : combined,
+    });
+  }
   readonly getAgentCapabilities = createTool({
     id: "get_agent_capabilities",
     description: "查询当前服务端实际注册的 cinematic Agent 能力、状态、风险和关联技能。",
@@ -248,7 +303,7 @@ export class AgentToolRegistry {
     inputSchema: GetAgentCapabilitiesInputSchema,
     outputSchema: GetAgentCapabilitiesOutputSchema,
     requestContextSchema: AgentExtensionRequestContextSchema,
-    execute: ({ capability }) => Promise.resolve(listAgentCapabilities(capability)),
+    execute: ({ capability }) => this.listRuntimeCapabilities(capability),
   });
 
   readonly getVideoModelConstraints = createTool({
@@ -291,7 +346,7 @@ export class AgentToolRegistry {
         requestContext.projectId,
       );
       if (!workflow) throw new Error("Scoped cinematic workflow was not found.");
-      if (workflow.cinematicStage !== requestContext.stage) {
+      if (workflow.currentStageId !== requestContext.stage) {
         throw new Error("Cinematic request context does not match persisted workflow stage.");
       }
       const rows = await this.repository.listCinematicArtifacts(
@@ -347,5 +402,11 @@ export class AgentToolRegistry {
       get_cinematic_context: this.getCinematicContext,
       estimate_cinematic_cost: this.estimateCinematicCost,
     };
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    if (this.capabilityRedis && this.capabilityRedis.status !== "end") {
+      await this.capabilityRedis.quit();
+    }
   }
 }

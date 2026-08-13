@@ -1,18 +1,27 @@
 import {
-  CinematicDurationSecondsSchema,
+  CINEMATIC_PIPELINE_DEFINITION,
   CinematicArtifactSchema,
+  CinematicDurationSecondsSchema,
   CinematicGenerativeStageSchema,
   VideoModelSchema,
   VideoWorkflowInteractionSchema,
   type CinematicGenerativeStage,
+  type VideoWorkflowInteraction,
 } from "@chat-to-video/contracts";
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 
 import type { VideoWorkflowOperations } from "../video-workflow/video-workflow.operations.js";
+import { createPipelineStepDefinition } from "./pipeline-stage-control.js";
 
 export const CINEMATIC_WORKFLOW_ID = "cinematic-production";
-export const CINEMATIC_DIRECTOR_STEP_ID = "cinematic-director";
+
+const CinematicRestartStageSchema = CinematicGenerativeStageSchema.refine(
+  (stage) => CINEMATIC_PIPELINE_DEFINITION.stages.some(
+    (definition) => definition.id === stage && definition.isRestartable,
+  ),
+  "Stage is not restartable in the cinematic pipeline.",
+);
 
 export const CinematicWorkflowInputSchema = z.object({
   workflowId: z.string().uuid(),
@@ -20,6 +29,45 @@ export const CinematicWorkflowInputSchema = z.object({
   initialPrompt: z.string().trim().min(1).max(8_000),
   videoModel: VideoModelSchema,
   durationSeconds: CinematicDurationSecondsSchema,
+  restart: z.object({
+    restartRequestId: z.string().uuid(),
+    targetStage: CinematicRestartStageSchema,
+    text: z.string().trim().min(1).max(2_000),
+    previousArtifactVersion: z.number().int().positive().nullable(),
+  }).strict().optional(),
+  continuation: z.object({
+    kind: z.literal("assets_approved"),
+    baseVersion: z.number().int().positive(),
+  }).strict().optional(),
+}).strict().superRefine((input, context) => {
+  if (input.restart && input.continuation) {
+    context.addIssue({
+      code: "custom",
+      message: "Workflow restart and continuation cannot be requested together.",
+      path: ["continuation"],
+    });
+  }
+});
+
+const CinematicWorkflowCursorSchema = CinematicWorkflowInputSchema.extend({
+  version: z.number().int().nonnegative(),
+}).strict();
+
+const CinematicWorkflowStateSchema = z.object({
+  workflowId: z.string().uuid(),
+  version: z.number().int().nonnegative(),
+  startStage: CinematicGenerativeStageSchema.nullable(),
+  currentArtifact: z.object({
+    stage: CinematicGenerativeStageSchema,
+    version: z.number().int().positive(),
+  }).strict().nullable(),
+  handoff: z.enum(["none", "assets_queued"]),
+}).strict();
+
+export const CinematicWorkflowSuspensionSchema = z.object({
+  workflowId: z.string().uuid(),
+  stage: CinematicGenerativeStageSchema,
+  version: z.number().int().positive(),
 }).strict();
 
 const CinematicWorkflowOutputSchema = z.object({
@@ -27,243 +75,256 @@ const CinematicWorkflowOutputSchema = z.object({
   status: z.literal("queued"),
 }).strict();
 
-const CinematicWorkflowPhaseSchema = z.enum([
-  "initial",
-  "proposal_review",
-  "script_review",
-  "scene_plan_review",
-  "assets_review",
-  "queued",
-]);
-
-const CinematicWorkflowStateSchema = z.object({
-  phase: CinematicWorkflowPhaseSchema,
-  version: z.number().int().nonnegative(),
-  currentArtifact: CinematicArtifactSchema.nullable(),
-  revisionRequest: z.string().trim().min(1).max(2_000).nullable(),
-}).strict();
-
-const CinematicSuspensionSchema = z.object({
-  workflowId: z.string().uuid(),
-  stage: CinematicGenerativeStageSchema,
-  version: z.number().int().positive(),
-}).strict();
-
+type CinematicWorkflowCursor = z.infer<typeof CinematicWorkflowCursorSchema>;
 export type CinematicWorkflowInput = z.infer<typeof CinematicWorkflowInputSchema>;
 export type CinematicWorkflowState = z.infer<typeof CinematicWorkflowStateSchema>;
+export type CinematicWorkflowDomainAdapter = Pick<VideoWorkflowOperations,
+  | "generateCinematicArtifact"
+  | "activateCinematicArtifact"
+  | "applySceneDurations"
+  | "preflightStageExecution"
+  | "enqueueCinematicAssetBatch"
+  | "enqueueCinematicVideoVersion"
+  | "fail"
+>;
 
-export const initialCinematicState = (): CinematicWorkflowState => ({
-  phase: "initial",
-  version: 0,
+export const initialCinematicState = (
+  input: CinematicWorkflowInput,
+  version = 0,
+): CinematicWorkflowState => ({
+  workflowId: input.workflowId,
+  version,
+  startStage: input.restart?.targetStage ?? null,
+  ...(input.continuation ? { startStage: "edit" as const } : {}),
   currentArtifact: null,
-  revisionRequest: null,
+  handoff: "none",
 });
 
-const phaseStage = (
-  phase: Exclude<CinematicWorkflowState["phase"], "initial" | "queued">,
-): CinematicGenerativeStage => {
-  const stages = {
-    proposal_review: "proposal",
-    script_review: "script",
-    scene_plan_review: "scene_plan",
-    assets_review: "assets",
-  } as const;
-  return stages[phase];
+const workflowCursor = (
+  input: CinematicWorkflowInput | CinematicWorkflowCursor,
+  version: number,
+): CinematicWorkflowCursor => ({ ...input, version });
+
+const previousArtifactVersion = (
+  input: CinematicWorkflowCursor,
+  stage: CinematicGenerativeStage,
+): number | undefined => input.restart?.targetStage === stage
+  ? input.restart.previousArtifactVersion ?? undefined
+  : undefined;
+
+const assertReviewInteraction = (
+  interaction: VideoWorkflowInteraction,
+  stage: CinematicGenerativeStage,
+): "approve" | "revise" => {
+  if (interaction.type === "approve") return "approve";
+  if (interaction.type === "message") return "revise";
+  if (interaction.type === "scene_durations" && stage === "scene_plan") return "revise";
+  throw new Error(`Interaction ${interaction.type} is not valid while reviewing ${stage}.`);
 };
 
-const nextReview = (
-  phase: Exclude<CinematicWorkflowState["phase"], "initial" | "queued">,
-): {
-  stage: Exclude<CinematicGenerativeStage, "research" | "proposal" | "edit">;
-  phase: Exclude<CinematicWorkflowState["phase"], "initial" | "proposal_review" | "queued">;
-} | null => {
-  if (phase === "proposal_review") return { stage: "script", phase: "script_review" };
-  if (phase === "script_review") return { stage: "scene_plan", phase: "scene_plan_review" };
-  if (phase === "scene_plan_review") return { stage: "assets", phase: "assets_review" };
-  return null;
-};
-
-export const createCinematicWorkflow = (operations: VideoWorkflowOperations) => {
-  const directorStep = createStep({
-    id: CINEMATIC_DIRECTOR_STEP_ID,
+export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapter) => {
+  const researchDefinition = createPipelineStepDefinition(CINEMATIC_PIPELINE_DEFINITION, "research");
+  const researchStep = createStep({
+    id: researchDefinition.stepId,
     inputSchema: CinematicWorkflowInputSchema,
-    outputSchema: CinematicWorkflowOutputSchema,
+    outputSchema: CinematicWorkflowCursorSchema,
     stateSchema: CinematicWorkflowStateSchema,
-    resumeSchema: VideoWorkflowInteractionSchema,
-    suspendSchema: CinematicSuspensionSchema,
     retries: 0,
     execute: async (context) => {
-      const { inputData, resumeData, state } = context;
+      const { inputData, state } = context;
       try {
-        if (state.phase === "queued") {
-          if (state.currentArtifact?.stage !== "edit" || state.version < 1) {
-            throw new Error("Queued cinematic workflow state is incomplete.");
+        if (!researchDefinition.shouldExecuteFrom(state.startStage)) {
+          return workflowCursor(inputData, state.version);
+        }
+        const version = state.version + 1;
+        const artifact = await operations.generateCinematicArtifact({
+          ...inputData,
+          stage: "research",
+          version,
+        });
+        await operations.activateCinematicArtifact({
+          ...inputData,
+          version,
+          artifact,
+          requiresApproval: false,
+        });
+        await context.setState({
+          ...state,
+          version,
+          currentArtifact: { stage: "research", version },
+        });
+        return workflowCursor(inputData, version);
+      } catch (error: unknown) {
+        await operations.fail(inputData, error);
+        throw error;
+      }
+    },
+  });
+
+  const createReviewStep = (stage: "proposal" | "script" | "scene_plan" | "assets") => {
+    const definition = createPipelineStepDefinition(CINEMATIC_PIPELINE_DEFINITION, stage);
+    return createStep({
+      id: definition.stepId,
+      inputSchema: CinematicWorkflowCursorSchema,
+      outputSchema: CinematicWorkflowCursorSchema,
+      stateSchema: CinematicWorkflowStateSchema,
+      resumeSchema: VideoWorkflowInteractionSchema,
+      suspendSchema: CinematicWorkflowSuspensionSchema,
+      retries: 0,
+      execute: async (context) => {
+        const { inputData, resumeData, suspendData, state } = context;
+        try {
+          if (!definition.shouldExecuteFrom(state.startStage)) return inputData;
+          if (resumeData) {
+            const interactionKind = assertReviewInteraction(resumeData, stage);
+            definition.assertInteractionAllowed(interactionKind);
+            const suspension = CinematicWorkflowSuspensionSchema.parse(suspendData);
+            if (suspension.workflowId !== inputData.workflowId || suspension.stage !== stage) {
+              throw new Error(`Suspended workflow state does not match ${stage}.`);
+            }
+            if (interactionKind === "approve") {
+              if (definition.executionReview && !await operations.preflightStageExecution({
+                ...inputData,
+                stage,
+                version: suspension.version,
+              })) {
+                return context.suspend({
+                  workflowId: inputData.workflowId,
+                  stage,
+                  version: suspension.version,
+                });
+              }
+              if (definition.executionReview) {
+                await operations.enqueueCinematicAssetBatch({
+                  ...inputData,
+                  version: suspension.version,
+                });
+                await context.setState({
+                  ...state,
+                  version: suspension.version,
+                  currentArtifact: { stage, version: suspension.version },
+                  handoff: "assets_queued",
+                });
+                return workflowCursor(inputData, suspension.version);
+              }
+              await context.setState({
+                ...state,
+                version: suspension.version,
+                currentArtifact: { stage, version: suspension.version },
+              });
+              return workflowCursor(inputData, suspension.version);
+            }
+            const version = suspension.version + 1;
+            const artifact = resumeData.type === "scene_durations"
+              ? await operations.applySceneDurations({
+                  ...inputData,
+                  version,
+                  scenes: resumeData.scenes,
+                })
+              : resumeData.type === "message"
+                ? await operations.generateCinematicArtifact({
+                  ...inputData,
+                  stage,
+                  version,
+                  previousArtifactVersion: suspension.version,
+                  revisionRequest: resumeData.text,
+                })
+                : (() => { throw new Error(`Interaction ${resumeData.type} cannot revise ${stage}.`); })();
+            const revisionRequest = resumeData.type === "message"
+              ? resumeData.text
+              : "Per-scene final durations updated; model generation tiers rounded up.";
+            await operations.activateCinematicArtifact({
+              ...inputData,
+              version,
+              artifact,
+              revisionRequest,
+              requiresApproval: true,
+            });
+            await context.setState({ ...state, version, currentArtifact: { stage, version } });
+            return context.suspend({ workflowId: inputData.workflowId, stage, version });
           }
-          await operations.enqueueCinematicVideo({
-            ...inputData,
-            version: state.version,
-            edit: state.currentArtifact,
-          });
-          return { workflowId: inputData.workflowId, status: "queued" as const };
-        }
 
-        if (state.phase === "initial") {
-          const research = await operations.generateCinematicArtifact({
-            ...inputData,
-            stage: "research",
-            version: 1,
-          });
-          await operations.activateCinematicArtifact({
-            ...inputData,
-            version: 1,
-            artifact: research,
-            requiresApproval: false,
-          });
-          const proposal = await operations.generateCinematicArtifact({
-            ...inputData,
-            stage: "proposal",
-            version: 2,
-          });
-          await operations.activateCinematicArtifact({
-            ...inputData,
-            version: 2,
-            artifact: proposal,
-            requiresApproval: true,
-          });
-          const nextState: CinematicWorkflowState = {
-            phase: "proposal_review",
-            version: 2,
-            currentArtifact: proposal,
-            revisionRequest: null,
-          };
-          await context.setState(nextState);
-          return context.suspend({
-            workflowId: inputData.workflowId,
-            stage: "proposal",
-            version: 2,
-          });
-        }
-
-        const currentStage = phaseStage(state.phase);
-        if (!resumeData) {
-          return context.suspend({
-            workflowId: inputData.workflowId,
-            stage: currentStage,
-            version: state.version,
-          });
-        }
-
-        if (resumeData.type === "scene_durations") {
-          if (state.phase !== "scene_plan_review") {
-            throw new Error("Scene durations can only be edited during scene plan review.");
-          }
-          const version = state.version + 1;
-          const revised = await operations.applySceneDurations({
-            ...inputData,
-            version,
-            scenes: resumeData.scenes,
-          });
-          const revisionRequest = "Per-scene final durations updated; model generation tiers rounded up.";
-          await operations.activateCinematicArtifact({
-            ...inputData,
-            version,
-            artifact: revised,
-            revisionRequest,
-            requiresApproval: true,
-          });
-          await context.setState({
-            ...state,
-            version,
-            currentArtifact: revised,
-            revisionRequest,
-          });
-          return context.suspend({
-            workflowId: inputData.workflowId,
-            stage: "scene_plan",
-            version,
-          });
-        }
-
-        if (resumeData.type === "message") {
-          const version = state.version + 1;
-          const revised = await operations.generateCinematicArtifact({
-            ...inputData,
-            stage: currentStage,
-            version,
-            previousArtifact: state.currentArtifact ?? undefined,
-            revisionRequest: resumeData.text,
-          });
-          await operations.activateCinematicArtifact({
-            ...inputData,
-            version,
-            artifact: revised,
-            revisionRequest: resumeData.text,
-            requiresApproval: true,
-          });
-          await context.setState({
-            ...state,
-            version,
-            currentArtifact: revised,
-            revisionRequest: resumeData.text,
-          });
-          return context.suspend({
-            workflowId: inputData.workflowId,
-            stage: currentStage,
-            version,
-          });
-        }
-
-        const next = nextReview(state.phase);
-        if (next) {
-          const version = state.version + 1;
+          const version = inputData.version + 1;
           const artifact = await operations.generateCinematicArtifact({
             ...inputData,
-            stage: next.stage,
+            stage,
             version,
+            previousArtifactVersion: previousArtifactVersion(inputData, stage),
+            revisionRequest: inputData.restart?.targetStage === stage
+              ? inputData.restart.text
+              : undefined,
           });
           await operations.activateCinematicArtifact({
             ...inputData,
             version,
             artifact,
+            revisionRequest: inputData.restart?.targetStage === stage
+              ? inputData.restart.text
+              : undefined,
             requiresApproval: true,
           });
-          await context.setState({
-            phase: next.phase,
-            version,
-            currentArtifact: artifact,
-            revisionRequest: null,
-          });
-          return context.suspend({
-            workflowId: inputData.workflowId,
-            stage: next.stage,
-            version,
-          });
+          await context.setState({ ...state, version, currentArtifact: { stage, version } });
+          return context.suspend({ workflowId: inputData.workflowId, stage, version });
+        } catch (error: unknown) {
+          await operations.fail(inputData, error);
+          throw error;
         }
+      },
+    });
+  };
 
-        const version = state.version + 1;
-        const edit = await operations.generateCinematicArtifact({
-          ...inputData,
-          stage: "edit",
-          version,
-        });
-        if (edit.stage !== "edit") throw new Error("Cinematic edit artifact is invalid.");
+  const proposalStep = createReviewStep("proposal");
+  const scriptStep = createReviewStep("script");
+  const scenePlanStep = createReviewStep("scene_plan");
+  const assetsStep = createReviewStep("assets");
+  const editDefinition = createPipelineStepDefinition(CINEMATIC_PIPELINE_DEFINITION, "edit");
+  const editStep = createStep({
+    id: editDefinition.stepId,
+    inputSchema: CinematicWorkflowCursorSchema,
+    outputSchema: CinematicWorkflowCursorSchema,
+    stateSchema: CinematicWorkflowStateSchema,
+    retries: 0,
+    execute: async (context) => {
+      const { inputData, state } = context;
+      try {
+        if (state.handoff === "assets_queued") return inputData;
+        const version = inputData.version + 1;
+        const artifact = CinematicArtifactSchema.parse(
+          await operations.generateCinematicArtifact({ ...inputData, stage: "edit", version }),
+        );
+        if (artifact.stage !== "edit") throw new Error("Cinematic edit artifact is invalid.");
         await operations.activateCinematicArtifact({
           ...inputData,
           version,
-          artifact: edit,
+          artifact,
           requiresApproval: false,
         });
         await context.setState({
-          phase: "queued",
+          ...state,
           version,
-          currentArtifact: edit,
-          revisionRequest: null,
+          currentArtifact: { stage: "edit", version },
         });
-        await operations.enqueueCinematicVideo({
-          ...inputData,
-          version,
-          edit,
-        });
+        return workflowCursor(inputData, version);
+      } catch (error: unknown) {
+        await operations.fail(inputData, error);
+        throw error;
+      }
+    },
+  });
+
+  const generationDefinition = createPipelineStepDefinition(CINEMATIC_PIPELINE_DEFINITION, "compose");
+  const videoGenerationStep = createStep({
+    id: generationDefinition.stepId,
+    inputSchema: CinematicWorkflowCursorSchema,
+    outputSchema: CinematicWorkflowOutputSchema,
+    stateSchema: CinematicWorkflowStateSchema,
+    retries: 0,
+    execute: async ({ inputData, state }) => {
+      try {
+        if (state.handoff === "assets_queued") {
+          return { workflowId: inputData.workflowId, status: "queued" as const };
+        }
+        await operations.enqueueCinematicVideoVersion({ ...inputData, version: inputData.version });
         return { workflowId: inputData.workflowId, status: "queued" as const };
       } catch (error: unknown) {
         await operations.fail(inputData, error);
@@ -278,5 +339,13 @@ export const createCinematicWorkflow = (operations: VideoWorkflowOperations) => 
     outputSchema: CinematicWorkflowOutputSchema,
     stateSchema: CinematicWorkflowStateSchema,
     retryConfig: { attempts: 0, delay: 0 },
-  }).then(directorStep).commit();
+  })
+    .then(researchStep)
+    .then(proposalStep)
+    .then(scriptStep)
+    .then(scenePlanStep)
+    .then(assetsStep)
+    .then(editStep)
+    .then(videoGenerationStep)
+    .commit();
 };

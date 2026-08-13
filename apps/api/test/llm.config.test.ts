@@ -30,7 +30,7 @@ describe("loadLlmConfig", () => {
       modelId: "deepseek-v4-flash",
       provider: "deepseek",
       storyboardTimeoutMs: 120_000,
-      timeoutMs: 30_000,
+      timeoutMs: 600_000,
       toolCallingEnabled: true,
     });
   });

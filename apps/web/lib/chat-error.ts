@@ -1,25 +1,23 @@
 const FALLBACK_CHAT_ERROR_MESSAGE = "响应失败，请稍后重试。";
 
-export function getChatErrorMessage(error: Error | undefined): string | undefined {
-  if (!error) return undefined;
-
+const parseChatErrorPayload = (error: Error): { code?: string; message: string } => {
   const rawMessage = error.message.trim();
-  if (!rawMessage) return FALLBACK_CHAT_ERROR_MESSAGE;
+  if (!rawMessage) return { message: "" };
 
   try {
     const payload: unknown = JSON.parse(rawMessage);
-    if (
-      typeof payload === "object" &&
-      payload !== null &&
-      "message" in payload &&
-      typeof payload.message === "string" &&
-      payload.message.trim()
-    ) {
-      return payload.message.trim();
-    }
+    if (typeof payload !== "object" || payload === null) return { message: rawMessage };
+    const code = "code" in payload && typeof payload.code === "string" ? payload.code : undefined;
+    const message = "message" in payload && typeof payload.message === "string"
+      ? payload.message.trim()
+      : rawMessage;
+    return { code, message };
   } catch {
-    // 普通文本错误无需解析，直接交给提示框展示。
+    return { message: rawMessage };
   }
+};
 
-  return rawMessage;
+export function getChatErrorMessage(error: Error | undefined): string | undefined {
+  if (!error) return undefined;
+  return parseChatErrorPayload(error).message || FALLBACK_CHAT_ERROR_MESSAGE;
 }

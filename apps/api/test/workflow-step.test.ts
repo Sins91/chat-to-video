@@ -15,7 +15,7 @@ describe("video workflow step presentation", () => {
     });
     expect(videoWorkflowStep("scene_plan", "awaiting_input", "等待确认")).toMatchObject({
       stepId: "scene-plan",
-      stepLabel: "分镜规划",
+      stepLabel: "分镜写作",
       stepIndex: 5,
       stepTotal: 8,
       stepState: "awaiting_input",

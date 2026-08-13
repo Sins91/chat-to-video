@@ -1,48 +1,60 @@
 "use client";
 
 import type { ConversationSummary } from "@chat-to-video/contracts";
-import { LoaderCircleIcon, MoreHorizontalIcon, Trash2Icon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ClapperboardIcon, LoaderCircleIcon, MoreHorizontalIcon, Trash2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { deleteConversation, listConversations } from "@/lib/conversation-client";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  CONVERSATION_HISTORY_CHANGED_EVENT,
+  deleteConversation,
+  getConversation,
+  listConversations,
+  type ConversationHistoryChangedDetail,
+} from "@/lib/conversation-client";
+import { conversationHasGeneratedVideo } from "@/lib/generated-video-client";
 import { cn } from "@/lib/utils";
 
 type HistorySidebarProps = {
   activeConversationId: string | null;
-  collapsed: boolean;
-  mobileOpen: boolean;
-  onCloseMobile: () => void;
-  onConversationSwitch: (conversationId: string) => void;
+  onConversationSwitch: (conversationId: string) => Promise<boolean>;
 };
 
-const GROUPS = ["今天", "昨天", "过去 7 天", "更早"] as const;
+const GROUPS = ["今天", "昨天", "过去7天", "更早"] as const;
 type GroupName = typeof GROUPS[number];
+const GROUP_IDS: Record<GroupName, string> = {
+  "今天": "conversation-group-today",
+  "昨天": "conversation-group-yesterday",
+  "过去7天": "conversation-group-last-seven-days",
+  "更早": "conversation-group-earlier",
+};
 
-const groupFor = (updatedAt: string): GroupName => {
+const groupFor = (createdAt: string): GroupName => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const date = new Date(updatedAt);
+  const date = new Date(createdAt);
   date.setHours(0, 0, 0, 0);
   const days = Math.floor((today.getTime() - date.getTime()) / 86_400_000);
   if (days <= 0) return "今天";
   if (days === 1) return "昨天";
-  return days <= 7 ? "过去 7 天" : "更早";
+  return days <= 7 ? "过去7天" : "更早";
 };
 
 export const ChatHistorySidebar = memo(function ChatHistorySidebar({
   activeConversationId,
-  collapsed,
-  mobileOpen,
-  onCloseMobile,
   onConversationSwitch,
 }: HistorySidebarProps) {
   const router = useRouter();
   const [items, setItems] = useState<ConversationSummary[]>([]);
+  const [pendingItems, setPendingItems] = useState<Map<string, ConversationSummary>>(() => new Map());
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<GroupName>>(() => new Set());
+  const [videoConversationIds, setVideoConversationIds] = useState<Set<string>>(() => new Set());
+  const videoMarkerVersionsRef = useRef(new Map<string, string>());
 
   const load = useCallback(async (cursor?: string) => {
     setIsLoading(true);
@@ -51,6 +63,31 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar({
       const result = await listConversations(cursor);
       setItems((current) => cursor ? [...current, ...result.items] : result.items);
       setNextCursor(result.nextCursor);
+      const immediateVideoIds = result.items
+        .filter((item) => item.workflowStatus === "succeeded")
+        .map((item) => item.conversationId);
+      const conversationsToInspect = result.items.filter((item) =>
+        item.workflowStatus !== "succeeded"
+        && videoMarkerVersionsRef.current.get(item.conversationId) !== item.updatedAt
+      );
+      for (const item of result.items) {
+        if (item.workflowStatus === "succeeded") {
+          videoMarkerVersionsRef.current.set(item.conversationId, item.updatedAt);
+        }
+      }
+      const inspectedConversations = await Promise.all(
+        conversationsToInspect.map((item) => getConversation(item.conversationId)),
+      );
+      for (const item of conversationsToInspect) {
+        videoMarkerVersionsRef.current.set(item.conversationId, item.updatedAt);
+      }
+      setVideoConversationIds((current) => new Set([
+        ...current,
+        ...immediateVideoIds,
+        ...inspectedConversations
+          .filter(conversationHasGeneratedVideo)
+          .map((conversation) => conversation.conversationId),
+      ]));
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "无法加载历史对话。");
     } finally {
@@ -60,55 +97,95 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar({
 
   useEffect(() => {
     void load();
-    const reload = (): void => { void load(); };
-    window.addEventListener("conversation-history-changed", reload);
-    return () => window.removeEventListener("conversation-history-changed", reload);
+    const handleHistoryChange = (event: Event): void => {
+      const detail = (event as CustomEvent<ConversationHistoryChangedDetail>).detail;
+      if (detail?.type === "pending") {
+        setPendingItems((current) => new Map([
+          [detail.item.conversationId, detail.item],
+          ...current.entries(),
+        ]));
+        return;
+      }
+      const resolvedPendingId = detail?.type === "refresh" ? detail.resolvedPendingId : undefined;
+      if (resolvedPendingId) {
+        setPendingItems((current) => {
+          const next = new Map(current);
+          next.delete(resolvedPendingId);
+          return next;
+        });
+      }
+      void load();
+    };
+    window.addEventListener(CONVERSATION_HISTORY_CHANGED_EVENT, handleHistoryChange);
+    return () => window.removeEventListener(CONVERSATION_HISTORY_CHANGED_EVENT, handleHistoryChange);
   }, [load]);
+
+  const visibleItems = useMemo(
+    () => [...pendingItems.values(), ...items.filter((item) => !pendingItems.has(item.conversationId))],
+    [items, pendingItems],
+  );
 
   const grouped = useMemo(() => {
     const result = new Map<GroupName, ConversationSummary[]>(GROUPS.map((group) => [group, []]));
-    for (const item of items) result.get(groupFor(item.updatedAt))?.push(item);
+    for (const item of visibleItems) result.get(groupFor(item.createdAt))?.push(item);
     return result;
-  }, [items]);
+  }, [visibleItems]);
 
-  const selectConversation = useCallback((conversationId: string) => {
-    onConversationSwitch(conversationId);
+  const selectConversation = useCallback(async (conversationId: string) => {
+    const isReady = await onConversationSwitch(conversationId);
+    if (!isReady) return;
     router.push(`/studio/agent?conversationId=${encodeURIComponent(conversationId)}`);
-    onCloseMobile();
-  }, [onCloseMobile, onConversationSwitch, router]);
+  }, [onConversationSwitch, router]);
 
   const removeConversation = useCallback(async (conversationId: string) => {
     try {
       await deleteConversation(conversationId);
       setItems((current) => current.filter((item) => item.conversationId !== conversationId));
+      setVideoConversationIds((current) => {
+        const next = new Set(current);
+        next.delete(conversationId);
+        return next;
+      });
+      videoMarkerVersionsRef.current.delete(conversationId);
       if (conversationId === activeConversationId) router.push("/studio/agent");
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "删除会话失败。");
     }
   }, [activeConversationId, router]);
 
+  const toggleGroup = useCallback((group: GroupName) => {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
+      return next;
+    });
+  }, []);
+
   const content = <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3 [content-visibility:auto]">
-      {errorMessage ? <div className="px-2 py-3 text-xs text-red-300"><p>{errorMessage}</p><button className="mt-2 underline" onClick={() => void load()} type="button">重试</button></div> : null}
-      {!errorMessage && !isLoading && items.length === 0 ? <p className="px-3 py-8 text-center text-xs text-zinc-600">还没有历史对话</p> : null}
+      {errorMessage ? <div className="rounded-lg bg-danger-muted px-3 py-3 text-xs text-destructive"><p>{errorMessage}</p><button className="mt-2 cursor-pointer underline" onClick={() => void load()} type="button">重试</button></div> : null}
+      {!errorMessage && !isLoading && visibleItems.length === 0 ? <p className="px-3 py-8 text-center text-xs text-muted-foreground">还没有历史对话</p> : null}
       {GROUPS.map((group) => {
         const conversations = grouped.get(group) ?? [];
-        return conversations.length > 0 ? <section className="mb-4" key={group}>
-          <h2 className="px-3 pb-1.5 text-[13px] font-bold text-sidebar-section-foreground">{group}</h2>
-          <ul className="space-y-0.5">{conversations.map((conversation) => <li className="group relative" key={conversation.conversationId}>
-            <button className={cn("flex h-9 w-full items-center rounded-lg px-3 pr-9 text-left text-sm text-muted-foreground group-hover:bg-accent group-hover:text-foreground", conversation.conversationId === activeConversationId && "bg-accent text-foreground")} onClick={() => selectConversation(conversation.conversationId)} type="button"><span className="truncate">{conversation.title}</span></button>
-            <DropdownMenu>
-              <DropdownMenuTrigger className="absolute right-1 top-1 grid size-7 cursor-pointer place-items-center rounded-md text-zinc-500 opacity-0 hover:[&_svg]:brightness-150 group-hover:opacity-100 data-popup-open:opacity-100" aria-label={`管理对话：${conversation.title}`}><MoreHorizontalIcon className="size-4" /></DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-32"><DropdownMenuItem onClick={() => void removeConversation(conversation.conversationId)} variant="destructive"><Trash2Icon />删除</DropdownMenuItem></DropdownMenuContent>
-            </DropdownMenu>
-          </li>)}</ul>
+        const isCollapsed = collapsedGroups.has(group);
+        return conversations.length > 0 ? <section className="mb-2" key={group}>
+          <h2><button aria-controls={GROUP_IDS[group]} aria-expanded={!isCollapsed} className="group flex w-full cursor-pointer items-center px-1 pb-1 text-left font-sans text-[13px] font-bold uppercase tracking-[0.03em] text-sidebar-section-foreground [font-synthesis:none]" onClick={() => toggleGroup(group)} type="button"><span>{group}</span><span className={cn("ml-1 transition-[opacity,transform]", isCollapsed ? "-rotate-90 opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100")}><ChevronDownIcon className="size-3.5" /></span></button></h2>
+          {isCollapsed ? null : <ul className="space-y-1" id={GROUP_IDS[group]}>{conversations.map((conversation) => <Tooltip key={conversation.conversationId} trackCursorAxis="both">
+            <TooltipTrigger render={<li className="group relative">
+              <button aria-busy={pendingItems.has(conversation.conversationId)} className={cn("flex h-7 w-full items-center rounded-sm px-2 pr-14 text-left text-[13px] text-muted-foreground group-hover:bg-accent group-hover:text-foreground", pendingItems.has(conversation.conversationId) ? "cursor-default bg-accent text-foreground" : "cursor-pointer", conversation.conversationId === activeConversationId && "bg-accent text-foreground")} disabled={pendingItems.has(conversation.conversationId)} onClick={() => void selectConversation(conversation.conversationId)} type="button"><span className="truncate">{conversation.title}</span></button>
+              {videoConversationIds.has(conversation.conversationId) ? <span aria-label="包含已生成视频" className="pointer-events-none absolute right-8 top-1/2 -translate-y-1/2 text-muted-foreground" title="包含已生成视频"><ClapperboardIcon className="size-3.5" /></span> : null}
+              {pendingItems.has(conversation.conversationId) ? null : <DropdownMenu>
+                <DropdownMenuTrigger className="absolute right-1 top-1 grid size-6 cursor-pointer place-items-center rounded-md bg-transparent text-muted-foreground opacity-0 hover:bg-transparent hover:text-sidebar-accent-foreground group-hover:opacity-100 data-popup-open:bg-transparent data-popup-open:opacity-100" aria-label={`管理对话：${conversation.title}`}><MoreHorizontalIcon className="size-4" /></DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-32"><DropdownMenuItem onClick={() => void removeConversation(conversation.conversationId)} variant="destructive"><Trash2Icon />删除</DropdownMenuItem></DropdownMenuContent>
+              </DropdownMenu>}
+            </li>} />
+            <TooltipContent className="pointer-events-none max-w-72 whitespace-normal break-words" side="top" sideOffset={12}>{conversation.title}</TooltipContent>
+          </Tooltip>)}</ul>}
         </section> : null;
       })}
-      {isLoading ? <div className="flex justify-center py-4 text-zinc-600" role="status"><LoaderCircleIcon className="size-4 animate-spin" /></div> : null}
-      {!isLoading && nextCursor ? <button className="w-full py-2 text-xs text-zinc-500 hover:text-zinc-300" onClick={() => void load(nextCursor)} type="button">加载更多</button> : null}
+      {isLoading ? <div className="flex justify-center py-4 text-muted-foreground" role="status"><LoaderCircleIcon className="size-4 animate-spin" /></div> : null}
+      {!isLoading && nextCursor ? <button className="w-full cursor-pointer py-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => void load(nextCursor)} type="button">加载更多</button> : null}
     </div>;
 
-  return <>
-    <aside className={cn("hidden h-full shrink-0 flex-col overflow-hidden border-r border-white/10 bg-[#0a0b0d] transition-[width] lg:flex", collapsed ? "w-0 border-r-0" : "w-60")} aria-label="历史对话">{collapsed ? null : content}</aside>
-    {mobileOpen ? <div className="absolute inset-0 z-50 flex lg:hidden"><button aria-label="关闭历史栏" className="absolute inset-0 bg-black/60" onClick={onCloseMobile} type="button" /><aside className="relative flex h-full w-72 max-w-[85vw] flex-col border-r border-white/10 bg-[#0a0b0d] pt-10 shadow-2xl" aria-label="历史对话"><button aria-label="关闭历史栏" className="absolute right-2 top-2 grid size-8 place-items-center rounded-md text-zinc-500 hover:bg-white/10 hover:text-white" onClick={onCloseMobile} type="button"><XIcon className="size-4" /></button>{content}</aside></div> : null}
-  </>;
+  return <TooltipProvider delay={250}><aside className="flex h-full w-60 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground" aria-label="历史对话">{content}</aside></TooltipProvider>;
 });

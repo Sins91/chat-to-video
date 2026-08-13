@@ -31,9 +31,9 @@ const parseBaseUrl = (value: string): string => {
 const parseTimeoutMs = (name: string, value: string): number => {
   const timeoutMs = Number(value);
 
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 120_000) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 600_000) {
     throw new Error(
-      `${name} must be an integer between 1000 and 120000; received "${value}".`,
+      `${name} must be an integer between 1000 and 600000; received "${value}".`,
     );
   }
 
@@ -50,6 +50,6 @@ export const loadApimartConfig = (): ApimartConfig => ({
   ),
   timeoutMs: parseTimeoutMs(
     "APIMART_TIMEOUT_MS",
-    process.env.APIMART_TIMEOUT_MS ?? "30000",
+    process.env.APIMART_TIMEOUT_MS ?? "600000",
   ),
 });

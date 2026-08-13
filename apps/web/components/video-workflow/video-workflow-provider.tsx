@@ -1,10 +1,15 @@
 "use client";
 
 import {
+  CINEMATIC_PIPELINE_DEFINITION,
+  CinematicStageSchema,
+  findWorkflowPipelineDefinition,
+  findWorkflowStage,
   VideoWorkflowEventSchema,
   WorkflowStepProgressSchema,
   type ConversationEntry,
   type VideoModel,
+  type WorkflowStageId,
   type VideoWorkflowInteraction,
   type VideoWorkflowSnapshot,
   type WorkflowStepProgress,
@@ -17,9 +22,14 @@ import {
   createVideoWorkflow,
   getVideoWorkflow,
   interactWithVideoWorkflow,
+  recoverVideoWorkflow,
   retryVideoWorkflow,
+  resolveWorkflowUserIntent,
   updateVideoWorkflowModel,
 } from "@/lib/video-workflow-client";
+import { formatVideoWorkflowError, type VideoWorkflowOperation } from "@/lib/video-workflow-error";
+import { isWorkflowEventHistoricalReplay } from "@/lib/workflow-event-replay";
+import { appendOptimisticUserEntry } from "@/lib/optimistic-conversation";
 
 type VideoWorkflowContextValue = {
   conversationId: string | null;
@@ -29,31 +39,52 @@ type VideoWorkflowContextValue = {
   isLoading: boolean;
   isSubmitting: boolean;
   stepProgress: WorkflowStepProgress | null;
+  previewVideo: { id: string; playbackUrl: string; title: string } | null;
+  chatVideoFocusRequest: { requestId: number; videoId: string } | null;
+  chatScrollRestoreRequest: ChatScrollRestoreRequest | null;
+  openGeneratedVideo: (video: GeneratedVideoSelection) => Promise<boolean>;
+  registerChatViewportController: (controller: ChatViewportController | null) => void;
+  returnToCurrentVideo: () => Promise<void>;
   startWorkflow: (prompt: string, messageId: string) => Promise<void>;
   retryWorkflow: () => Promise<void>;
+  recoverWorkflow: () => Promise<void>;
+  requestRestart: (targetStage: WorkflowStageId, text: string, messageId: string) => Promise<void>;
+  confirmRestart: (messageId: string) => Promise<void>;
+  cancelRestart: (messageId: string) => Promise<void>;
   submitText: (text: string, messageId: string) => Promise<void>;
+  resolveUserIntent: (text: string, messageId: string) => Promise<"workflow" | "chat">;
   submitSceneDurations: (scenes: ReadonlyArray<{ order: number; durationSeconds: number }>) => Promise<void>;
   refresh: () => Promise<void>;
-  prepareConversationSwitch: (conversationId: string) => void;
+  prepareConversationSwitch: (conversationId: string) => Promise<boolean>;
   newConversation: () => void;
   videoModel: VideoModel;
   setVideoModel: (model: VideoModel) => void;
 };
 
+export type ChatViewportLocation = {
+  conversationId: string | null;
+  scrollTop: number;
+};
+
+export type ChatViewportController = {
+  capture: () => ChatViewportLocation | null;
+};
+
+export type ChatScrollRestoreRequest = {
+  location: ChatViewportLocation;
+  requestId: number;
+};
+
+type GeneratedVideoSelection = {
+  conversationId: string;
+  id: string;
+  playbackUrl: string;
+  title: string;
+};
+
 const VideoWorkflowContext = createContext<VideoWorkflowContextValue | null>(null);
 const DEFAULT_VIDEO_MODEL: VideoModel = "MiniMax-Hailuo-2.3";
 const QUEUE_POSITION_REFRESH_MS = 5_000;
-const EMPTY_ENTRIES: ConversationEntry[] = [];
-
-const LEGACY_STEP_DEFINITION = {
-  research: { stepId: "research", stepLabel: "创作研究", stepIndex: 2 },
-  proposal: { stepId: "proposal", stepLabel: "创意方案", stepIndex: 3 },
-  script: { stepId: "script", stepLabel: "脚本生成", stepIndex: 4 },
-  scene_plan: { stepId: "scene-plan", stepLabel: "分镜规划", stepIndex: 5 },
-  assets: { stepId: "assets", stepLabel: "素材规划", stepIndex: 6 },
-  edit: { stepId: "edit", stepLabel: "剪辑方案", stepIndex: 7 },
-  compose: { stepId: "video-generation", stepLabel: "视频生成", stepIndex: 8 },
-} as const;
 
 const workflowStepFromEventData = (data: unknown): WorkflowStepProgress | null => {
   if (typeof data !== "object" || data === null) return null;
@@ -77,8 +108,15 @@ const legacyWorkflowStep = (
   const stage = snapshot.status === "queued" || snapshot.status === "running" ||
       snapshot.status === "succeeded"
     ? "compose"
-    : snapshot.cinematicStage;
-  const definition = LEGACY_STEP_DEFINITION[stage];
+    : snapshot.currentStage;
+  const pipeline = findWorkflowPipelineDefinition(snapshot.pipeline) ?? CINEMATIC_PIPELINE_DEFINITION;
+  const stageDefinition = findWorkflowStage(pipeline, stage);
+  const stageIndex = pipeline.stages.findIndex((definition) => definition.id === stage);
+  const definition = {
+    stepId: stageDefinition?.stepId ?? stage,
+    stepLabel: stageDefinition?.stepLabel ?? stageDefinition?.label ?? stage,
+    stepIndex: Math.max(0, stageIndex) + 2,
+  };
   const stepState = snapshot.status === "awaiting_input"
     ? "awaiting_input"
     : snapshot.status === "succeeded"
@@ -96,7 +134,7 @@ const legacyWorkflowStep = (
   return {
     ...definition,
     stepState,
-    stepTotal: 8,
+    stepTotal: pipeline.stages.length + 1,
     message: message ?? defaultMessage,
   };
 };
@@ -109,47 +147,76 @@ type WorkflowStepView = {
 export function VideoWorkflowProvider({ children }: { readonly children: ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const conversationId = searchParams.get("conversationId");
+  const requestedConversationId = searchParams.get("conversationId");
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
   const [snapshot, setSnapshot] = useState<VideoWorkflowSnapshot | null>(null);
   const [loadedConversationId, setLoadedConversationId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [stepView, setStepView] = useState<WorkflowStepView | null>(null);
+  const [previewVideo, setPreviewVideo] = useState<{ id: string; playbackUrl: string; title: string } | null>(null);
+  const [chatVideoFocusRequest, setChatVideoFocusRequest] = useState<{ requestId: number; videoId: string } | null>(null);
+  const [chatScrollRestoreRequest, setChatScrollRestoreRequest] = useState<ChatScrollRestoreRequest | null>(null);
   const snapshotRef = useRef<VideoWorkflowSnapshot | null>(null);
-  const activeConversationIdRef = useRef<string | null>(conversationId);
+  const chatVideoFocusSequenceRef = useRef(0);
+  const chatScrollRestoreSequenceRef = useRef(0);
+  const chatViewportControllerRef = useRef<ChatViewportController | null>(null);
+  const previewReturnLocationRef = useRef<ChatViewportLocation | null>(null);
+  const isPreviewConversationSwitchRef = useRef(false);
+  const activeConversationIdRef = useRef<string | null>(requestedConversationId);
+  const preparedConversationIdRef = useRef<string | null>(null);
   const [videoModel, setVideoModel] = useState<VideoModel>(DEFAULT_VIDEO_MODEL);
 
-  useEffect(() => {
-    activeConversationIdRef.current = conversationId;
-    return () => {
-      if (activeConversationIdRef.current === conversationId) activeConversationIdRef.current = null;
-    };
-  }, [conversationId]);
-
-  const prepareConversationSwitch = useCallback((nextConversationId: string) => {
-    if (nextConversationId === conversationId) return;
-    activeConversationIdRef.current = nextConversationId;
-    setLoadedConversationId(null);
-    setStepView(null);
-    setErrorMessage(null);
-  }, [conversationId]);
-
-  const refresh = useCallback(async () => {
-    if (!conversationId) return;
-    const requestedConversationId = conversationId;
-    const detail = await getConversation(requestedConversationId);
-    if (activeConversationIdRef.current !== requestedConversationId) return;
+  const loadConversation = useCallback(async (conversationId: string): Promise<boolean> => {
+    const detail = await getConversation(conversationId);
+    if (activeConversationIdRef.current !== conversationId) return false;
     setEntries(detail.entries);
     setSnapshot(detail.videoWorkflow);
-    setLoadedConversationId(requestedConversationId);
+    setLoadedConversationId(conversationId);
+    setIsSubmitting(false);
+    setStepView(null);
+    setPreviewVideo(null);
+    setChatVideoFocusRequest(null);
+    if (!isPreviewConversationSwitchRef.current) {
+      setChatScrollRestoreRequest(null);
+      previewReturnLocationRef.current = null;
+    }
+    setErrorMessage(null);
     if (detail.videoWorkflow) {
       setVideoModel(detail.videoWorkflow.videoModel);
+    } else {
+      setVideoModel(DEFAULT_VIDEO_MODEL);
     }
-  }, [conversationId]);
+    return true;
+  }, []);
+
+  const prepareConversationSwitch = useCallback(async (nextConversationId: string): Promise<boolean> => {
+    if (nextConversationId === loadedConversationId) return true;
+    activeConversationIdRef.current = nextConversationId;
+    preparedConversationIdRef.current = nextConversationId;
+    try {
+      return await loadConversation(nextConversationId);
+    } catch (error: unknown) {
+      if (activeConversationIdRef.current !== nextConversationId) return false;
+      preparedConversationIdRef.current = null;
+      setErrorMessage(formatVideoWorkflowError(error, { operation: "load" }));
+      return false;
+    }
+  }, [loadConversation, loadedConversationId]);
+
+  const refresh = useCallback(async () => {
+    const conversationId = loadedConversationId ?? requestedConversationId;
+    if (!conversationId) return;
+    await loadConversation(conversationId);
+  }, [loadConversation, loadedConversationId, requestedConversationId]);
 
   useEffect(() => {
-    if (!conversationId) {
+    if (preparedConversationIdRef.current !== null && preparedConversationIdRef.current === loadedConversationId) {
+      if (requestedConversationId !== loadedConversationId) return;
+      preparedConversationIdRef.current = null;
+    }
+    activeConversationIdRef.current = requestedConversationId;
+    if (!requestedConversationId) {
       setEntries([]);
       setSnapshot(null);
       setLoadedConversationId(null);
@@ -158,26 +225,18 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       setVideoModel(DEFAULT_VIDEO_MODEL);
       return;
     }
-    let isActive = true;
-    setVideoModel(DEFAULT_VIDEO_MODEL);
-    void refresh().then(() => {
-      if (isActive) setErrorMessage(null);
-    }).catch((error: unknown) => {
-      if (!isActive) return;
-      setEntries([]);
-      setSnapshot(null);
-      setLoadedConversationId(conversationId);
-      setErrorMessage(error instanceof Error ? error.message : "无法恢复历史对话。");
+    if (loadedConversationId === requestedConversationId) return;
+    void loadConversation(requestedConversationId).catch((error: unknown) => {
+      if (activeConversationIdRef.current !== requestedConversationId) return;
+      setErrorMessage(formatVideoWorkflowError(error, { operation: "load" }));
     });
-    return () => { isActive = false; };
-  }, [conversationId, refresh]);
+  }, [loadConversation, loadedConversationId, requestedConversationId]);
 
-  const hasLoadedConversation = loadedConversationId === conversationId;
-  const activeEntries = hasLoadedConversation ? entries : EMPTY_ENTRIES;
-  const activeSnapshot = hasLoadedConversation ? snapshot : null;
-  const activeErrorMessage = hasLoadedConversation ? errorMessage : null;
-  const activeVideoModel = hasLoadedConversation ? videoModel : DEFAULT_VIDEO_MODEL;
-  const isConversationLoading = conversationId !== null && !hasLoadedConversation;
+  const activeEntries = entries;
+  const activeSnapshot = snapshot;
+  const activeErrorMessage = errorMessage;
+  const activeVideoModel = videoModel;
+  const isConversationLoading = requestedConversationId !== null && loadedConversationId === null && errorMessage === null;
 
   useEffect(() => {
     snapshotRef.current = activeSnapshot;
@@ -221,19 +280,27 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
   useEffect(() => {
     if (!workflowId) return;
     let isActive = true;
+    let initialSnapshotTimestampMs: number | null = null;
     setStepView((current) => current?.workflowId === workflowId ? current : null);
     const source = new EventSource(`/api/video-workflows/${encodeURIComponent(workflowId)}/events`);
-    const eventTypes = ["workflow.snapshot", "agent.step", "storyboard.completed", "cinematic.artifact.completed", "cinematic.approval.required", "job.progress", "job.completed", "job.failed"] as const;
+    const eventTypes = ["workflow.snapshot", "workflow.restart.requested", "workflow.restart.started", "workflow.restart.cancelled", "agent.step", "storyboard.completed", "cinematic.artifact.completed", "cinematic.approval.required", "job.progress", "job.completed", "job.failed"] as const;
     const handleEvent = (event: Event): void => {
       if (!(event instanceof MessageEvent) || !isActive) return;
       const parsed = VideoWorkflowEventSchema.safeParse(JSON.parse(String(event.data)) as unknown);
       if (!parsed.success) return;
       const workflowEvent = parsed.data;
       if (workflowEvent.type === "workflow.snapshot") {
+        if (initialSnapshotTimestampMs === null) {
+          const snapshotTimestampMs = Date.parse(workflowEvent.timestamp);
+          initialSnapshotTimestampMs = Number.isFinite(snapshotTimestampMs)
+            ? snapshotTimestampMs
+            : null;
+        }
         setSnapshot(workflowEvent.data);
         setVideoModel(workflowEvent.data.videoModel);
         return;
       }
+      if (isWorkflowEventHistoricalReplay(workflowEvent.timestamp, initialSnapshotTimestampMs)) return;
 
       if (workflowEvent.type === "agent.step" || workflowEvent.type === "job.progress") {
         if (workflowEvent.type === "job.progress") {
@@ -279,7 +346,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
                 stepLabel: "视频生成",
                 stepState: "completed",
                 stepIndex: 8,
-                stepTotal: 8,
+                stepTotal: CINEMATIC_PIPELINE_DEFINITION.stages.length + 1,
                 message: "视频已生成完成。",
               },
         }));
@@ -297,12 +364,12 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
                 stepLabel: "视频生成",
                 stepState: "failed",
                 stepIndex: 8,
-                stepTotal: 8,
+                stepTotal: CINEMATIC_PIPELINE_DEFINITION.stages.length + 1,
                 message: workflowEvent.data.message,
               },
         }));
       }
-      void refresh().then(notifyConversationHistoryChanged).catch(() => undefined);
+      void refresh().then(() => notifyConversationHistoryChanged()).catch(() => undefined);
     };
     for (const type of eventTypes) source.addEventListener(type, handleEvent);
     source.onopen = () => {
@@ -320,13 +387,23 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
 
   const postInteraction = useCallback(async (body: VideoWorkflowInteraction) => {
     if (!workflowId) return;
+    const restartTargetStage = body.type === "restart_confirm"
+      ? snapshotRef.current?.pendingRestart?.targetStage ?? null
+      : null;
+    const cinematicRestartTarget = CinematicStageSchema.safeParse(restartTargetStage);
     setIsSubmitting(true);
     setErrorMessage(null);
     const interactionMessage = body.type === "scene_durations"
       ? "正在校验并更新逐镜头时长。"
       : body.type === "message"
         ? "正在根据你的修改意见重新生成当前步骤。"
-        : "正在确认当前步骤并进入下一阶段。";
+        : body.type === "restart_request"
+          ? "正在准备重新开始确认。"
+          : body.type === "restart_confirm"
+            ? "正在从所选步骤重新开始。"
+            : body.type === "restart_cancel"
+              ? "正在取消重新开始。"
+              : "正在确认当前步骤并进入下一阶段。";
     const previousProgress = stepProgress;
     if (previousProgress) {
       setStepView({
@@ -339,16 +416,80 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       });
     }
     try {
-      await interactWithVideoWorkflow(workflowId, body);
-      setSnapshot((current) => current ? { ...current, status: "drafting" } : current);
+      const result = await interactWithVideoWorkflow(workflowId, body);
+      if (result.intent === "restart_requested" || result.intent === "restart_cancelled" ||
+          result.intent === "restart_unavailable") {
+        await refresh();
+      } else if (result.intent === "restart_confirmed" && cinematicRestartTarget.success) {
+        const previousSnapshot = snapshotRef.current;
+        if (previousSnapshot) {
+          const restartedSnapshot: VideoWorkflowSnapshot = {
+            ...previousSnapshot,
+            status: "drafting",
+            currentStage: cinematicRestartTarget.data,
+            cinematicStage: cinematicRestartTarget.data,
+            currentArtifact: null,
+            videoJob: null,
+            pendingRestart: null,
+            errorMessage: null,
+          };
+          snapshotRef.current = restartedSnapshot;
+          setSnapshot(restartedSnapshot);
+          setStepView({
+            workflowId,
+            progress: legacyWorkflowStep(
+              restartedSnapshot,
+              "正在从所选步骤重新生成，旧版本已保留为历史记录。",
+            ),
+          });
+        }
+        await refresh();
+      } else {
+        setSnapshot((current) => current ? { ...current, status: "drafting", pendingRestart: null } : current);
+      }
       notifyConversationHistoryChanged();
     } catch (error: unknown) {
       if (previousProgress) setStepView({ workflowId, progress: previousProgress });
-      setErrorMessage(error instanceof Error ? error.message : "提交失败，请稍后重试。");
+      const operation: VideoWorkflowOperation = body.type === "approve"
+        ? "approve"
+        : body.type === "message" || body.type === "scene_durations"
+          ? "revise"
+          : body.type;
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation,
+        workflowId,
+        requestId: snapshotRef.current?.requestId,
+      }));
     } finally {
       setIsSubmitting(false);
     }
-  }, [stepProgress, workflowId]);
+  }, [refresh, stepProgress, workflowId]);
+
+  const requestRestart = useCallback(async (
+    targetStage: WorkflowStageId,
+    text: string,
+    messageId: string,
+  ) => postInteraction({ type: "restart_request", targetStage, text, messageId }), [postInteraction]);
+
+  const confirmRestart = useCallback(async (messageId: string) => {
+    const pending = snapshotRef.current?.pendingRestart;
+    if (!pending) return;
+    await postInteraction({
+      type: "restart_confirm",
+      messageId,
+      restartRequestId: pending.restartRequestId,
+    });
+  }, [postInteraction]);
+
+  const cancelRestart = useCallback(async (messageId: string) => {
+    const pending = snapshotRef.current?.pendingRestart;
+    if (!pending) return;
+    await postInteraction({
+      type: "restart_cancel",
+      messageId,
+      restartRequestId: pending.restartRequestId,
+    });
+  }, [postInteraction]);
 
   const startWorkflow = useCallback(async (text: string, messageId: string) => {
     const prompt = text.trim();
@@ -356,22 +497,30 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     setIsSubmitting(true);
     setStepView(null);
     setErrorMessage(null);
+    setEntries((current) => appendOptimisticUserEntry(current, {
+      messageId,
+      text: prompt,
+      createdAt: new Date().toISOString(),
+    }));
     try {
       const created = await createVideoWorkflow({
-        conversationId: conversationId ?? undefined,
+        conversationId: loadedConversationId ?? undefined,
         messageId,
         prompt,
         videoModel,
       });
       router.replace(`/studio/agent?conversationId=${encodeURIComponent(created.conversationId)}`);
-      if (created.conversationId === conversationId) await refresh();
+      if (created.conversationId === loadedConversationId) await refresh();
       notifyConversationHistoryChanged();
     } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : "创建工作流失败。");
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation: "create",
+        requestId: snapshotRef.current?.requestId,
+      }));
     } finally {
       setIsSubmitting(false);
     }
-  }, [conversationId, refresh, router, videoModel]);
+  }, [loadedConversationId, refresh, router, videoModel]);
 
   const submitText = useCallback(async (text: string, messageId: string) => {
     const trimmed = text.trim();
@@ -382,6 +531,33 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     }
     await startWorkflow(trimmed, messageId);
   }, [postInteraction, startWorkflow, workflowId]);
+
+  const resolveUserIntent = useCallback(async (
+    text: string,
+    messageId: string,
+  ): Promise<"workflow" | "chat"> => {
+    if (!workflowId) return "chat";
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const result = await resolveWorkflowUserIntent(workflowId, { messageId, text });
+      if (result.applied) {
+        await refresh();
+        notifyConversationHistoryChanged();
+        return "workflow";
+      }
+      return "chat";
+    } catch (error: unknown) {
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation: "revise",
+        workflowId,
+        requestId: snapshotRef.current?.requestId,
+      }));
+      return "workflow";
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [refresh, workflowId]);
 
   const submitSceneDurations = useCallback(async (
     scenes: ReadonlyArray<{ order: number; durationSeconds: number }>,
@@ -405,7 +581,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         stepLabel: "视频生成",
         stepState: "running",
         stepIndex: 8,
-        stepTotal: 8,
+        stepTotal: CINEMATIC_PIPELINE_DEFINITION.stages.length + 1,
         message: "正在重新提交视频生成任务。",
       },
     });
@@ -420,7 +596,37 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       notifyConversationHistoryChanged();
     } catch (error: unknown) {
       if (previousProgress) setStepView({ workflowId, progress: previousProgress });
-      setErrorMessage(error instanceof Error ? error.message : "视频任务重试失败，请稍后再试。");
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation: "retry",
+        workflowId,
+        requestId: snapshotRef.current?.requestId,
+      }));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [activeSnapshot, stepProgress, workflowId]);
+
+  const recoverWorkflow = useCallback(async () => {
+    if (!workflowId || activeSnapshot?.status !== "failed" || !activeSnapshot.canRecover) return;
+    const previousProgress = stepProgress;
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setStepView({
+      workflowId,
+      progress: legacyWorkflowStep({ ...activeSnapshot, status: "drafting", errorMessage: null }, "正在恢复原任务。"),
+    });
+    try {
+      await recoverVideoWorkflow(workflowId);
+      const latest = await getVideoWorkflow(workflowId);
+      setSnapshot(latest);
+      notifyConversationHistoryChanged();
+    } catch (error: unknown) {
+      if (previousProgress) setStepView({ workflowId, progress: previousProgress });
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation: "recover",
+        workflowId,
+        requestId: snapshotRef.current?.requestId,
+      }));
     } finally {
       setIsSubmitting(false);
     }
@@ -430,47 +636,140 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     if (model === videoModel) return;
     const previousModel = videoModel;
     setVideoModel(model);
-    if (!workflowId || activeSnapshot?.status !== "awaiting_input") return;
+    if (!workflowId || activeSnapshot?.status !== "awaiting_input" || activeSnapshot.pendingRestart) return;
     setIsSubmitting(true);
     setErrorMessage(null);
     void updateVideoWorkflowModel(workflowId, { videoModel: model }).then(() => {
       setSnapshot((current) => current ? { ...current, videoModel: model } : current);
     }).catch((error: unknown) => {
       setVideoModel(previousModel);
-      setErrorMessage(error instanceof Error ? error.message : "切换视频模型失败。");
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation: "update_model",
+        workflowId,
+        requestId: snapshotRef.current?.requestId,
+      }));
     }).finally(() => {
       setIsSubmitting(false);
     });
   }, [activeSnapshot?.status, videoModel, workflowId]);
 
   const newConversation = useCallback(() => {
+    activeConversationIdRef.current = null;
+    preparedConversationIdRef.current = null;
     setEntries([]);
     setSnapshot(null);
     setLoadedConversationId(null);
     setStepView(null);
+    setPreviewVideo(null);
+    setChatVideoFocusRequest(null);
+    setChatScrollRestoreRequest(null);
+    previewReturnLocationRef.current = null;
     setErrorMessage(null);
     setVideoModel(DEFAULT_VIDEO_MODEL);
     router.push("/studio/agent");
   }, [router]);
 
+  const requestChatVideoFocus = useCallback((videoId: string) => {
+    chatVideoFocusSequenceRef.current += 1;
+    setChatVideoFocusRequest({ requestId: chatVideoFocusSequenceRef.current, videoId });
+  }, []);
+  const registerChatViewportController = useCallback((controller: ChatViewportController | null) => {
+    chatViewportControllerRef.current = controller;
+  }, []);
+  const openGeneratedVideo = useCallback(async (video: GeneratedVideoSelection): Promise<boolean> => {
+    const isStartingPreviewNavigation = previewReturnLocationRef.current === null;
+    if (isStartingPreviewNavigation) {
+      previewReturnLocationRef.current = chatViewportControllerRef.current?.capture() ?? {
+        conversationId: loadedConversationId,
+        scrollTop: 0,
+      };
+    }
+
+    let isReady = true;
+    if (video.conversationId !== loadedConversationId) {
+      isPreviewConversationSwitchRef.current = true;
+      try {
+        isReady = await prepareConversationSwitch(video.conversationId);
+      } finally {
+        isPreviewConversationSwitchRef.current = false;
+      }
+    }
+    if (!isReady) {
+      if (isStartingPreviewNavigation) previewReturnLocationRef.current = null;
+      return false;
+    }
+
+    setPreviewVideo({ id: video.id, playbackUrl: video.playbackUrl, title: video.title });
+    requestChatVideoFocus(video.id);
+    if (video.conversationId !== requestedConversationId) {
+      router.push(`/studio/agent?conversationId=${encodeURIComponent(video.conversationId)}`);
+    }
+    return true;
+  }, [loadedConversationId, prepareConversationSwitch, requestChatVideoFocus, requestedConversationId, router]);
+  const returnToCurrentVideo = useCallback(async (): Promise<void> => {
+    const returnLocation = previewReturnLocationRef.current;
+    if (!returnLocation) {
+      setPreviewVideo(null);
+      return;
+    }
+
+    if (returnLocation.conversationId === null) {
+      newConversation();
+    } else {
+      let isReady = true;
+      if (returnLocation.conversationId !== loadedConversationId) {
+        isPreviewConversationSwitchRef.current = true;
+        try {
+          isReady = await prepareConversationSwitch(returnLocation.conversationId);
+        } finally {
+          isPreviewConversationSwitchRef.current = false;
+        }
+      }
+      if (!isReady) return;
+      if (returnLocation.conversationId !== requestedConversationId) {
+        router.push(`/studio/agent?conversationId=${encodeURIComponent(returnLocation.conversationId)}`);
+      }
+    }
+
+    previewReturnLocationRef.current = null;
+    setPreviewVideo(null);
+    setChatVideoFocusRequest(null);
+    chatScrollRestoreSequenceRef.current += 1;
+    setChatScrollRestoreRequest({
+      location: returnLocation,
+      requestId: chatScrollRestoreSequenceRef.current,
+    });
+  }, [loadedConversationId, newConversation, prepareConversationSwitch, requestedConversationId, router]);
+
   const value = useMemo<VideoWorkflowContextValue>(() => ({
-    conversationId,
+    conversationId: loadedConversationId,
     entries: activeEntries,
     snapshot: activeSnapshot,
     errorMessage: activeErrorMessage,
     isLoading: isConversationLoading,
     isSubmitting,
     stepProgress,
+    previewVideo,
+    chatVideoFocusRequest,
+    chatScrollRestoreRequest,
+    openGeneratedVideo,
+    registerChatViewportController,
+    returnToCurrentVideo,
     startWorkflow,
     retryWorkflow,
+    recoverWorkflow,
+    requestRestart,
+    confirmRestart,
+    cancelRestart,
     submitText,
+    resolveUserIntent,
     submitSceneDurations,
     refresh,
     prepareConversationSwitch,
     newConversation,
     videoModel: activeVideoModel,
     setVideoModel: changeVideoModel,
-  }), [activeEntries, activeErrorMessage, activeSnapshot, activeVideoModel, changeVideoModel, conversationId, isConversationLoading, isSubmitting, newConversation, prepareConversationSwitch, refresh, retryWorkflow, startWorkflow, stepProgress, submitSceneDurations, submitText]);
+  }), [activeEntries, activeErrorMessage, activeSnapshot, activeVideoModel, cancelRestart, changeVideoModel, chatScrollRestoreRequest, chatVideoFocusRequest, confirmRestart, isConversationLoading, isSubmitting, loadedConversationId, newConversation, openGeneratedVideo, prepareConversationSwitch, previewVideo, recoverWorkflow, refresh, registerChatViewportController, requestRestart, retryWorkflow, returnToCurrentVideo, resolveUserIntent, startWorkflow, stepProgress, submitSceneDurations, submitText]);
 
   return <VideoWorkflowContext value={value}>{children}</VideoWorkflowContext>;
 }

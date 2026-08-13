@@ -15,6 +15,7 @@ import {
 import {
   ALL_CINEMATIC_SKILL_IDS,
   AgentSkillCatalog,
+  CINEMATIC_GOVERNANCE_SKILL_ID,
   resolveAgentSkillRoot,
 } from "../src/agent-extensions/agent-skill.catalog.js";
 
@@ -62,11 +63,16 @@ describe("agent extension boundaries", () => {
 
   it("uses an explicit stage Skill whitelist", () => {
     const catalog = new AgentSkillCatalog();
-    expect(catalog.forChat()[0]).toMatch(/cinematic-capabilities$/u);
+    expect(catalog.forChat()).toEqual([
+      expect.stringMatching(/cinematic-governance$/u),
+      expect.stringMatching(/cinematic-capabilities$/u),
+    ]);
     expect(catalog.forCinematic("scene_plan")).toEqual([
+      expect.stringMatching(/cinematic-governance$/u),
       expect.stringMatching(/cinematic-scene-plan$/u),
       expect.stringMatching(/cinematic-reviewer$/u),
     ]);
+    expect(ALL_CINEMATIC_SKILL_IDS).toContain(CINEMATIC_GOVERNANCE_SKILL_ID);
   });
 
   it("resolves Nest SWC split code and asset output directories", () => {

@@ -118,16 +118,13 @@ export class SeedanceClient {
 
   async waitForCompletion(taskId: string, onProgress: (progress: number) => Promise<void>): Promise<ApimartVideoTask> {
     const deadline = Date.now() + this.config.taskTimeoutMs;
-    let previousProgress = -1;
     while (Date.now() < deadline) {
       const task = ApimartVideoTaskSchema.parse(await this.request(
         `/tasks/${encodeURIComponent(taskId)}?language=zh`,
         "status polling",
       ));
-      if (task.data.progress !== previousProgress) {
-        previousProgress = task.data.progress;
-        await onProgress(task.data.progress);
-      }
+      // A successful provider status query is a heartbeat even when its percentage is unchanged.
+      await onProgress(task.data.progress);
       if (task.data.status === "completed") return task;
       if (task.data.status === "failed" || task.data.status === "cancelled") {
         throw new PermanentVideoError(task.data.error?.message ?? `APIMart task ${task.data.status}.`);

@@ -1,25 +1,28 @@
-import type {
-  CinematicStage,
-  WorkflowStepProgress,
-  WorkflowStepState,
+import {
+  CINEMATIC_PIPELINE_DEFINITION,
+  findWorkflowStage,
+  type CinematicStage,
+  type WorkflowStepProgress,
+  type WorkflowStepState,
 } from "@chat-to-video/contracts";
 
 export type VideoWorkflowStep = "understanding" | CinematicStage;
 
-const VIDEO_WORKFLOW_STEP_TOTAL = 8;
-
-const VIDEO_WORKFLOW_STEP_DEFINITION: Record<
-  VideoWorkflowStep,
-  Pick<WorkflowStepProgress, "stepId" | "stepLabel" | "stepIndex">
-> = {
-  understanding: { stepId: "understanding", stepLabel: "理解需求", stepIndex: 1 },
-  research: { stepId: "research", stepLabel: "创作研究", stepIndex: 2 },
-  proposal: { stepId: "proposal", stepLabel: "创意方案", stepIndex: 3 },
-  script: { stepId: "script", stepLabel: "脚本生成", stepIndex: 4 },
-  scene_plan: { stepId: "scene-plan", stepLabel: "分镜规划", stepIndex: 5 },
-  assets: { stepId: "assets", stepLabel: "素材规划", stepIndex: 6 },
-  edit: { stepId: "edit", stepLabel: "剪辑方案", stepIndex: 7 },
-  compose: { stepId: "video-generation", stepLabel: "视频生成", stepIndex: 8 },
+const videoWorkflowStepDefinition = (
+  step: VideoWorkflowStep,
+): Pick<WorkflowStepProgress, "stepId" | "stepLabel" | "stepIndex"> => {
+  if (step === "understanding") {
+    return { stepId: "understanding", stepLabel: "理解需求", stepIndex: 1 };
+  }
+  const definition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, step);
+  if (!definition) throw new Error(`Unknown cinematic workflow stage: ${step}`);
+  return {
+    stepId: definition.stepId,
+    stepLabel: definition.stepLabel ?? definition.label,
+    stepIndex: CINEMATIC_PIPELINE_DEFINITION.stages.findIndex(
+      (stage) => stage.id === definition.id,
+    ) + 2,
+  };
 };
 
 export const videoWorkflowStep = (
@@ -27,11 +30,11 @@ export const videoWorkflowStep = (
   stepState: WorkflowStepState,
   message: string,
 ): WorkflowStepProgress => ({
-  ...VIDEO_WORKFLOW_STEP_DEFINITION[step],
+  ...videoWorkflowStepDefinition(step),
   stepState,
-  stepTotal: VIDEO_WORKFLOW_STEP_TOTAL,
+  stepTotal: CINEMATIC_PIPELINE_DEFINITION.stages.length + 1,
   message,
 });
 
 export const videoWorkflowStepLabel = (step: VideoWorkflowStep): string =>
-  VIDEO_WORKFLOW_STEP_DEFINITION[step].stepLabel;
+  videoWorkflowStepDefinition(step).stepLabel;

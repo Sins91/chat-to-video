@@ -5,8 +5,7 @@ Web 端在 `apps/web/app/globals.css` 维护一套 Codex 风格的中性色设�
 ## 主题行为
 
 - 首次访问跟随 `prefers-color-scheme`。
-- 用户可在 Studio 顶栏切换明暗主题。
-- 显式选择保存到 `localStorage["filfil-theme"]`，取值仅为 `light` 或 `dark`。
+- Agent 工作区默认跟随系统明暗主题，并兼容读取历史保存的 `localStorage["filfil-theme"]` 选择。
 - 根布局在页面内容渲染前应用主题，避免首屏主题闪烁。
 
 ## 使用约定
@@ -23,4 +22,4 @@ Web 端在 `apps/web/app/globals.css` 维护一套 Codex 风格的中性色设�
 | 侧边栏 | `bg-sidebar`、`text-sidebar-foreground`、`border-sidebar-border` |
 | 状态 | `text-success`、`bg-warning-muted`、`text-destructive` |
 
-圆角、阴影、字体和动效时长同样由 token 管理。现有移植页面由 `studio-theme` 下的兼容映射适配两套主题；新代码不得继续扩展该兼容层，应直接使用语义工具类。
+圆角、阴影、字体和动效时长同样由 token 管理。Agent 工作区仍有少量历史样式由 `studio-theme` 下的兼容映射适配两套主题；新代码不得继续扩展该兼容层，应直接使用语义工具类。

@@ -11,12 +11,16 @@ import {
 import { VideoWorkflowService } from "../src/video-workflow/video-workflow.service.js";
 import type { WorkflowEventService } from "../src/video-workflow/workflow-event.service.js";
 import type { VideoWorkflowOperations } from "../src/video-workflow/video-workflow.operations.js";
+import type { WorkflowRecoveryService } from "../src/video-workflow/workflow-recovery.service.js";
+import type { UserIntentResolverService } from "../src/video-workflow/user-intent-resolver.service.js";
 
 const waitingWorkflow = {
   id: "00000000-0000-4000-8000-000000000001",
   conversationId: "00000000-0000-4000-8000-000000000010",
   runId: "run-1",
   requestId: "00000000-0000-4000-8000-000000000002",
+  pipelineId: "cinematic",
+  currentStageId: "proposal",
   initialPrompt: "A letter arriving on a rainy night",
   videoModel: "doubao-seedance-2.0",
   status: "awaiting_input",
@@ -29,24 +33,36 @@ const waitingWorkflow = {
 describe("VideoWorkflowService interactions", () => {
   const repository = {
     findWorkflow: vi.fn(),
+    findPreviousWorkflow: vi.fn(),
     claimInteraction: vi.fn(),
     createWorkflow: vi.fn(),
     findWorkflowVideoJob: vi.fn(),
     findLatestStoryboard: vi.fn(),
     findLatestCinematicArtifact: vi.fn(),
+    findLatestActiveStageCheckpoint: vi.fn(),
     findVideoOutput: vi.fn(),
     findStoryboard: vi.fn(),
+    requestRestart: vi.fn(),
+    cancelRestart: vi.fn(),
+    claimRestart: vi.fn(),
+    setRunId: vi.fn(),
     claimVideoJobRetry: vi.fn(),
     updateVideoJob: vi.fn(),
     updateVideoModel: vi.fn(),
     updateWorkflow: vi.fn(),
+    findWorkflowUserDecision: vi.fn(),
+    findWorkflowScope: vi.fn(),
+    saveWorkflowUserDecision: vi.fn(),
+    markWorkflowUserDecisionApplied: vi.fn(),
   };
   const storage = { createDownloadUrl: vi.fn() };
   const conversations = { findActiveConversation: vi.fn(), appendMessage: vi.fn(), findWorkflow: vi.fn(), createWithUserMessage: vi.fn(), listModelMessages: vi.fn() };
   const modelGateway = { inferCinematicDuration: vi.fn() };
-  const runtime = { resume: vi.fn(), start: vi.fn() };
+  const runtime = { resume: vi.fn(), restart: vi.fn(), start: vi.fn() };
   const events = { append: vi.fn() };
   const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn() };
+  const recovery = { recoverAgentRun: vi.fn() };
+  const intentResolver = { resolve: vi.fn() };
   const service = new VideoWorkflowService(
     repository as unknown as VideoWorkflowRepository,
     conversations as unknown as ConversationRepository,
@@ -55,14 +71,25 @@ describe("VideoWorkflowService interactions", () => {
     runtime as unknown as MastraRuntimeService,
     events as unknown as WorkflowEventService,
     operations as unknown as VideoWorkflowOperations,
+    recovery as unknown as WorkflowRecoveryService,
+    intentResolver as unknown as UserIntentResolverService,
   );
 
   beforeEach(() => {
     vi.clearAllMocks();
     repository.findWorkflow.mockResolvedValue(waitingWorkflow);
+    repository.findWorkflowUserDecision.mockResolvedValue(null);
+    repository.saveWorkflowUserDecision.mockResolvedValue(true);
+    repository.markWorkflowUserDecisionApplied.mockResolvedValue(undefined);
+    repository.findPreviousWorkflow.mockResolvedValue(null);
     conversations.findActiveConversation.mockResolvedValue({ id: waitingWorkflow.conversationId });
     repository.claimInteraction.mockResolvedValue(true);
+    repository.requestRestart.mockResolvedValue(true);
+    repository.findLatestActiveStageCheckpoint.mockResolvedValue({ version: 1 });
+    repository.cancelRestart.mockResolvedValue(true);
+    repository.setRunId.mockResolvedValue(undefined);
     runtime.resume.mockResolvedValue(undefined);
+    runtime.restart.mockResolvedValue("run-restarted");
     repository.updateWorkflow.mockResolvedValue(undefined);
     events.append.mockResolvedValue(undefined);
     repository.createWorkflow.mockResolvedValue(true);
@@ -74,6 +101,13 @@ describe("VideoWorkflowService interactions", () => {
     runtime.start.mockResolvedValue("run-created");
     operations.retryVideo.mockResolvedValue(undefined);
     operations.getRenderQueueAhead.mockResolvedValue(null);
+    recovery.recoverAgentRun.mockResolvedValue(true);
+    intentResolver.resolve.mockResolvedValue({
+      intent: { type: "approve", stageId: "proposal" },
+      source: "rule",
+      resolverVersion: "v1",
+      requiresConfirmation: false,
+    });
   });
 
   it("infers and persists duration before starting the selected video model", async () => {
@@ -92,10 +126,13 @@ describe("VideoWorkflowService interactions", () => {
       videoModel: "MiniMax-Hailuo-2.3",
       durationSeconds: 30,
     }));
-    expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({
-      videoModel: "MiniMax-Hailuo-2.3",
-      durationSeconds: 30,
-    }), expect.any(Function));
+    expect(runtime.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        videoModel: "MiniMax-Hailuo-2.3",
+        durationSeconds: 30,
+      }),
+      expect.any(Function),
+    );
     expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
       eventId: created.workflowId + ":understanding",
       type: "agent.step",
@@ -170,14 +207,14 @@ describe("VideoWorkflowService interactions", () => {
     repository.findWorkflow.mockResolvedValue({
       ...waitingWorkflow,
       status: "queued",
-      cinematicStage: "compose",
+      currentStageId: "compose",
       durationSeconds: 30,
     });
     repository.findLatestStoryboard.mockResolvedValue(null);
     repository.findLatestCinematicArtifact.mockResolvedValue(null);
     repository.findVideoOutput.mockResolvedValue(null);
     repository.findWorkflowVideoJob.mockResolvedValue({
-      id: `${waitingWorkflow.id}-cinematic-v1`,
+      id: `${waitingWorkflow.id}-cinematic-version-1`,
       status: "queued",
       progress: 0,
       providerTaskId: null,
@@ -189,7 +226,7 @@ describe("VideoWorkflowService interactions", () => {
 
     expect(snapshot.videoJob?.queueAhead).toBe(3);
     expect(operations.getRenderQueueAhead).toHaveBeenCalledWith(
-      `${waitingWorkflow.id}-cinematic-v1`,
+      `${waitingWorkflow.id}-cinematic-version-1`,
     );
   });
 
@@ -199,7 +236,278 @@ describe("VideoWorkflowService interactions", () => {
       intent: "approve",
     });
     expect(repository.claimInteraction).toHaveBeenCalledWith(waitingWorkflow.id, 1);
-    expect(runtime.resume).toHaveBeenCalledWith("run-1", { type: "approve" });
+    expect(runtime.resume).toHaveBeenCalledWith(
+      "run-1",
+      { type: "approve" },
+      {
+        workflowId: waitingWorkflow.id,
+        stage: "proposal",
+        version: 1,
+      },
+    );
+  });
+
+  it("treats a conversational '我看行' reply as approval and advances the suspended step", async () => {
+    await expect(service.interact(waitingWorkflow.id, {
+      type: "message",
+      messageId: "approval-message-1",
+      text: "我看行",
+    })).resolves.toEqual({ accepted: true, intent: "approve" });
+    expect(runtime.resume).toHaveBeenCalledWith(
+      "run-1",
+      { type: "approve" },
+      { workflowId: waitingWorkflow.id, stage: "proposal", version: 1 },
+    );
+    expect(conversations.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "approval-message-1",
+      content: "我看行",
+    }));
+  });
+
+  it("persists a resolved natural-language decision before applying it", async () => {
+    repository.findWorkflowScope.mockResolvedValue({
+      workflow: waitingWorkflow,
+      tenantId: "demo",
+      projectId: "demo",
+    });
+    repository.findLatestCinematicArtifact.mockResolvedValue(null);
+
+    await expect(service.resolveUserIntent(waitingWorkflow.id, {
+      messageId: "intent-message-1",
+      text: "我看行",
+    })).resolves.toMatchObject({
+      accepted: true,
+      applied: true,
+      intent: { type: "approve" },
+    });
+    expect(repository.saveWorkflowUserDecision).toHaveBeenCalledBefore(repository.claimInteraction);
+    expect(repository.markWorkflowUserDecisionApplied).toHaveBeenCalledWith("intent-message-1");
+  });
+
+  it("persists an unrecognized reply and clarification without advancing the workflow", async () => {
+    repository.findWorkflowScope.mockResolvedValue({
+      workflow: waitingWorkflow,
+      tenantId: "demo",
+      projectId: "demo",
+    });
+    repository.findLatestCinematicArtifact.mockResolvedValue(null);
+    intentResolver.resolve.mockResolvedValue({
+      intent: {
+        type: "clarify",
+        question: "我无法准确理解你的意思。请回复“好的”“可以”“行”或“不好”“不行”“不可以”。",
+      },
+      source: "rule",
+      resolverVersion: "v1",
+      requiresConfirmation: false,
+    });
+
+    await expect(service.resolveUserIntent(waitingWorkflow.id, {
+      messageId: "ambiguous-message-1",
+      text: "整点那个感觉",
+    })).resolves.toMatchObject({
+      accepted: true,
+      applied: true,
+      intent: { type: "clarify" },
+    });
+    expect(conversations.appendMessage).toHaveBeenNthCalledWith(1, {
+      conversationId: waitingWorkflow.conversationId,
+      messageId: "ambiguous-message-1",
+      role: "user",
+      content: "整点那个感觉",
+    });
+    expect(conversations.appendMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      conversationId: waitingWorkflow.conversationId,
+      role: "assistant",
+      content: "我无法准确理解你的意思。请回复“好的”“可以”“行”或“不好”“不行”“不可以”。",
+    }));
+    expect(repository.markWorkflowUserDecisionApplied).toHaveBeenCalledWith("ambiguous-message-1");
+    expect(repository.claimInteraction).not.toHaveBeenCalled();
+    expect(runtime.resume).not.toHaveBeenCalled();
+  });
+
+  it("replays an unapplied clarification with stable message ids", async () => {
+    repository.findWorkflowUserDecision
+      .mockResolvedValueOnce({
+        id: "00000000-0000-4000-8000-000000000099",
+        workflowId: waitingWorkflow.id,
+        conversationMessageId: "ambiguous-message-2",
+        stageId: "proposal",
+        artifactVersion: 1,
+        rawText: "那个整一下",
+        decision: { type: "clarify", question: "我无法准确理解你的意思。" },
+        decisionSource: "rule",
+        resolverVersion: "v1",
+        requiresConfirmation: 0,
+        appliedAt: null,
+      })
+      .mockResolvedValueOnce({ appliedAt: new Date() });
+
+    await expect(service.resolveUserIntent(waitingWorkflow.id, {
+      messageId: "ambiguous-message-2",
+      text: "那个整一下",
+    })).resolves.toMatchObject({ applied: true, intent: { type: "clarify" } });
+    expect(conversations.appendMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      messageId: "00000000-0000-4000-8000-000000000099",
+      role: "assistant",
+    }));
+    expect(repository.markWorkflowUserDecisionApplied).toHaveBeenCalledWith("ambiguous-message-2");
+    expect(runtime.resume).not.toHaveBeenCalled();
+  });
+
+  it("loads only the artifact for the workflow's current restart stage", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      status: "drafting",
+      currentStageId: "script",
+      durationSeconds: 30,
+    });
+    repository.findLatestStoryboard.mockResolvedValue(null);
+    repository.findWorkflowVideoJob.mockResolvedValue(null);
+    repository.findLatestCinematicArtifact.mockResolvedValue(null);
+
+    const snapshot = await service.getSnapshot(waitingWorkflow.id);
+
+    expect(repository.findLatestCinematicArtifact).toHaveBeenCalledWith(
+      waitingWorkflow.id,
+      "script",
+    );
+    expect(snapshot.currentStage).toBe("script");
+    expect(snapshot.currentArtifact).toBeNull();
+  });
+
+  it("creates a fifteen-minute restart confirmation without starting a run", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      currentStageId: "assets",
+      durationSeconds: 10,
+      pendingRestartId: null,
+    });
+    repository.findLatestActiveStageCheckpoint.mockResolvedValue({ version: 4 });
+
+    const result = await service.interact(waitingWorkflow.id, {
+      type: "restart_request",
+      messageId: "restart-request-message",
+      targetStage: "script",
+      text: "从脚本重新开始，并缩短旁白",
+    });
+
+    expect(result).toMatchObject({ accepted: true, intent: "restart_requested" });
+    expect(repository.requestRestart).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: waitingWorkflow.id,
+      targetStage: "script",
+      expectedVersion: 1,
+    }));
+    expect(runtime.restart).not.toHaveBeenCalled();
+    expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
+      type: "workflow.restart.requested",
+    }));
+    const appendedMessages = conversations.appendMessage.mock.calls
+      .map((call) => call[0] as { content: string; messageId: string; role: string } | undefined)
+      .filter((message): message is { content: string; messageId: string; role: string } => message !== undefined);
+    const confirmationMessage = appendedMessages.find((message) => message.role === "assistant");
+    expect(confirmationMessage).toMatchObject({ role: "assistant" });
+    expect(confirmationMessage?.messageId).toBe(result.restartRequestId);
+    expect(confirmationMessage?.content).toContain("请回复“确认”或“取消”");
+  });
+
+  it("answers in the conversation instead of failing when a request points to a completed previous workflow", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      currentStageId: "proposal",
+      currentVersion: 3,
+    });
+    repository.findPreviousWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      id: "96266859-3b37-4834-afca-734390142ac4",
+      status: "succeeded",
+      currentStageId: "compose",
+      currentVersion: 10,
+    });
+
+    await expect(service.interact(waitingWorkflow.id, {
+      type: "restart_request",
+      messageId: "previous-workflow-restart-message",
+      targetStage: "script",
+      text: "回到前一个已完成的工作流的脚本阶段",
+    })).resolves.toEqual({ accepted: true, intent: "restart_unavailable" });
+
+    expect(repository.findPreviousWorkflow).toHaveBeenCalledWith(
+      waitingWorkflow.conversationId,
+      waitingWorkflow.createdAt,
+      waitingWorkflow.id,
+    );
+    expect(repository.requestRestart).not.toHaveBeenCalled();
+    expect(conversations.appendMessage).toHaveBeenCalledTimes(2);
+    expect(conversations.appendMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      role: "assistant",
+    }));
+  });
+
+  it("atomically claims a confirmation and starts a fresh Mastra run", async () => {
+    const restartRequestId = "00000000-0000-4000-8000-000000000099";
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      currentStageId: "assets",
+      durationSeconds: 10,
+      pendingRestartId: restartRequestId,
+      pendingRestartStage: "script",
+      pendingRestartExpiresAt: new Date("2099-08-12T01:15:00.000Z"),
+    });
+    repository.claimRestart.mockResolvedValue({
+      targetStage: "script",
+      text: "从脚本重新开始",
+      baseVersion: 7,
+      previousArtifactVersion: 3,
+      previousRunId: "run-1",
+    });
+
+    await expect(service.interact(waitingWorkflow.id, {
+      type: "restart_confirm",
+      messageId: "restart-confirm-message",
+      restartRequestId,
+    })).resolves.toEqual({
+      accepted: true,
+      intent: "restart_confirmed",
+      restartRequestId,
+    });
+
+    expect(repository.claimRestart).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: waitingWorkflow.id,
+      pipelineId: "cinematic",
+      restartRequestId,
+      targetStage: "script",
+      stagesToSupersede: ["script", "scene_plan", "assets", "edit", "compose"],
+    }));
+    expect(runtime.restart).toHaveBeenCalledWith(
+      expect.any(Object),
+      7,
+      expect.any(Function),
+    );
+    expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
+      type: "workflow.restart.started",
+    }));
+    expect(conversations.appendMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      conversationId: waitingWorkflow.conversationId,
+      messageId: `${restartRequestId}:started`,
+      role: "assistant",
+      content: "已确认从脚本重新开始，正在生成新的版本。旧版本将作为历史记录保留。",
+    }));
+  });
+
+  it("rejects restart requests while work is drafting or running", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      status: "running",
+      currentStageId: "assets",
+    });
+
+    await expect(service.interact(waitingWorkflow.id, {
+      type: "restart_request",
+      messageId: "restart-running-message",
+      targetStage: "script",
+      text: "从脚本重新开始",
+    })).rejects.toMatchObject({ response: { code: "VIDEO_WORKFLOW_RESTART_NOT_ALLOWED" } });
+    expect(repository.requestRestart).not.toHaveBeenCalled();
   });
 
   it("treats a natural next-stage message as approval", async () => {
@@ -211,7 +519,15 @@ describe("VideoWorkflowService interactions", () => {
       accepted: true,
       intent: "approve",
     });
-    expect(runtime.resume).toHaveBeenCalledWith("run-1", { type: "approve" });
+    expect(runtime.resume).toHaveBeenCalledWith(
+      "run-1",
+      { type: "approve" },
+      {
+        workflowId: waitingWorkflow.id,
+        stage: "proposal",
+        version: 1,
+      },
+    );
   });
 
   it("changes the model while the storyboard is awaiting confirmation", async () => {
@@ -228,13 +544,13 @@ describe("VideoWorkflowService interactions", () => {
   it("requeues a failed provider task without creating another workflow", async () => {
     repository.findWorkflow.mockResolvedValue({ ...waitingWorkflow, status: "failed" });
     repository.findWorkflowVideoJob.mockResolvedValue({
-      id: `${waitingWorkflow.id}-v1`,
+      id: `${waitingWorkflow.id}-version-1`,
       workflowId: waitingWorkflow.id,
       storyboardVersion: 1,
       status: "failed",
       progress: 50,
       providerTaskId: "provider-task-1",
-      objectKey: `tenant/demo/project/demo/render/${waitingWorkflow.id}-v1/video.mp4`,
+      objectKey: `tenant/demo/project/demo/render/${waitingWorkflow.id}-version-1/video.mp4`,
       errorMessage: "fetch failed",
     });
     repository.findStoryboard.mockResolvedValue({
@@ -254,11 +570,11 @@ describe("VideoWorkflowService interactions", () => {
 
     await expect(service.retry(waitingWorkflow.id)).resolves.toEqual({
       accepted: true,
-      jobId: `${waitingWorkflow.id}-v1`,
+      jobId: `${waitingWorkflow.id}-version-1`,
     });
     expect(repository.claimVideoJobRetry).toHaveBeenCalledWith(
       waitingWorkflow.id,
-      `${waitingWorkflow.id}-v1`,
+      `${waitingWorkflow.id}-version-1`,
     );
     expect(operations.retryVideo).toHaveBeenCalledOnce();
     expect(repository.createWorkflow).not.toHaveBeenCalled();
@@ -275,6 +591,21 @@ describe("VideoWorkflowService interactions", () => {
     await expect(service.interact(waitingWorkflow.id, { type: "approve" }))
       .rejects.toBeInstanceOf(ConflictException);
     expect(runtime.resume).not.toHaveBeenCalled();
+  });
+
+  it("recovers a watchdog-stalled agent by restarting its original run", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      status: "failed",
+      failureCode: "AGENT_PROGRESS_STALLED",
+    });
+
+    await expect(service.recover(waitingWorkflow.id)).resolves.toEqual({
+      accepted: true,
+      workflowId: waitingWorkflow.id,
+    });
+    expect(recovery.recoverAgentRun).toHaveBeenCalledWith(waitingWorkflow.id, true);
+    expect(operations.retryVideo).not.toHaveBeenCalled();
   });
 
   it("returns the explicit migration conflict for a Vercel or expired run id", async () => {

@@ -13,4 +13,5 @@ describe("getChatErrorMessage", () => {
   it("returns undefined when there is no error", () => {
     expect(getChatErrorMessage(undefined)).toBeUndefined();
   });
+
 });

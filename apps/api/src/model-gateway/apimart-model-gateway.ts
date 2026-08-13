@@ -8,6 +8,9 @@ import {
   type CinematicGenerativeStage,
   type ChatAgentMessage,
   type VideoModel,
+  WorkflowUserIntentSchema,
+  type WorkflowUserIntent,
+  type WorkflowStageId,
 } from "@chat-to-video/contracts";
 import { StoryboardSchema, type Storyboard } from "@chat-to-video/contracts";
 import { toAISdkStream } from "@mastra/ai-sdk";
@@ -22,6 +25,7 @@ import {
   createChatAgentRequestContext,
   createCinematicAgentRequestContext,
   createStoryboardAgentRequestContext,
+  createWorkflowIntentAgentRequestContext,
   type ChatAgentRequestContext,
   type CinematicAgentRequestContext,
 } from "../agent-extensions/agent-extension.context.js";
@@ -154,7 +158,7 @@ const CINEMATIC_STAGE_DIRECTION: Record<CinematicGenerativeStage, string> = {
   proposal: "Create exactly three emotionally distinct directions, recommend one, lock rendererFamily to ffmpeg, use the requested total duration, and estimate cost proportionally.",
   script: "Create sparse cinematic beats whose integer durations total exactly the requested duration.",
   scene_plan: "Create ordered scenes totaling exactly the requested duration. Every scene must fit within the selected model's single-generation limit; split overflow into additional sequential scenes for the existing per-scene generation and FFmpeg composition workflow. Use generated_video, generated_image, or title_card sources only; no supplied media is authorized.",
-  assets: "Create a scene-linked generated/library asset plan. Never use supplied sourceMode or claim files already exist. Keep every asset status planned, estimate total cost proportionally, and report slideshow risk.",
+  assets: "Create exactly one scene-linked visual asset plan item per approved scene, matching generated_video, generated_image, or title_card. Use sourceMode=generate for every asset and for music because no authorized supplied or library object keys exist. Do not add per-scene audio assets. Keep every asset status planned, estimate total cost proportionally, and report slideshow risk.",
   edit: "Create an FFmpeg edit timeline matching the approved scenes and a coherent final provider prompt. Include explicit quality checks and use the requested total duration.",
 };
 
@@ -298,6 +302,62 @@ export class ApimartModelGateway implements ModelGateway {
     @Inject(AgentExtensionAuditService)
     private readonly audit: ExtensionAuditor = NOOP_EXTENSION_AUDITOR,
   ) {}
+
+  async classifyWorkflowIntent(request: {
+    requestId: string;
+    workflowId: string;
+    conversationId: string;
+    tenantId: string;
+    projectId: string;
+    userMessage: string;
+    workflowStatus: string;
+    currentStage: WorkflowStageId;
+    currentVersion: number;
+    currentArtifactSummary: string;
+    stages: ReadonlyArray<{
+      id: WorkflowStageId;
+      label: string;
+      intentTopics: readonly string[];
+      isRestartable: boolean;
+    }>;
+  }): Promise<WorkflowUserIntent> {
+    const requestContext = createWorkflowIntentAgentRequestContext(request);
+    const prompt = [
+      "Classify the user's intent for the current video workflow checkpoint.",
+      "A question or discussion is chat. A direct acceptance is approve. Acceptance plus requested changes is approve_with_changes.",
+      "Use revise_current when changing only the current artifact is sufficient. Use restart_from only for the earliest upstream stage whose artifact is invalidated.",
+      "Use clarify when the message is genuinely ambiguous. Never choose cancel unless the user clearly asks to stop the workflow.",
+      `Workflow context: ${JSON.stringify({
+        status: request.workflowStatus,
+        currentStage: request.currentStage,
+        currentVersion: request.currentVersion,
+        currentArtifactSummary: request.currentArtifactSummary,
+        stages: request.stages,
+      })}`,
+      `Untrusted user message: ${JSON.stringify(request.userMessage)}`,
+    ].join("\n\n");
+    try {
+      const result = await this.agents.intentRouter.generate(prompt, {
+        abortSignal: AbortSignal.timeout(this.agents.timeoutMs),
+        requestContext,
+        maxSteps: 1,
+        toolChoice: "none",
+        maxProcessorRetries: 0,
+        modelSettings: { maxRetries: 0 },
+        structuredOutput: {
+          schema: WorkflowUserIntentSchema,
+          jsonPromptInjection: this.agents.providerName === "apimart" ? "inline" : false,
+        },
+      });
+      return WorkflowUserIntentSchema.parse(result.object);
+    } catch (error: unknown) {
+      throw new ModelGatewayError(request.requestId, {
+        cause: error,
+        diagnosticMessage: publicModelErrorDetail(error),
+        isRetryable: false,
+      });
+    }
+  }
 
   async inferCinematicDuration(
     request: CinematicDurationInferenceRequest,
@@ -555,9 +615,11 @@ export class ApimartModelGateway implements ModelGateway {
             this.logger.error(
               `${this.agents.providerName} chat stream failed requestId=${request.requestId} error=${error instanceof Error ? error.name : "unknown"}`,
             );
-            return isToolCallingUnsupported(error)
-              ? "当前模型网关不支持工具调用。"
-              : "聊天模型请求失败，请稍后重试。";
+            if (isToolCallingUnsupported(error)) return "AGENT_TOOL_CALLING_UNSUPPORTED";
+            const detail = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+            return /timeout|timed out|aborterror|超时/iu.test(detail)
+              ? "CHAT_TIMEOUT"
+              : "MODEL_GATEWAY_FAILED";
           },
         }),
       };

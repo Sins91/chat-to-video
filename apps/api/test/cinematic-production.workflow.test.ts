@@ -1,9 +1,7 @@
 import type { CinematicArtifact, CinematicGenerativeStage } from "@chat-to-video/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import type { VideoWorkflowOperations } from "../src/video-workflow/video-workflow.operations.js";
 import {
-  CINEMATIC_DIRECTOR_STEP_ID,
   CINEMATIC_WORKFLOW_ID,
   createCinematicWorkflow,
   initialCinematicState,
@@ -127,82 +125,178 @@ const createOperations = () => ({
       });
     },
   ),
+  preflightStageExecution: vi.fn().mockResolvedValue(true),
+  enqueueCinematicAssetBatch: vi.fn().mockResolvedValue(undefined),
   enqueueCinematicVideo: vi.fn().mockResolvedValue(undefined),
+  enqueueCinematicVideoVersion: vi.fn().mockResolvedValue(undefined),
   fail: vi.fn().mockResolvedValue(undefined),
 });
 
 describe("Cinematic production workflow", () => {
-  it("uses stable identifiers and the default durable engine", () => {
+  it("uses stable native step identifiers and the default durable engine", () => {
+    const workflow = createCinematicWorkflow(
+      createOperations(),
+    );
     expect(CINEMATIC_WORKFLOW_ID).toBe("cinematic-production");
-    expect(CINEMATIC_DIRECTOR_STEP_ID).toBe("cinematic-director");
-    expect(createCinematicWorkflow(
-      createOperations() as unknown as VideoWorkflowOperations,
-    ).engineType).toBe("default");
+    expect(workflow.engineType).toBe("default");
   });
 
-  it("moves through approval gates, supports revision, and ends after queue handoff", async () => {
+  it("runs native steps, revises one review step, and hands off assets exactly once", async () => {
     const operations = createOperations();
     const workflow = createCinematicWorkflow(
-      operations as unknown as VideoWorkflowOperations,
+      operations,
     );
     const run = await workflow.createRun();
 
-    expect((await run.start({ inputData: input, initialState: initialCinematicState() })).status)
+    expect((await run.start({ inputData: input, initialState: initialCinematicState(input) })).status)
       .toBe("suspended");
-    expect((await run.resume({ step: CINEMATIC_DIRECTOR_STEP_ID, resumeData: { type: "approve" } })).status)
+    expect((await run.resume({ step: "proposal", resumeData: { type: "approve" } })).status)
       .toBe("suspended");
-    expect((await run.resume({ step: CINEMATIC_DIRECTOR_STEP_ID, resumeData: { type: "approve" } })).status)
+    expect((await run.resume({ step: "script", resumeData: { type: "approve" } })).status)
       .toBe("suspended");
     expect((await run.resume({
-      step: CINEMATIC_DIRECTOR_STEP_ID,
-      resumeData: { type: "message", messageId: "message-1", text: "Use a lower camera angle" },
+      step: "scene-plan",
+      resumeData: { type: "message", messageId: "message-revision", text: "Use a lower camera angle" },
     })).status).toBe("suspended");
-    expect((await run.resume({ step: CINEMATIC_DIRECTOR_STEP_ID, resumeData: { type: "approve" } })).status)
+    expect((await run.resume({ step: "scene-plan", resumeData: { type: "approve" } })).status)
       .toBe("suspended");
-    expect((await run.resume({ step: CINEMATIC_DIRECTOR_STEP_ID, resumeData: { type: "approve" } })).status)
+    expect((await run.resume({ step: "assets", resumeData: { type: "approve" } })).status)
       .toBe("success");
 
-    expect(operations.generateCinematicArtifact).toHaveBeenCalledTimes(7);
-    expect(operations.enqueueCinematicVideo).toHaveBeenCalledOnce();
+    expect(operations.generateCinematicArtifact).toHaveBeenCalledTimes(6);
+    expect(operations.enqueueCinematicAssetBatch).toHaveBeenCalledOnce();
+    expect(operations.enqueueCinematicAssetBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 6 }),
+    );
+    expect(operations.enqueueCinematicVideoVersion).not.toHaveBeenCalled();
   });
 
-  it("persists rounded per-scene durations and suspends for confirmation again", async () => {
+  it("continues from approved assets in a new run and enqueues final composition", async () => {
+    const operations = createOperations();
+    const workflow = createCinematicWorkflow(operations);
+    const continuationInput = {
+      ...input,
+      continuation: { kind: "assets_approved" as const, baseVersion: 6 },
+    };
+    const run = await workflow.createRun();
+    const result = await run.start({
+      inputData: continuationInput,
+      initialState: initialCinematicState(continuationInput, 6),
+    });
+
+    expect(result.status).toBe("success");
+    expect(operations.generateCinematicArtifact).toHaveBeenCalledOnce();
+    expect(operations.generateCinematicArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "edit", version: 7 }),
+    );
+    expect(operations.enqueueCinematicVideoVersion).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 7 }),
+    );
+  });
+
+  it("starts a replacement run at its target without replaying earlier paid steps", async () => {
     const operations = createOperations();
     const workflow = createCinematicWorkflow(
-      operations as unknown as VideoWorkflowOperations,
+      operations,
     );
+    const restartInput = {
+      ...input,
+      restart: {
+        restartRequestId: "00000000-0000-4000-8000-000000000099",
+        targetStage: "assets" as const,
+        text: "Use practical source footage",
+        previousArtifactVersion: 6,
+      },
+    };
     const run = await workflow.createRun();
+    const result = await run.start({
+      inputData: restartInput,
+      initialState: initialCinematicState(restartInput, 8),
+    });
 
-    await run.start({ inputData: input, initialState: initialCinematicState() });
-    await run.resume({ step: CINEMATIC_DIRECTOR_STEP_ID, resumeData: { type: "approve" } });
-    await run.resume({ step: CINEMATIC_DIRECTOR_STEP_ID, resumeData: { type: "approve" } });
+    expect(result.status).toBe("suspended");
+    expect(operations.generateCinematicArtifact).toHaveBeenCalledOnce();
+    expect(operations.generateCinematicArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "assets",
+        version: 9,
+        previousArtifactVersion: 6,
+      }),
+    );
+    expect(operations.enqueueCinematicVideoVersion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["proposal", "proposal"],
+    ["script", "script"],
+    ["scene_plan", "scene-plan"],
+    ["assets", "assets"],
+  ] as const)("revises %s in the same native step and suspends again", async (targetStage, stepId) => {
+    const operations = createOperations();
+    const workflow = createCinematicWorkflow(operations);
+    const restartInput = {
+      ...input,
+      restart: {
+        restartRequestId: "00000000-0000-4000-8000-000000000099",
+        targetStage,
+        text: `Restart ${targetStage}`,
+        previousArtifactVersion: 6,
+      },
+    };
+    const run = await workflow.createRun();
+    await run.start({ inputData: restartInput, initialState: initialCinematicState(restartInput, 8) });
     const result = await run.resume({
-      step: CINEMATIC_DIRECTOR_STEP_ID,
+      step: stepId,
+      resumeData: { type: "message", messageId: `revise-${targetStage}`, text: "Try another direction" },
+    });
+
+    expect(result.status).toBe("suspended");
+    expect(operations.generateCinematicArtifact).toHaveBeenCalledTimes(2);
+    expect(operations.generateCinematicArtifact).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        stage: targetStage,
+        version: 10,
+        previousArtifactVersion: 9,
+        revisionRequest: "Try another direction",
+      }),
+    );
+  });
+
+  it("persists scene duration revisions and rejects them at other review steps", async () => {
+    const operations = createOperations();
+    const workflow = createCinematicWorkflow(operations);
+    const run = await workflow.createRun();
+    await run.start({ inputData: input, initialState: initialCinematicState(input) });
+    await run.resume({ step: "proposal", resumeData: { type: "approve" } });
+    await run.resume({ step: "script", resumeData: { type: "approve" } });
+    const revised = await run.resume({
+      step: "scene-plan",
       resumeData: {
         type: "scene_durations",
-        messageId: "scene-duration-message",
+        messageId: "duration-update",
         scenes: [
           { order: 1, durationSeconds: 5 },
           { order: 2, durationSeconds: 5 },
         ],
       },
     });
-
-    expect(result.status).toBe("suspended");
+    expect(revised.status).toBe("suspended");
     expect(operations.applySceneDurations).toHaveBeenCalledWith(
-      expect.objectContaining({
-        version: 5,
-        scenes: [
-          { order: 1, durationSeconds: 5 },
-          { order: 2, durationSeconds: 5 },
-        ],
-      }),
+      expect.objectContaining({ version: 5 }),
     );
-    expect(operations.activateCinematicArtifact).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        version: 5,
-        requiresApproval: true,
-      }),
-    );
+
+    const invalidOperations = createOperations();
+    const invalidRun = await createCinematicWorkflow(invalidOperations).createRun();
+    await invalidRun.start({ inputData: input, initialState: initialCinematicState(input) });
+    const invalid = await invalidRun.resume({
+      step: "proposal",
+      resumeData: {
+        type: "scene_durations",
+        messageId: "invalid-duration-update",
+        scenes: [{ order: 1, durationSeconds: 10 }],
+      },
+    });
+    expect(invalid.status).toBe("failed");
+    expect(invalidOperations.fail).toHaveBeenCalledOnce();
   });
 });

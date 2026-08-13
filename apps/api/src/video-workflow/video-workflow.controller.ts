@@ -15,10 +15,13 @@ import {
 import {
   CreateVideoWorkflowRequestSchema,
   type RetryVideoWorkflowResponse,
+  type RecoverVideoWorkflowResponse,
   UpdateVideoWorkflowModelRequestSchema,
   VideoWorkflowEventSchema,
   VideoWorkflowIdSchema,
   VideoWorkflowInteractionSchema,
+  ResolveWorkflowUserIntentRequestSchema,
+  type ResolveWorkflowUserIntentResponse,
   type CreateVideoWorkflowResponse,
   type UpdateVideoWorkflowModelResponse,
   type VideoWorkflowInteractionResult,
@@ -81,12 +84,33 @@ export class VideoWorkflowController {
     return this.workflows.retry(parseWorkflowId(workflowId));
   }
 
+  @Post(":workflowId/recover")
+  @HttpCode(HttpStatus.ACCEPTED)
+  recover(@Param("workflowId") workflowId: unknown): Promise<RecoverVideoWorkflowResponse> {
+    return this.workflows.recover(parseWorkflowId(workflowId));
+  }
+
   @Post(":workflowId/interactions")
   @HttpCode(HttpStatus.ACCEPTED)
   async interact(@Param("workflowId") workflowId: unknown, @Body() body: unknown): Promise<VideoWorkflowInteractionResult> {
     const parsed = VideoWorkflowInteractionSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException({ code: "INVALID_VIDEO_WORKFLOW_INTERACTION", message: "Video workflow interaction is invalid.", issues: parsed.error.issues });
     return this.workflows.interact(parseWorkflowId(workflowId), parsed.data);
+  }
+
+  @Post(":workflowId/intent")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async resolveIntent(
+    @Param("workflowId") workflowId: unknown,
+    @Body() body: unknown,
+  ): Promise<ResolveWorkflowUserIntentResponse> {
+    const parsed = ResolveWorkflowUserIntentRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException({
+      code: "INVALID_WORKFLOW_INTENT_REQUEST",
+      message: "Workflow intent request is invalid.",
+      issues: parsed.error.issues,
+    });
+    return this.workflows.resolveUserIntent(parseWorkflowId(workflowId), parsed.data);
   }
 
   @Get(":workflowId/events")

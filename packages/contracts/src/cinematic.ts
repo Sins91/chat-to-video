@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { defineWorkflowPipeline } from "./workflow-pipeline.js";
+
 export const CinematicStageSchema = z.enum([
   "research",
   "proposal",
@@ -11,6 +13,19 @@ export const CinematicStageSchema = z.enum([
 ]);
 
 export const CinematicGenerativeStageSchema = CinematicStageSchema.exclude(["compose"]);
+
+export const CINEMATIC_PIPELINE_DEFINITION = defineWorkflowPipeline({
+  id: "cinematic",
+  stages: [
+    { id: "research", label: "创作研究", aliases: ["创作研究", "研究", "research"], stepId: "research", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["参考资料", "创作约束", "调研"], ownedArtifactKinds: ["research_brief"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+    { id: "proposal", label: "创意方案", aliases: ["创意方案", "方案阶段", "proposal"], stepId: "proposal", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["主题", "受众", "概念", "风格", "预算", "供应商"], ownedArtifactKinds: ["proposal"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+    { id: "script", label: "脚本", aliases: ["脚本", "文案阶段", "script"], stepId: "script", stepLabel: "脚本生成", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["剧情", "文案", "旁白", "叙事节奏"], ownedArtifactKinds: ["script"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+    { id: "scene_plan", label: "分镜写作", aliases: ["分镜", "分镜写作", "场景规划", "scene plan", "storyboard"], stepId: "scene-plan", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["镜头", "场景顺序", "运镜", "逐镜时长"], ownedArtifactKinds: ["scene_plan"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: ["video.probe"], conditional: [] } },
+    { id: "assets", label: "素材规划", aliases: ["素材规划", "素材阶段", "asset", "assets"], stepId: "assets", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["图片", "视频", "音乐", "声音素材"], ownedArtifactKinds: ["asset_manifest"], allowsAutoAdvanceAfterRevision: false, executionReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [{ capability: "video.generate", when: "motion_required_without_source_video" }, { capability: "image.generate", when: "generated_image_planned" }, { capability: "image.render.title-card", when: "title_card_planned" }, { capability: "music.generate", when: "music_generation_selected" }] } },
+    { id: "edit", label: "剪辑方案", aliases: ["剪辑方案", "剪辑", "edit"], stepId: "edit", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["剪辑", "字幕", "同步", "转场"], ownedArtifactKinds: ["edit_decisions"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+    { id: "compose", label: "视频生成", aliases: ["视频生成", "合成", "compose"], stepId: "video-generation", producesArtifact: false, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["编码", "分辨率", "音量", "成片"], ownedArtifactKinds: ["render_output"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: ["video.compose.ffmpeg"], optional: ["video.probe"], conditional: [{ capability: "audio.mix", when: "audio_asset_planned" }] } },
+  ],
+});
 
 export const CinematicDurationSecondsSchema = z.number().int().min(4).max(300);
 export const CinematicClipDurationSecondsSchema = z.number().int().min(1).max(15);
@@ -184,11 +199,18 @@ export const CinematicArtifactVersionSchema = z.object({
   version: z.number().int().positive(),
   revisionRequest: z.string().trim().min(1).max(2_000).nullable(),
   artifact: CinematicArtifactSchema,
+  isSuperseded: z.boolean().default(false),
+  supersededAt: z.string().datetime({ offset: true }).nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
 }).strict();
 
 export const CinematicRenderSceneSchema = CinematicSceneSchema.extend({
   generationDurationSeconds: CinematicClipDurationSecondsSchema,
+  assetObjectKey: z.string()
+    .regex(/^tenant\/demo\/project\/demo\/derived\/[a-zA-Z0-9-]+\/[a-zA-Z0-9._-]+$/u)
+    .refine((value) => !value.includes(".."), "Asset object key is unsafe.")
+    .optional(),
+  assetMimeType: z.enum(["video/mp4", "image/png", "image/jpeg"]).optional(),
 });
 
 export const CinematicRenderPlanSchema = z.object({
@@ -196,7 +218,23 @@ export const CinematicRenderPlanSchema = z.object({
   durationSeconds: CinematicDurationSecondsSchema,
   modelMaxDurationSeconds: CinematicClipDurationSecondsSchema,
   scenes: z.array(CinematicRenderSceneSchema).min(1).max(60),
+  music: z.object({
+    objectKey: z.string()
+      .regex(/^tenant\/demo\/project\/demo\/derived\/[a-zA-Z0-9-]+\/[a-zA-Z0-9._-]+$/u)
+      .refine((value) => !value.includes(".."), "Music object key is unsafe."),
+    mimeType: z.enum(["audio/wav", "audio/mp4", "audio/mpeg"]),
+    gainDb: z.number().min(-60).max(12).default(-12),
+  }).strict().optional(),
 }).strict().superRefine((plan, context) => {
+  plan.scenes.forEach((scene, index) => {
+    if ((scene.assetObjectKey === undefined) !== (scene.assetMimeType === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "Render scene asset key and MIME must be provided together.",
+        path: ["scenes", index, "assetObjectKey"],
+      });
+    }
+  });
   if (plan.scenes.some((scene) => scene.generationDurationSeconds > plan.modelMaxDurationSeconds)) {
     context.addIssue({ code: "custom", message: "Every scene must fit within the selected model's single-generation limit.", path: ["scenes"] });
   }

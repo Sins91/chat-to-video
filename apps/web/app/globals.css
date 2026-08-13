@@ -18,6 +18,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-ring: var(--ring);
   --font-sans: "Noto Sans SC Variable", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-numeric: "Roboto Mono Variable", ui-monospace, "SFMono-Regular", "Cascadia Code", monospace;
 }
 
 @layer base {
@@ -28,11 +29,7 @@
   :where(button, a, input, textarea, select):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 }
 
-.brand-text { background: linear-gradient(90deg, #d919fa, #2d9bff); background-clip: text; color: transparent; }
-.cover-art { background: linear-gradient(145deg, rgb(11 12 16 / 10%), rgb(11 12 16 / 72%)), radial-gradient(circle at 25% 20%, #d7b0ff 0, transparent 30%), radial-gradient(circle at 75% 35%, #75b9ff 0, transparent 34%), linear-gradient(135deg, #513067, #14344c); }
-.cover-art-warm { background: linear-gradient(145deg, rgb(11 12 16 / 5%), rgb(11 12 16 / 70%)), radial-gradient(circle at 25% 20%, #ffd299 0, transparent 30%), radial-gradient(circle at 75% 35%, #e46573 0, transparent 34%), linear-gradient(135deg, #694636, #401b28); }
 .checkerboard { background-color: #111317; background-image: linear-gradient(45deg, #181b20 25%, transparent 25%), linear-gradient(-45deg, #181b20 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #181b20 75%), linear-gradient(-45deg, transparent 75%, #181b20 75%); background-position: 0 0, 0 12px, 12px -12px, -12px 0; background-size: 24px 24px; }
-.studio-film-frame > div { height: 100%; min-height: 0; }
 
 .studio-theme {
   min-height: 100dvh;
@@ -197,6 +194,7 @@
   --shadow-md: var(--elevation-panel);
   --shadow-lg: var(--elevation-overlay);
   --font-sans: "Noto Sans SC Variable", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-numeric: "Roboto Mono Variable", ui-monospace, "SFMono-Regular", "Cascadia Code", monospace;
   --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", monospace;
 }
 
@@ -222,7 +220,7 @@
     linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--foreground) 5%, transparent) 75%);
 }
 
-/* Compatibility for the ported prototype. New UI should use semantic utilities. */
+/* Compatibility for historical Agent artifact styles. New UI should use semantic utilities. */
 .studio-theme .bg-white,
 .studio-theme [class~="bg-[#101216]"],
 .studio-theme [class~="bg-[#111315]"],

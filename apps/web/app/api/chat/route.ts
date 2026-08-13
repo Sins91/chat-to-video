@@ -9,7 +9,8 @@ const FORWARDED_RESPONSE_HEADERS = [
 ] as const;
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 35;
+// Keep the BFF alive slightly longer than the 10-minute model timeout so the API can persist a final fallback.
+export const maxDuration = 610;
 
 export const getApiBaseUrl = (): string => {
   const configured = process.env.API_BASE_URL?.trim() || DEFAULT_API_BASE_URL;

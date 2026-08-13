@@ -7,6 +7,7 @@ const APPROVAL_CASES = [
   "一定", "必定", "必然", "势必", "毫无疑问", "毋庸置疑", "千真万确", "确凿无疑", "不容置疑", "确定无疑",
   "同意", "赞成", "认可", "认同", "支持", "赞许", "首肯", "赞同", "通过",
   "嗯", "对啊", "是的", "没问题", "可以的", "当然啦", "行啊", "好的", "收到", "明白",
+  "要的嘛", "要得嘛", "要得", "阔以", "阔以阔以", "可以可以",
   "确认", "肯定", "承认", "证实", "确认无误", "予以肯定", "表示赞同",
   "Yes", "Yeah", "Yep", "Right", "Correct", "OK", "Okay", "Sure", "Exactly",
   "Absolutely", "Definitely", "Certainly", "Definitely yes", "Without a doubt", "Undoubtedly", "Exactly right", "100%",
@@ -20,7 +21,7 @@ describe("classifyApprovalIntent", () => {
     expect(classifyApprovalIntent(message)).toBe("approve");
   });
 
-  it.each(["好的！", "  I AGREE. ", "我完全同意这个方案，请继续", "Okay, please proceed"])(
+  it.each(["好的！", "我看行", "我觉得行", "这样行", "这版行", "  I AGREE. ", "我完全同意这个方案，请继续", "Okay, please proceed"])(
     "normalizes conversational approval: %s",
     (message) => expect(classifyApprovalIntent(message)).toBe("approve"),
   );

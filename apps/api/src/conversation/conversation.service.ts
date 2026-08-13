@@ -12,7 +12,7 @@ import { VideoWorkflowService } from "../video-workflow/video-workflow.service.j
 import { CONVERSATION_REPOSITORY } from "../video-workflow/video-workflow.tokens.js";
 import { createConversationTitle } from "./conversation-title.js";
 
-type Cursor = { updatedAt: Date; id: string };
+type Cursor = { createdAt: Date; id: string };
 
 const parseMessageRole = (role: string): "user" | "assistant" => {
   if (role === "user" || role === "assistant") return role;
@@ -20,17 +20,17 @@ const parseMessageRole = (role: string): "user" | "assistant" => {
 };
 
 const encodeCursor = (cursor: Cursor): string =>
-  Buffer.from(JSON.stringify({ updatedAt: cursor.updatedAt.toISOString(), id: cursor.id }), "utf8").toString("base64url");
+  Buffer.from(JSON.stringify({ createdAt: cursor.createdAt.toISOString(), id: cursor.id }), "utf8").toString("base64url");
 
 const decodeCursor = (value: string | undefined): Cursor | null => {
   if (!value) return null;
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
-    if (typeof parsed !== "object" || parsed === null || !("updatedAt" in parsed) || !("id" in parsed)) return null;
-    if (typeof parsed.updatedAt !== "string" || typeof parsed.id !== "string") return null;
-    const updatedAt = new Date(parsed.updatedAt);
-    if (Number.isNaN(updatedAt.getTime())) return null;
-    return { updatedAt, id: parsed.id };
+    if (typeof parsed !== "object" || parsed === null || !("createdAt" in parsed) || !("id" in parsed)) return null;
+    if (typeof parsed.createdAt !== "string" || typeof parsed.id !== "string") return null;
+    const createdAt = new Date(parsed.createdAt);
+    if (Number.isNaN(createdAt.getTime())) return null;
+    return { createdAt, id: parsed.id };
   } catch {
     return null;
   }
@@ -111,19 +111,51 @@ export class ConversationService {
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
       })),
-      nextCursor: hasMore && last ? encodeCursor({ updatedAt: last.updatedAt, id: last.id }) : null,
+      nextCursor: hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null,
     });
   }
 
   async get(conversationId: string): Promise<ConversationDetail> {
     const conversation = await this.repository.findActiveConversation(conversationId);
     if (!conversation) throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
-    const [messages, storyboards, cinematicArtifacts, workflow] = await Promise.all([
+    const workflow = await this.repository.findWorkflow(conversationId);
+    const [messages, storyboards, cinematicArtifacts, archivedOutputs] = await Promise.all([
       this.repository.listMessages(conversationId),
       this.repository.listStoryboardVersions(conversationId),
       this.repository.listCinematicArtifacts(conversationId),
-      this.repository.findWorkflow(conversationId),
+      this.repository.listArchivedVideoOutputs(conversationId, workflow?.id ?? null),
     ]);
+    const findVideoTitle = (workflowId: string, version: number): string | null => {
+      const storyboard = storyboards.find((row) =>
+        row.workflowId === workflowId && row.version === version
+      );
+      if (storyboard) return storyboard.storyboard.title;
+      let title: string | null = null;
+      let titleVersion = 0;
+      for (const row of cinematicArtifacts) {
+        if (
+          row.workflowId !== workflowId
+          || row.version > version
+          || row.version < titleVersion
+          || row.artifact.stage !== "script"
+        ) continue;
+        title = row.artifact.data.title;
+        titleVersion = row.version;
+      }
+      return title;
+    };
+    const archivedVideoEntries = await Promise.all(
+      archivedOutputs.map(async (row) => ({
+        id: row.id,
+        type: "archived_video" as const,
+        workflowId: row.workflowId,
+        jobId: row.jobId,
+        storyboardVersion: row.storyboardVersion,
+        videoTitle: findVideoTitle(row.workflowId, row.storyboardVersion),
+        playbackUrl: await this.workflows.createArchivedPlaybackUrl(row.objectKey),
+        createdAt: row.createdAt.toISOString(),
+      })),
+    );
     const entries = [
       ...messages.map((message) => ({
         id: message.messageId,
@@ -152,10 +184,13 @@ export class ConversationService {
           version: row.version,
           revisionRequest: row.revisionRequest,
           artifact: row.artifact,
+          isSuperseded: row.supersededAt !== null,
+          supersededAt: row.supersededAt?.toISOString() ?? null,
           createdAt: row.createdAt.toISOString(),
         },
         createdAt: row.createdAt.toISOString(),
       })),
+      ...archivedVideoEntries,
     ].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
     const videoWorkflow = workflow ? await this.workflows.getSnapshot(workflow.id) : null;
     return ConversationDetailSchema.parse({

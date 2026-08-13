@@ -1,69 +1,423 @@
 "use client";
 
-import type { ConversationEntry, StoryboardVersion, VideoWorkflowSnapshot, WorkflowStepProgress } from "@chat-to-video/contracts";
+import {
+  CINEMATIC_PIPELINE_DEFINITION,
+  findWorkflowStage,
+  type ConversationEntry,
+  type StoryboardVersion,
+  type VideoWorkflowSnapshot,
+  type WorkflowStepProgress,
+} from "@chat-to-video/contracts";
 import type { ChatStatus, UIMessage } from "ai";
-import { CircleAlertIcon, Clock3Icon, MessageSquareTextIcon, RotateCcwIcon, SparklesIcon } from "lucide-react";
-import { memo } from "react";
+import {
+  CheckCircle2Icon,
+  CheckIcon,
+  CircleAlertIcon,
+  CircleDashedIcon,
+  Clock3Icon,
+  CopyIcon,
+  LoaderCircleIcon,
+  PauseCircleIcon,
+  RotateCcwIcon,
+} from "lucide-react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { StickToBottomContext } from "use-stick-to-bottom";
 
 import { Button } from "@/components/ui/button";
-import { CinematicArtifactCard } from "@/components/video-workflow/cinematic-artifact-card";
-import { WorkflowStepStatusCard } from "@/components/video-workflow/workflow-step-status-card";
+import { VideoDownloadContextMenu } from "@/components/video-workflow/video-download-context-menu";
+import type { ChatScrollRestoreRequest, ChatViewportController } from "@/components/video-workflow/video-workflow-provider";
+import { getVideoModelPresentation } from "@/lib/video-models";
+import { getVideoOutputEstimate } from "@/lib/video-output-estimate";
+import { getChatVideoFocusScrollTop } from "@/lib/chat-video-focus";
+import {
+  clearProcessingStartedAt,
+  readProcessingStartedAt,
+  saveProcessingStartedAt,
+} from "@/lib/conversation-processing-time";
+import { insertConversationTimelineMarker } from "@/lib/conversation-timeline";
+import {
+  getCinematicStageLabel,
+  getCinematicArtifactDuration,
+  getCinematicArtifactSummary,
+} from "@/components/video-workflow/cinematic-artifact-presentation";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/src/components/ai-elements/conversation";
-import { Message, MessageContent, MessageResponse } from "@/src/components/ai-elements/message";
+import {
+  ChainOfThought,
+  ChainOfThoughtContent,
+  ChainOfThoughtHeader,
+  ChainOfThoughtStep,
+  type ChainOfThoughtStepStatus,
+} from "@/src/components/ai-elements/chain-of-thought";
+import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/src/components/ai-elements/message";
 import { Shimmer } from "@/src/components/ai-elements/shimmer";
 
 interface ChatConversationProps {
   conversationId: string | null;
   entries: ConversationEntry[];
-  hasChatError: boolean;
+  isAgentProcessing: boolean;
   isLoadingHistory: boolean;
   isWorkflowSubmitting: boolean;
   messages: UIMessage[];
-  onChatRegenerate: () => void;
   onRetryWorkflow: () => void;
-  onSceneDurationsSubmit: (scenes: ReadonlyArray<{ order: number; durationSeconds: number }>) => void;
+  onRecoverWorkflow: () => void;
   snapshot: VideoWorkflowSnapshot | null;
   status: ChatStatus;
+  videoFocusRequest: { requestId: number; videoId: string } | null;
+  scrollRestoreRequest: ChatScrollRestoreRequest | null;
+  onViewportControllerChange: (controller: ChatViewportController | null) => void;
   workflowErrorMessage: string | null;
   workflowStepProgress: WorkflowStepProgress | null;
 }
 
-const TextMessage = ({ id, role, text }: { id: string; role: "user" | "assistant"; text: string }) =>
-  <Message from={role} key={id}><MessageContent>{role === "assistant" ? <MessageResponse>{text}</MessageResponse> : <span>{text}</span>}</MessageContent></Message>;
+type CopyFeedback = { id: string; state: "copied" | "failed" } | null;
+const WORKFLOW_REVIEW_ACTION_PATTERN = /(无需确认|确认|修改|取消)/u;
+const RESTART_CONFIRMATION_NOTICE = "请回复“确认”或“取消”。";
 
-const StoryboardCard = ({ canReview, version }: { canReview: boolean; version: StoryboardVersion }) =>
-  <article className="rounded-2xl border border-white/10 bg-[#121418] p-5 text-zinc-200">
-    <div className="flex items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-500/15 text-violet-300"><SparklesIcon className="size-4" /></span><div><p className="text-[11px] uppercase tracking-[0.18em] text-violet-300/80">分镜方案 V{version.version}</p><h2 className="mt-1 text-lg font-semibold text-zinc-100">{version.storyboard.title}</h2><p className="mt-2 text-sm leading-6 text-zinc-400">{version.storyboard.creativeSummary}</p></div></div>
-    <ol className="mt-5 space-y-3">{version.storyboard.shots.map((shot) => <li className="rounded-xl border border-white/8 bg-black/15 p-4" key={shot.order}>
-      <div className="flex items-center gap-2"><span className="text-xs font-semibold text-zinc-200">镜头 {shot.order}</span><span className="ml-auto inline-flex items-center gap-1 text-[11px] text-zinc-500"><Clock3Icon className="size-3" />{shot.durationSeconds}s</span></div>
-      <p className="mt-2 text-sm leading-6 text-zinc-300">{shot.scene}：{shot.subjectAction}</p>
-      <p className="mt-2 text-xs leading-5 text-zinc-500">运镜：{shot.camera} · 视觉：{shot.visualStyle} · 声音：{shot.audio}</p>
-    </li>)}</ol>
-    <details className="mt-4 rounded-xl border border-white/8 bg-black/15 px-4 py-3"><summary className="cursor-pointer text-xs text-zinc-400">查看最终视频提示词</summary><p className="mt-3 whitespace-pre-wrap text-xs leading-6 text-zinc-400">{version.storyboard.videoPrompt}</p></details>
-    {canReview ? <p className="mt-5 rounded-xl border border-violet-500/20 bg-violet-500/10 px-4 py-3 text-xs leading-5 text-violet-200">回复“确认生成”继续创建视频，或直接输入分镜修改意见。</p> : null}
-  </article>;
+const formatProcessingTime = (totalSeconds: number): string => {
+  const normalizedSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(normalizedSeconds / 3_600);
+  const minutes = Math.floor((normalizedSeconds % 3_600) / 60);
+  const seconds = normalizedSeconds % 60;
+  return [
+    hours > 0 ? `${hours}小时` : null,
+    minutes > 0 ? `${minutes}分钟` : null,
+    `${seconds}秒`,
+  ].filter((part): part is string => part !== null).join("");
+};
+
+const ProcessingTimeHeader = ({ seconds }: { seconds: number }) => <div className="mb-2">
+  <div className="flex items-center gap-1.5 text-xs text-muted-foreground opacity-75" role="timer">
+    <Clock3Icon aria-hidden="true" className="size-3" />
+    <span className="inline-flex items-baseline gap-1">
+      <span className="font-sans">处理时间</span>
+      <span className="font-numeric tabular-nums uppercase">{formatProcessingTime(seconds)}</span>
+    </span>
+  </div>
+  <div className="mt-2 h-px w-full bg-gradient-to-r from-border/35 via-border/80 to-border/35" role="separator" />
+</div>;
+
+const WorkflowReviewNotice = ({ text }: { text: string }) => <p className="mt-2 text-[13px] font-medium leading-5 text-muted-foreground" role="status">
+  {text.split(WORKFLOW_REVIEW_ACTION_PATTERN).map((part, index) => <span className={part === "无需确认" || part === "确认" || part === "修改" || part === "取消" ? "text-warning-foreground" : undefined} key={`${part}-${index}`}>{part}</span>)}
+</p>;
+
+const splitRestartConfirmationMessage = (text: string): { notice?: string; text: string } => {
+  const suffix = `\n\n${RESTART_CONFIRMATION_NOTICE}`;
+  return text.endsWith(suffix) && text.startsWith("**确认从")
+    ? { text: text.slice(0, -suffix.length), notice: RESTART_CONFIRMATION_NOTICE }
+    : { text };
+};
+
+const TextMessage = ({ copyFeedback, id, notice, onCopy, processingSeconds = 0, role, text }: {
+  copyFeedback: CopyFeedback;
+  id: string;
+  notice?: string;
+  onCopy: (id: string, text: string) => void;
+  processingSeconds?: number;
+  role: UIMessage["role"];
+  text: string;
+}) => {
+  const isCopied = copyFeedback?.id === id && copyFeedback.state === "copied";
+  const hasCopyFailed = copyFeedback?.id === id && copyFeedback.state === "failed";
+  const copyLabel = isCopied ? "已复制" : hasCopyFailed ? "复制失败" : "复制";
+  const copyText = notice ? `${text}\n\n${notice}` : text;
+  return <Message className={role === "assistant" ? "max-w-full" : undefined} from={role}>
+    <MessageContent className={role === "assistant" ? "w-full" : undefined}>{role === "assistant" ? <><ProcessingTimeHeader seconds={processingSeconds} /><MessageResponse className="cursor-text">{text}</MessageResponse>{notice ? <WorkflowReviewNotice text={notice} /> : null}</> : <span className="cursor-text whitespace-pre-wrap">{text}</span>}</MessageContent>
+    {text ? <MessageActions className={`opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${role === "user" ? "self-end" : ""} ${copyFeedback?.id === id ? "opacity-100" : ""}`}>
+      <MessageAction aria-live="polite" label={copyLabel} onClick={() => onCopy(id, copyText)} tooltip={copyLabel}>
+        {isCopied ? <CheckIcon className="size-3.5 text-success" /> : <CopyIcon className="size-3.5" />}
+      </MessageAction>
+    </MessageActions> : null}
+  </Message>;
+};
+
+const AssistantSurface = ({ children, processingSeconds = 0 }: { children: ReactNode; processingSeconds?: number }) =>
+  <Message className="max-w-full" from="assistant"><MessageContent className="w-full"><ProcessingTimeHeader seconds={processingSeconds} />{children}</MessageContent></Message>;
+
+const WORKFLOW_PROGRESS_STALL_THRESHOLD_MS = 90_000;
+const WORKFLOW_PROGRESS_CLOCK_INTERVAL_MS = 5_000;
+
+const formatProgressSilence = (silenceMs: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(silenceMs / 1_000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds} 秒`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes} 分钟` : `${minutes} 分 ${seconds} 秒`;
+};
+
+const ArchivedVideoMessage = ({
+  entry,
+  title,
+  processingSeconds,
+}: {
+  entry: Extract<ConversationEntry, { type: "archived_video" }>;
+  title: string;
+  processingSeconds?: number;
+}) => {
+  return <AssistantSurface processingSeconds={processingSeconds}>
+    <div className="rounded-xl border border-border bg-muted/30 p-3">
+      <p className="text-[13px] font-medium text-foreground">视频生成完成</p>
+      <p className="mt-1 text-xs text-muted-foreground">该轮生成阶段和成片已保留 · V{entry.storyboardVersion}</p>
+      <VideoDownloadContextMenu
+        triggerClassName="mt-3 block w-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        video={{ id: entry.jobId, playbackUrl: entry.playbackUrl, title }}
+      >
+          <video className="max-h-80 w-full rounded-lg bg-black" controls playsInline src={entry.playbackUrl}>
+            你的浏览器不支持视频播放。
+          </video>
+      </VideoDownloadContextMenu>
+    </div>
+  </AssistantSurface>;
+};
+
+const WorkflowActivityText = ({
+  processingSeconds,
+  progress,
+  showProgressMeta = true,
+}: {
+  processingSeconds: number;
+  progress: WorkflowStepProgress;
+  showProgressMeta?: boolean;
+}) => {
+  const progressSignature = JSON.stringify([
+    progress.stepId,
+    progress.stepState,
+    progress.stepIndex,
+    progress.stepTotal,
+    progress.message,
+    progress.toolActivity,
+  ]);
+  const lastProgressAtMs = useMemo(() => Date.now(), [progressSignature]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!showProgressMeta || progress.stepState !== "running") {
+      return;
+    }
+    const timerId = window.setInterval(() => setNowMs(Date.now()), WORKFLOW_PROGRESS_CLOCK_INTERVAL_MS);
+    return () => window.clearInterval(timerId);
+  }, [progress.stepState, showProgressMeta]);
+
+  const detail = progress.toolActivity?.summary ?? progress.message;
+  const status: ChainOfThoughtStepStatus = progress.stepState === "running"
+    ? "active"
+    : progress.stepState === "completed"
+      ? "complete"
+      : "pending";
+  const StepIcon = progress.stepState === "running"
+    ? LoaderCircleIcon
+    : progress.stepState === "completed"
+      ? CheckCircle2Icon
+      : progress.stepState === "failed"
+        ? CircleAlertIcon
+        : progress.stepState === "awaiting_input"
+          ? PauseCircleIcon
+          : CircleDashedIcon;
+  const silenceMs = Math.max(0, nowMs - lastProgressAtMs);
+  const isPossiblyStalled = progress.stepState === "running"
+    && silenceMs >= WORKFLOW_PROGRESS_STALL_THRESHOLD_MS;
+  const activity = progress.stepState === "running"
+    ? {
+        label: isPossiblyStalled
+          ? `可能阻塞 · ${formatProgressSilence(silenceMs)}无更新`
+          : "正常进行",
+        state: isPossiblyStalled ? "stalled" : "active",
+      }
+    : undefined;
+  const title = progress.stepState === "running"
+    ? <Shimmer as="span">{progress.stepLabel}</Shimmer>
+    : progress.stepLabel;
+  return <AssistantSurface processingSeconds={processingSeconds}>
+    <ChainOfThought defaultOpen>
+      <ChainOfThoughtHeader
+        aria-label={showProgressMeta
+          ? `${progress.stepLabel}，步骤 ${progress.stepIndex}/${progress.stepTotal}${activity ? `，${activity.label}` : ""}`
+          : progress.stepLabel}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
+          {showProgressMeta && activity ? <span
+            aria-hidden="true"
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${activity.state === "stalled" ? "border-warning/35 bg-warning/10 text-warning-foreground" : "border-success/30 bg-success/10 text-success"}`}
+          >
+            <span className={`size-1.5 rounded-full ${activity.state === "stalled" ? "bg-warning" : "animate-pulse bg-success motion-reduce:animate-none"}`} />
+            {activity.label}
+          </span> : null}
+          {showProgressMeta ? <span className="shrink-0 font-numeric text-xs tabular-nums text-muted-foreground">
+            {progress.stepIndex}/{progress.stepTotal}
+          </span> : null}
+        </span>
+      </ChainOfThoughtHeader>
+      <ChainOfThoughtContent aria-live="polite" role="status">
+        <ChainOfThoughtStep
+          className={progress.stepState === "running"
+            ? "[&_svg]:animate-spin [&_svg]:motion-reduce:animate-none"
+            : progress.stepState === "failed"
+              ? "text-destructive"
+              : progress.stepState === "awaiting_input"
+                ? "text-warning-foreground"
+                : undefined}
+          icon={StepIcon}
+          isAnimated={false}
+          label={progress.stepState === "running" ? <Shimmer as="span">{detail}</Shimmer> : detail}
+          status={status}
+        />
+      </ChainOfThoughtContent>
+    </ChainOfThought>
+  </AssistantSurface>;
+};
+
+const storyboardSummaryText = (version: StoryboardVersion, canReview: boolean): string => {
+  const durationSeconds = version.storyboard.shots.reduce((total, shot) => total + shot.durationSeconds, 0);
+  const action = canReview
+    ? "完整分镜已同步到右侧展示区。请确认继续，或在对话中直接说明目标时长、镜头时长及其他修改。"
+    : "完整分镜已同步到右侧展示区。";
+  return `**阶段完成：分镜方案 V${version.version}**\n\n${version.storyboard.title} · ${version.storyboard.shots.length} 个镜头 · ${durationSeconds} 秒\n\n${version.storyboard.creativeSummary}\n\n${action}`;
+};
+
+const cinematicSummaryText = (
+  version: Extract<ConversationEntry, { type: "cinematic_artifact" }>["artifact"],
+  canReview: boolean,
+): string => {
+  const durationSeconds = getCinematicArtifactDuration(version);
+  const metadata = durationSeconds === null ? `版本：V${version.version}` : `版本：V${version.version} · 时长：${durationSeconds} 秒`;
+  const revision = version.revisionRequest ? `\n\n本次修改：${version.revisionRequest}` : "";
+  const action = canReview
+    ? "完整结构化产物已同步到右侧展示区。请确认继续，或在对话中直接说明目标时长、场景时长及其他修改。"
+    : "完整结构化产物已同步到右侧展示区。";
+  const superseded = version.isSuperseded
+    ? "**历史版本：已由重新开始替代**\n\n"
+    : "";
+  return `${superseded}**阶段完成：${getCinematicStageLabel(version.artifact.stage)}**\n\n${getCinematicArtifactSummary(version)}\n\n${metadata}${revision}\n\n${action}`;
+};
+
+const automaticStageNotice = (
+  version: Extract<ConversationEntry, { type: "cinematic_artifact" }>["artifact"],
+): string | undefined => {
+  const stageDefinition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, version.artifact.stage);
+  return stageDefinition?.isRestartable === false
+    ? "该阶段无需确认，将自动进入下一阶段。"
+    : undefined;
+};
+
+const completedVideoSummary = (snapshot: VideoWorkflowSnapshot): string => {
+  const model = getVideoModelPresentation(snapshot.videoModel);
+  const output = getVideoOutputEstimate(snapshot.durationSeconds);
+  const sceneCount = snapshot.currentArtifact?.artifact.stage === "edit"
+    ? snapshot.currentArtifact.artifact.data.timeline.length
+    : snapshot.storyboard?.storyboard.shots.length ?? null;
+  const sceneSummary = sceneCount === null ? "" : `，共 ${sceneCount} 个镜头`;
+  return `**视频生成完成**\n\n本次成片已完成${sceneSummary}，时长 ${output.duration}，分辨率 ${output.resolution}，生成模型 ${model.name}。\n\n成片已同步到右侧预览区，可直接播放并检查最终效果。`;
+};
 
 export const ChatConversation = memo(function ChatConversation({
   conversationId,
   entries,
-  hasChatError,
+  isAgentProcessing,
   isLoadingHistory,
   isWorkflowSubmitting,
   messages,
-  onChatRegenerate,
   onRetryWorkflow,
-  onSceneDurationsSubmit,
+  onRecoverWorkflow,
   snapshot,
   status,
+  videoFocusRequest,
+  scrollRestoreRequest,
+  onViewportControllerChange,
   workflowErrorMessage,
   workflowStepProgress,
 }: ChatConversationProps) {
-  const persistedIds = new Set(entries.map((entry) => entry.id));
-  const visibleMessages = isLoadingHistory ? [] : messages;
+  const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>(null);
+  const [processingSeconds, setProcessingSeconds] = useState(0);
+  const [completedLiveDurations, setCompletedLiveDurations] = useState<Record<string, number>>({});
+  const copyFeedbackTimerRef = useRef<number | null>(null);
+  const processingStartedAtRef = useRef<number | null>(null);
+  const activeProcessingKeyRef = useRef<string | null>(null);
+  const lastAutoScrolledInputKeyRef = useRef<string | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
+  const conversationContextRef = useRef<StickToBottomContext | null>(null);
+  const persistedIds = useMemo(() => new Set(entries.map((entry) => entry.id)), [entries]);
+  // Live session state remains visible until the completed turn is handed off to persisted history.
+  const visibleMessages = messages;
   const liveMessages = visibleMessages.filter((message) => !persistedIds.has(message.id));
+  const hasLiveAssistantText = liveMessages.some((message) => message.role === "assistant" && message.parts.some((part) => part.type === "text" && part.text.length > 0));
+  const lastLiveAssistantId = useMemo(() => {
+    for (let index = liveMessages.length - 1; index >= 0; index -= 1) {
+      if (liveMessages[index]?.role === "assistant") return liveMessages[index]?.id ?? null;
+    }
+    return null;
+  }, [liveMessages]);
+  const lastLiveUserId = useMemo(() => {
+    for (let index = liveMessages.length - 1; index >= 0; index -= 1) {
+      if (liveMessages[index]?.role === "user") return liveMessages[index]?.id ?? null;
+    }
+    return null;
+  }, [liveMessages]);
+  const lastPersistedUserId = useMemo(() => {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry?.type === "text" && entry.role === "user") return entry.id;
+    }
+    return null;
+  }, [entries]);
+  const latestInputId = lastLiveUserId ?? lastPersistedUserId;
+  const latestInputKey = latestInputId ? `${conversationId ?? "new"}:${latestInputId}` : null;
+  const processingKey = snapshot?.requestId
+    ? `workflow:${snapshot.requestId}`
+    : `chat:${conversationId ?? "new"}:${lastLiveUserId ?? "pending"}`;
+  const persistedProcessingDurations = useMemo(() => {
+    const durations = new Map<string, number>();
+    let userMessageCreatedAtMs: number | null = null;
+    for (const entry of entries) {
+      const createdAtMs = Date.parse(entry.createdAt);
+      if (entry.type === "text" && entry.role === "user") {
+        userMessageCreatedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : null;
+        continue;
+      }
+      if (entry.type !== "text" || entry.role === "assistant") {
+        const durationSeconds = userMessageCreatedAtMs !== null && Number.isFinite(createdAtMs)
+          ? Math.max(0, Math.floor((createdAtMs - userMessageCreatedAtMs) / 1_000))
+          : 0;
+        durations.set(entry.id, durationSeconds);
+      }
+    }
+    return durations;
+  }, [entries]);
+  const hasReviewableWorkflowAnswer = snapshot?.status === "awaiting_input" && entries.some((entry) => {
+    if (entry.type === "cinematic_artifact") {
+      return entry.workflowId === snapshot.workflowId
+        && snapshot.currentArtifact?.version === entry.artifact.version
+        && snapshot.currentArtifact.artifact.stage === entry.artifact.artifact.stage;
+    }
+    return entry.type === "storyboard"
+      && entry.workflowId === snapshot.workflowId
+      && snapshot.storyboard?.version === entry.storyboard.version;
+  });
+  const completedVideoSnapshot = snapshot?.status === "succeeded" && snapshot.videoJob?.status === "succeeded"
+    ? snapshot
+    : null;
+  const hasCompletedVideo = completedVideoSnapshot !== null;
+  const completedVideoJobId = completedVideoSnapshot?.videoJob?.jobId ?? null;
+  const timelineItems = useMemo(() => insertConversationTimelineMarker(entries, completedVideoSnapshot
+    ? {
+        createdAt: completedVideoSnapshot.updatedAt,
+        id: `workflow-completed:${completedVideoSnapshot.workflowId}:${completedVideoSnapshot.currentVersion}`,
+        type: "workflow_completion",
+      }
+    : null), [completedVideoSnapshot, entries]);
+  const visibleWorkflowStepProgress = hasCompletedVideo ? null : workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer
+    ? null
+    : workflowStepProgress;
+  const workflowReviewNotice = workflowStepProgress?.stepState === "awaiting_input"
+    ? workflowStepProgress.message
+    : "当前规划已完成，等待确认或提出修改。";
   const isEmpty = !isLoadingHistory && entries.length === 0 && liveMessages.length === 0 && !snapshot;
+  const hasFocusedVideo = videoFocusRequest !== null && (
+    entries.some((entry) => entry.type === "archived_video" && entry.jobId === videoFocusRequest.videoId)
+    || completedVideoJobId === videoFocusRequest.videoId
+  );
   const viewportKey = `${conversationId ?? "new"}:${isLoadingHistory ? "loading" : "ready"}`;
-  const temporaryProgress: WorkflowStepProgress | null = !isLoadingHistory && status === "submitted"
+  const temporaryProgress: WorkflowStepProgress | null = !isLoadingHistory && (status === "submitted" || (status === "streaming" && !hasLiveAssistantText))
     ? {
         stepId: "chat-response",
         stepLabel: "理解需求",
@@ -78,53 +432,193 @@ export const ChatConversation = memo(function ChatConversation({
           stepLabel: "理解需求",
           stepState: "running",
           stepIndex: 1,
-          stepTotal: 8,
+          stepTotal: CINEMATIC_PIPELINE_DEFINITION.stages.length + 1,
           message: "正在理解你的需求并准备下一步。",
         }
       : null;
 
-  return <Conversation className="min-h-0 bg-[#0d0e10]" initial="instant" key={viewportKey} resize="smooth">
-    <ConversationContent className="mx-auto min-h-full w-full max-w-3xl gap-6 px-6 py-8">
-      {isLoadingHistory ? <div className="self-center py-12 text-sm text-zinc-500" role="status"><Shimmer>正在恢复历史对话</Shimmer></div> : null}
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current !== null) window.clearTimeout(copyFeedbackTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const controller: ChatViewportController = {
+      capture: () => {
+        const scrollElement = conversationContextRef.current?.scrollRef.current;
+        if (!scrollElement) return null;
+        return { conversationId, scrollTop: scrollElement.scrollTop };
+      },
+    };
+    onViewportControllerChange(controller);
+    return () => onViewportControllerChange(null);
+  }, [conversationId, onViewportControllerChange]);
+
+  useLayoutEffect(() => {
+    if (
+      isLoadingHistory
+      || !scrollRestoreRequest
+      || scrollRestoreRequest.location.conversationId !== conversationId
+    ) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const scrollElement = conversationContextRef.current?.scrollRef.current;
+      if (scrollElement) scrollElement.scrollTop = scrollRestoreRequest.location.scrollTop;
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [conversationId, isLoadingHistory, scrollRestoreRequest]);
+
+  useLayoutEffect(() => {
+    if (
+      isLoadingHistory
+      || !isAgentProcessing
+      || latestInputKey === null
+      || lastAutoScrolledInputKeyRef.current === latestInputKey
+    ) return;
+    lastAutoScrolledInputKeyRef.current = latestInputKey;
+    const frameId = window.requestAnimationFrame(() => {
+      void conversationContextRef.current?.scrollToBottom({
+        animation: "instant",
+        ignoreEscapes: true,
+      });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isAgentProcessing, isLoadingHistory, latestInputKey]);
+
+  useEffect(() => {
+    setProcessingSeconds(0);
+    setCompletedLiveDurations({});
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!isAgentProcessing) {
+      clearProcessingStartedAt(window.sessionStorage, processingKey);
+      if (activeProcessingKeyRef.current !== processingKey) {
+        setProcessingSeconds(0);
+        return;
+      }
+      const startedAt = processingStartedAtRef.current;
+      activeProcessingKeyRef.current = null;
+      processingStartedAtRef.current = null;
+      if (startedAt === null) return;
+      const finalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1_000));
+      setProcessingSeconds(finalSeconds);
+      if (lastLiveAssistantId) {
+        setCompletedLiveDurations((current) => ({ ...current, [lastLiveAssistantId]: finalSeconds }));
+      }
+      return;
+    }
+
+    const storedStartedAt = readProcessingStartedAt(window.sessionStorage, processingKey);
+    const startedAt = storedStartedAt ?? Date.now();
+    if (storedStartedAt === null) {
+      saveProcessingStartedAt(window.sessionStorage, processingKey, startedAt);
+    }
+    activeProcessingKeyRef.current = processingKey;
+    processingStartedAtRef.current = startedAt;
+    const updateProcessingSeconds = (): void => {
+      const startedAt = processingStartedAtRef.current;
+      if (startedAt !== null) setProcessingSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1_000)));
+    };
+    updateProcessingSeconds();
+    const timer = window.setInterval(updateProcessingSeconds, 1_000);
+    return () => window.clearInterval(timer);
+  }, [isAgentProcessing, lastLiveAssistantId, processingKey]);
+
+  useEffect(() => {
+    if (isLoadingHistory || !hasFocusedVideo || videoFocusRequest === null) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const conversationContext = conversationContextRef.current;
+      const scrollElement = conversationContext?.scrollRef.current;
+      if (!scrollElement) return;
+      conversationContext.stopScroll();
+      const target = [...(messageListRef.current?.querySelectorAll<HTMLElement>("[data-chat-video-id]") ?? [])]
+        .find((element) => element.dataset.chatVideoId === videoFocusRequest.videoId);
+      if (!target) return;
+      const viewportBounds = scrollElement.getBoundingClientRect();
+      const targetBounds = target.getBoundingClientRect();
+      scrollElement.scrollTop = getChatVideoFocusScrollTop({
+        currentScrollTop: scrollElement.scrollTop,
+        maximumScrollTop: scrollElement.scrollHeight - scrollElement.clientHeight,
+        targetBottom: targetBounds.bottom - viewportBounds.top + scrollElement.scrollTop,
+        targetTop: targetBounds.top - viewportBounds.top + scrollElement.scrollTop,
+        viewportHeight: scrollElement.clientHeight,
+      });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [hasFocusedVideo, isLoadingHistory, videoFocusRequest]);
+
+  const handleCopy = useCallback((id: string, text: string) => {
+    const updateFeedback = (state: "copied" | "failed"): void => {
+      setCopyFeedback({ id, state });
+      if (copyFeedbackTimerRef.current !== null) window.clearTimeout(copyFeedbackTimerRef.current);
+      copyFeedbackTimerRef.current = window.setTimeout(() => setCopyFeedback(null), 2_000);
+    };
+    if (!navigator.clipboard) {
+      updateFeedback("failed");
+      return;
+    }
+    void navigator.clipboard.writeText(text).then(
+      () => updateFeedback("copied"),
+      () => updateFeedback("failed"),
+    );
+  }, []);
+
+  return <Conversation className="min-h-0 cursor-auto bg-background" contextRef={conversationContextRef} initial={hasFocusedVideo ? false : "instant"} key={viewportKey} resize="smooth">
+    <ConversationContent className="mx-auto min-h-full w-full max-w-3xl gap-6 px-4 py-8 sm:px-6">
+      <div className="contents" ref={messageListRef}>
+      {isLoadingHistory ? <div className="self-center py-12 text-[13px] text-muted-foreground" role="status"><Shimmer>正在恢复历史对话</Shimmer></div> : null}
       {!isLoadingHistory && isEmpty ? <ConversationEmptyState className="self-center py-12">
-        <span className="grid size-12 place-items-center rounded-xl border border-white/10 bg-white/5 text-zinc-300"><MessageSquareTextIcon className="size-5" /></span>
-        <div className="text-center"><h1 className="text-2xl font-medium tracking-tight text-zinc-100">从一个想法开始</h1><p className="mt-2 text-sm text-zinc-500">直接和 Agent 对话；明确要求生成视频时会自动进入分镜工作流。</p></div>
+        <div className="max-w-md text-center">
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">从你的视频想法开始</h1>
+          <p className="mt-2 text-[13px] leading-5 text-muted-foreground">描述想制作的视频或需要调整的脚本；时长、画面、节奏和风格都可以在后续对话中继续补充。</p>
+        </div>
       </ConversationEmptyState> : null}
 
-      {entries.map((entry) => {
+      {timelineItems.map((item) => {
+        if (item.type === "workflow_completion") {
+          if (!completedVideoSnapshot) return null;
+          return <div className="w-full scroll-mt-6" data-chat-video-id={completedVideoJobId ?? undefined} key={item.id}>
+            <TextMessage copyFeedback={copyFeedback} id={item.id} onCopy={handleCopy} processingSeconds={processingSeconds} role="assistant" text={completedVideoSummary(completedVideoSnapshot)} />
+          </div>;
+        }
+        const { entry } = item;
         if (entry.type === "text") {
-          return <TextMessage id={entry.id} key={entry.id} role={entry.role} text={entry.content} />;
+          const message = entry.role === "assistant"
+            ? splitRestartConfirmationMessage(entry.content)
+            : { text: entry.content };
+          return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={message.notice} onCopy={handleCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role={entry.role} text={message.text} />;
         }
         if (entry.type === "cinematic_artifact") {
           const canReview = snapshot?.status === "awaiting_input" &&
-            snapshot.currentArtifact?.version === entry.artifact.version;
-          return (
-            <CinematicArtifactCard
-              canReview={canReview}
-              isSubmitting={isWorkflowSubmitting}
-              key={entry.id}
-              onSceneDurationsSubmit={onSceneDurationsSubmit}
-              version={entry.artifact}
-              videoModel={snapshot?.videoModel ?? "MiniMax-Hailuo-2.3"}
-            />
-          );
+            entry.workflowId === snapshot.workflowId &&
+            snapshot.currentArtifact?.version === entry.artifact.version &&
+            snapshot.currentArtifact.artifact.stage === entry.artifact.artifact.stage;
+          const notice = canReview ? workflowReviewNotice : automaticStageNotice(entry.artifact);
+          return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={notice} onCopy={handleCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={cinematicSummaryText(entry.artifact, false)} />;
         }
-        return <StoryboardCard canReview={false} key={entry.id} version={entry.storyboard} />;
+        if (entry.type === "archived_video") {
+          return <div className="w-full scroll-mt-6" data-chat-video-id={entry.jobId} key={entry.id}>
+            <ArchivedVideoMessage entry={entry} processingSeconds={persistedProcessingDurations.get(entry.id)} title={entry.videoTitle ?? "视频成片"} />
+          </div>;
+        }
+        const canReview = snapshot?.status === "awaiting_input" &&
+          entry.workflowId === snapshot.workflowId &&
+          snapshot.storyboard?.version === entry.storyboard.version;
+        return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={canReview ? workflowReviewNotice : undefined} onCopy={handleCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={storyboardSummaryText(entry.storyboard, false)} />;
       })}
 
-      {liveMessages.map((message) => <Message from={message.role} key={message.id}>
-        <MessageContent>{message.parts.map((part, index) => part.type === "text" ? message.role === "assistant"
-          ? <MessageResponse key={`${message.id}-${index}`}>{part.text}</MessageResponse>
-          : <span key={`${message.id}-${index}`}>{part.text}</span> : null)}</MessageContent>
-      </Message>)}
+      {liveMessages.map((message) => {
+        const text = message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+        const messageProcessingSeconds = message.role === "assistant"
+          ? message.id === lastLiveAssistantId && isAgentProcessing
+            ? processingSeconds
+            : completedLiveDurations[message.id] ?? processingSeconds
+          : undefined;
+        return text ? <TextMessage copyFeedback={copyFeedback} id={message.id} key={message.id} onCopy={handleCopy} processingSeconds={messageProcessingSeconds} role={message.role} text={text} /> : null;
+      })}
 
-      {!isLoadingHistory && hasChatError ? <div className="flex items-center gap-3 rounded-md border border-red-950 bg-red-950/20 p-3 text-red-200" role="alert"><CircleAlertIcon className="size-4" /><span className="text-xs">聊天响应失败，请稍后重试。</span><Button className="ml-auto" onClick={onChatRegenerate} size="sm" type="button" variant="ghost"><RotateCcwIcon />重试</Button></div> : null}
-      {temporaryProgress ? (
-        <WorkflowStepStatusCard compact progress={temporaryProgress} />
-      ) : workflowStepProgress ? (
-        <WorkflowStepStatusCard progress={workflowStepProgress} />
-      ) : null}
-      {workflowErrorMessage ? <div className="flex items-start gap-3 rounded-md border border-red-950 bg-red-950/20 p-3 text-red-200" role="alert"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><div><p className="text-xs font-medium">视频工作流操作未完成</p><p className="mt-1 text-xs leading-5 text-red-200/80">{workflowErrorMessage}</p></div>{snapshot?.status === "failed" && snapshot.videoJob?.status === "failed" && snapshot.videoJob.providerTaskId ? <Button className="ml-auto shrink-0" disabled={isWorkflowSubmitting} onClick={onRetryWorkflow} size="sm" type="button" variant="ghost"><RotateCcwIcon />重试</Button> : null}</div> : null}
+      {temporaryProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={temporaryProgress} showProgressMeta={false} /> : visibleWorkflowStepProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={visibleWorkflowStepProgress} /> : null}
+      {workflowErrorMessage ? <AssistantSurface processingSeconds={processingSeconds}><div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-danger-muted p-3 text-destructive" role="alert"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><div><p className="text-xs font-medium">视频工作流操作未完成</p><p className="mt-1 whitespace-pre-line text-xs leading-5 text-destructive/80">{workflowErrorMessage}</p></div>{!snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.canRecover ? <Button className="ml-auto shrink-0" disabled={isWorkflowSubmitting} onClick={onRecoverWorkflow} size="sm" type="button" variant="ghost"><RotateCcwIcon />恢复任务</Button> : !snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.videoJob?.status === "failed" && snapshot.videoJob.providerTaskId ? <Button className="ml-auto shrink-0" disabled={isWorkflowSubmitting} onClick={onRetryWorkflow} size="sm" type="button" variant="ghost"><RotateCcwIcon />重试</Button> : null}</div></AssistantSurface> : null}
+      </div>
     </ConversationContent>
     <ConversationScrollButton aria-label="滚动到最新消息" />
   </Conversation>;

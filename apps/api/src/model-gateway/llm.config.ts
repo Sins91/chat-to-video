@@ -28,9 +28,9 @@ const parseBaseUrl = (name: string, value: string): string => {
 
 const parseTimeoutMs = (name: string, value: string): number => {
   const timeoutMs = Number(value);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 120_000) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 600_000) {
     throw new Error(
-      `${name} must be an integer between 1000 and 120000; received "${value}".`,
+      `${name} must be an integer between 1000 and 600000; received "${value}".`,
     );
   }
   return timeoutMs;
@@ -63,7 +63,7 @@ export const loadLlmConfig = (apimart: ApimartConfig): LlmConfig => {
     ),
     timeoutMs: parseTimeoutMs(
       "DEEPSEEK_TIMEOUT_MS",
-      process.env.DEEPSEEK_TIMEOUT_MS ?? "30000",
+      process.env.DEEPSEEK_TIMEOUT_MS ?? "600000",
     ),
     toolCallingEnabled: parseBoolean(
       "LLM_TOOL_CALLING_ENABLED",

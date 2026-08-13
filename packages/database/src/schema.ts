@@ -1,5 +1,9 @@
-import type { CinematicArtifact } from "@chat-to-video/contracts";
-import type { Storyboard, VideoWorkflowEvent } from "@chat-to-video/contracts";
+import type {
+  ActiveWorkflowRunContext,
+  CinematicArtifact,
+  WorkflowCapabilityResolution,
+} from "@chat-to-video/contracts";
+import type { Storyboard, VideoWorkflowEvent, WorkflowUserIntent } from "@chat-to-video/contracts";
 import {
   decimal,
   index,
@@ -16,19 +20,34 @@ export const videoWorkflows = mysqlTable("video_workflows", {
   id: varchar("id", { length: 36 }).primaryKey(),
   conversationId: varchar("conversation_id", { length: 36 }),
   runId: varchar("run_id", { length: 200 }),
+  activeRunContext: json("active_run_context").$type<ActiveWorkflowRunContext>(),
   requestId: varchar("request_id", { length: 36 }).notNull(),
+  pipelineId: varchar("pipeline_id", { length: 64 }).notNull().default("cinematic"),
   videoModel: varchar("video_model", { length: 64 }).notNull(),
   durationSeconds: int("duration_seconds").notNull().default(10),
   initialPrompt: text("initial_prompt").notNull(),
   status: varchar("status", { length: 32 }).notNull(),
   cinematicStage: varchar("cinematic_stage", { length: 32 }).notNull().default("research"),
+  currentStageId: varchar("current_stage_id", { length: 64 }).notNull().default("research"),
   currentVersion: int("current_version").notNull().default(0),
+  pendingRestartId: varchar("pending_restart_id", { length: 36 }),
+  pendingRestartStage: varchar("pending_restart_stage", { length: 64 }),
+  pendingRestartText: text("pending_restart_text"),
+  pendingRestartExpectedVersion: int("pending_restart_expected_version"),
+  pendingRestartRequestedAt: timestamp("pending_restart_requested_at", { mode: "date", fsp: 3 }),
+  pendingRestartExpiresAt: timestamp("pending_restart_expires_at", { mode: "date", fsp: 3 }),
   errorMessage: text("error_message"),
+  lastProgressAt: timestamp("last_progress_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  failureCode: varchar("failure_code", { length: 64 }),
+  watchdogClaimToken: varchar("watchdog_claim_token", { length: 36 }),
+  watchdogClaimUntil: timestamp("watchdog_claim_until", { mode: "date", fsp: 3 }),
   createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("video_workflows_request_id_uq").on(table.requestId),
   index("video_workflows_conversation_id_idx").on(table.conversationId),
+  index("video_workflows_pipeline_status_idx").on(table.pipelineId, table.status),
+  index("video_workflows_status_progress_idx").on(table.status, table.lastProgressAt),
 ]);
 
 export const conversations = mysqlTable("conversations", {
@@ -41,6 +60,26 @@ export const conversations = mysqlTable("conversations", {
   updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
 }, (table) => [
   index("conversations_scope_updated_idx").on(table.tenantId, table.projectId, table.updatedAt),
+]);
+
+export const workflowStageCheckpoints = mysqlTable("workflow_stage_checkpoints", {
+  id: varchar("id", { length: 100 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  pipelineId: varchar("pipeline_id", { length: 64 }).notNull(),
+  stageId: varchar("stage_id", { length: 64 }).notNull(),
+  version: int("version").notNull(),
+  supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
+  supersededByRestartId: varchar("superseded_by_restart_id", { length: 36 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("workflow_stage_checkpoint_version_uq").on(table.workflowId, table.version),
+  index("workflow_stage_checkpoint_active_idx").on(
+    table.workflowId,
+    table.pipelineId,
+    table.stageId,
+    table.supersededAt,
+    table.version,
+  ),
 ]);
 
 export const conversationMessages = mysqlTable("conversation_messages", {
@@ -104,13 +143,17 @@ export const videoJobs = mysqlTable("video_jobs", {
   status: varchar("status", { length: 32 }).notNull(),
   progress: int("progress").notNull().default(0),
   providerTaskId: varchar("provider_task_id", { length: 200 }),
+  capabilityResolutions: json("capability_resolutions").$type<WorkflowCapabilityResolution[]>(),
   objectKey: varchar("object_key", { length: 512 }).notNull(),
   errorMessage: text("error_message"),
+  supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
+  supersededByRestartId: varchar("superseded_by_restart_id", { length: 36 }),
   createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("video_jobs_workflow_version_uq").on(table.workflowId, table.storyboardVersion),
   index("video_jobs_workflow_idx").on(table.workflowId),
+  index("video_jobs_active_workflow_idx").on(table.workflowId, table.supersededAt, table.createdAt),
 ]);
 
 export const videoOutputs = mysqlTable("video_outputs", {
@@ -133,6 +176,64 @@ export const videoWorkflowEvents = mysqlTable("video_workflow_events", {
 }, (table) => [
   uniqueIndex("video_workflow_events_event_id_uq").on(table.eventId),
   index("video_workflow_events_cursor_idx").on(table.workflowId, table.id),
+]);
+
+export const cinematicAssetBatches = mysqlTable("cinematic_asset_batches", {
+  id: varchar("id", { length: 100 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  planVersion: int("plan_version").notNull(),
+  status: varchar("status", { length: 32 }).notNull(),
+  errorMessage: text("error_message"),
+  supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
+  supersededByRestartId: varchar("superseded_by_restart_id", { length: 36 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("cinematic_asset_batch_workflow_version_uq").on(table.workflowId, table.planVersion),
+  index("cinematic_asset_batch_workflow_status_idx").on(table.workflowId, table.status),
+]);
+
+export const cinematicAssetJobs = mysqlTable("cinematic_asset_jobs", {
+  id: varchar("id", { length: 100 }).primaryKey(),
+  batchId: varchar("batch_id", { length: 100 }).notNull(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  sceneOrder: int("scene_order"),
+  kind: varchar("kind", { length: 32 }).notNull(),
+  status: varchar("status", { length: 32 }).notNull(),
+  progress: int("progress").notNull().default(0),
+  capabilityResolution: json("capability_resolution").$type<WorkflowCapabilityResolution>().notNull(),
+  providerTaskId: varchar("provider_task_id", { length: 200 }),
+  objectKey: varchar("object_key", { length: 512 }).notNull(),
+  mimeType: varchar("mime_type", { length: 100 }),
+  sizeBytes: int("size_bytes"),
+  errorMessage: text("error_message"),
+  supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
+  supersededByRestartId: varchar("superseded_by_restart_id", { length: 36 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("cinematic_asset_job_batch_status_idx").on(table.batchId, table.status),
+  index("cinematic_asset_job_workflow_idx").on(table.workflowId),
+]);
+
+export const workflowUserDecisions = mysqlTable("workflow_user_decisions", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  conversationMessageId: varchar("conversation_message_id", { length: 100 }).notNull(),
+  pipelineId: varchar("pipeline_id", { length: 64 }).notNull(),
+  stageId: varchar("stage_id", { length: 64 }).notNull(),
+  artifactVersion: int("artifact_version").notNull(),
+  rawText: text("raw_text").notNull(),
+  decision: json("decision_json").$type<WorkflowUserIntent>().notNull(),
+  resolverVersion: varchar("resolver_version", { length: 32 }).notNull(),
+  decisionSource: varchar("decision_source", { length: 16 }).notNull(),
+  requiresConfirmation: int("requires_confirmation").notNull().default(0),
+  confirmedAt: timestamp("confirmed_at", { mode: "date", fsp: 3 }),
+  appliedAt: timestamp("applied_at", { mode: "date", fsp: 3 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("workflow_user_decisions_message_uq").on(table.conversationMessageId),
+  index("workflow_user_decisions_workflow_idx").on(table.workflowId, table.createdAt),
 ]);
 
 export const agentExtensionExecutions = mysqlTable("agent_extension_executions", {
@@ -166,6 +267,9 @@ export type ConversationRow = typeof conversations.$inferSelect;
 export type ConversationMessageRow = typeof conversationMessages.$inferSelect;
 export type StoryboardVersionRow = typeof storyboardVersions.$inferSelect;
 export type CinematicArtifactVersionRow = typeof cinematicArtifactVersions.$inferSelect;
+export type CinematicAssetBatchRow = typeof cinematicAssetBatches.$inferSelect;
+export type CinematicAssetJobRow = typeof cinematicAssetJobs.$inferSelect;
 export type VideoJobRow = typeof videoJobs.$inferSelect;
 export type VideoOutputRow = typeof videoOutputs.$inferSelect;
 export type AgentExtensionExecutionRow = typeof agentExtensionExecutions.$inferSelect;
+export type WorkflowUserDecisionRow = typeof workflowUserDecisions.$inferSelect;

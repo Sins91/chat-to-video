@@ -1,4 +1,15 @@
-import { CinematicArtifactSchema, CinematicArtifactVersionSchema, CinematicStageSchema } from "@chat-to-video/contracts";
+import {
+  CinematicArtifactSchema,
+  CinematicGenerativeStageSchema,
+  CinematicStageSchema,
+  CINEMATIC_PIPELINE_DEFINITION,
+  findWorkflowPipelineDefinition,
+  getPreviousWorkflowStage,
+  getWorkflowStageIndex,
+  getWorkflowStagesFrom,
+  PendingVideoWorkflowRestartSchema,
+  parseWorkflowRestartTarget,
+} from "@chat-to-video/contracts";
 import {
   BadRequestException,
   ConflictException,
@@ -10,23 +21,22 @@ import {
 import {
   CreateVideoWorkflowResponseSchema,
   getVideoModelMaxDurationSeconds,
-  roundVideoModelDurationSeconds,
   VideoModelSchema,
-  RenderVideoJobPayloadSchema,
-  RetryVideoWorkflowResponseSchema,
-  StoryboardVersionSchema,
   UpdateVideoWorkflowModelResponseSchema,
   VideoWorkflowInteractionResultSchema,
-  VideoWorkflowSnapshotSchema,
   type ChatAgentMessage,
   type CreateVideoWorkflowResponse,
   type CreateVideoWorkflowRequest,
   type RetryVideoWorkflowResponse,
+  RecoverVideoWorkflowResponseSchema,
+  type RecoverVideoWorkflowResponse,
   type VideoWorkflowInteraction,
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
   type VideoModel,
   type UpdateVideoWorkflowModelResponse,
+  ResolveWorkflowUserIntentResponseSchema,
+  type ResolveWorkflowUserIntentResponse,
 } from "@chat-to-video/contracts";
 import {
   DEMO_PROJECT_ID,
@@ -42,8 +52,12 @@ import { MODEL_GATEWAY, type ModelGateway } from "../model-gateway/model-gateway
 import { MastraRunNotResumableError, type MastraRuntimeService } from "./mastra-runtime.service.js";
 import { CONVERSATION_REPOSITORY, MASTRA_RUNTIME, VIDEO_OBJECT_STORAGE, VIDEO_WORKFLOW_REPOSITORY } from "./video-workflow.tokens.js";
 import { WorkflowEventService } from "./workflow-event.service.js";
+import { retryVideoWorkflow } from "./retry-video-workflow.js";
+import { WorkflowRecoveryService } from "./workflow-recovery.service.js";
 import { VideoWorkflowOperations } from "./video-workflow.operations.js";
+import { buildVideoWorkflowSnapshot } from "./video-workflow-snapshot.js";
 import { videoWorkflowStep } from "./workflow-step.js";
+import { UserIntentResolverService } from "./user-intent-resolver.service.js";
 
 const APPROVAL_PHRASES = new Set([
   "继续",
@@ -70,6 +84,12 @@ const messageIntent = (message: string): "approve" | "revise" => {
     ? "approve" : classifyApprovalIntent(message);
 };
 
+const RESTART_CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
+const PREVIOUS_WORKFLOW_REFERENCE =
+  /(?:上|前|先前|之前|此前)(?:一|这)?(?:个|次|轮)?(?:已完成(?:的)?)?(?:的)?(?:工作流|流程|视频生成|视频|生成)/u;
+const PREVIOUS_WORKFLOW_RESTART_NOTICE =
+  "当前会话已经创建了新的工作流，之前已完成的工作流会作为只读历史保留，不能再返回其中某个阶段继续生成。" +
+  "如果希望基于之前的结果重新创作，请新建对话后重新发起视频生成。";
 @Injectable()
 export class VideoWorkflowService {
   constructor(
@@ -80,7 +100,150 @@ export class VideoWorkflowService {
     @Inject(MASTRA_RUNTIME) private readonly mastraRuntime: MastraRuntimeService,
     @Inject(WorkflowEventService) private readonly events: WorkflowEventService,
     @Inject(VideoWorkflowOperations) private readonly operations: VideoWorkflowOperations,
+    @Inject(WorkflowRecoveryService) private readonly recovery: WorkflowRecoveryService,
+    @Inject(UserIntentResolverService) private readonly intentResolver: UserIntentResolverService,
   ) {}
+
+  async resolveUserIntent(
+    workflowId: string,
+    input: { messageId: string; text: string },
+  ): Promise<ResolveWorkflowUserIntentResponse> {
+    const existing = await this.repository.findWorkflowUserDecision(input.messageId);
+    if (existing) {
+      if (existing.appliedAt === null) {
+        const current = await this.repository.findWorkflow(workflowId);
+        if (existing.decision.type === "clarify") {
+          const applied = await this.applyResolvedIntent(
+            workflowId,
+            existing.id,
+            input.messageId,
+            existing.rawText,
+            existing.decision,
+          );
+          if (applied) await this.repository.markWorkflowUserDecisionApplied(input.messageId);
+        } else if (current?.status === "awaiting_input" &&
+            current.currentStageId === existing.stageId &&
+            current.currentVersion === existing.artifactVersion) {
+          const applied = await this.applyResolvedIntent(
+            workflowId,
+            existing.id,
+            input.messageId,
+            existing.rawText,
+            existing.decision,
+          );
+          if (applied) await this.repository.markWorkflowUserDecisionApplied(input.messageId);
+        } else if (current?.status === "drafting" ||
+            (current?.currentVersion ?? 0) > existing.artifactVersion ||
+            current?.pendingRestartId !== null) {
+          await this.repository.markWorkflowUserDecisionApplied(input.messageId);
+        }
+      }
+      const replayed = await this.repository.findWorkflowUserDecision(input.messageId);
+      return ResolveWorkflowUserIntentResponseSchema.parse({
+        accepted: true,
+        applied: replayed?.appliedAt !== null,
+        intent: existing.decision,
+        source: existing.decisionSource,
+        resolverVersion: existing.resolverVersion,
+        requiresConfirmation: existing.requiresConfirmation === 1,
+      });
+    }
+    const scope = await this.repository.findWorkflowScope(workflowId);
+    if (!scope) throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
+    const { workflow } = scope;
+    if (!workflow.conversationId) throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
+    const pipeline = findWorkflowPipelineDefinition(workflow.pipelineId);
+    if (!pipeline) throw new ConflictException({ code: "VIDEO_WORKFLOW_PIPELINE_UNAVAILABLE", message: "Workflow pipeline is unavailable." });
+    const artifactRow = await this.repository.findLatestCinematicArtifact(workflow.id);
+    const decision = await this.intentResolver.resolve({
+      requestId: workflow.requestId,
+      workflowId: workflow.id,
+      conversationId: workflow.conversationId,
+      tenantId: scope.tenantId,
+      projectId: scope.projectId,
+      workflowStatus: workflow.status,
+      currentStage: workflow.currentStageId,
+      currentVersion: workflow.currentVersion,
+      currentArtifactSummary: artifactRow
+        ? JSON.stringify(CinematicArtifactSchema.parse(artifactRow.artifact)).slice(0, 4_000)
+        : "No current artifact.",
+      pipeline,
+      text: input.text,
+    });
+    const decisionId = randomUUID();
+    const saved = await this.repository.saveWorkflowUserDecision({
+      id: decisionId,
+      workflowId: workflow.id,
+      conversationMessageId: input.messageId,
+      pipelineId: pipeline.id,
+      stageId: workflow.currentStageId,
+      artifactVersion: workflow.currentVersion,
+      rawText: input.text,
+      decision,
+    });
+    if (!saved) return this.resolveUserIntent(workflowId, input);
+
+    const applied = await this.applyResolvedIntent(
+      workflowId,
+      decisionId,
+      input.messageId,
+      input.text,
+      decision.intent,
+    );
+    if (applied) await this.repository.markWorkflowUserDecisionApplied(input.messageId);
+    return ResolveWorkflowUserIntentResponseSchema.parse({ accepted: true, applied, ...decision });
+  }
+
+  private async applyResolvedIntent(
+    workflowId: string,
+    decisionId: string,
+    messageId: string,
+    rawText: string,
+    intent: ResolveWorkflowUserIntentResponse["intent"],
+  ): Promise<boolean> {
+    if (intent.type === "approve") {
+      await this.interact(workflowId, { type: "message", messageId, text: rawText });
+      return true;
+    }
+    if (intent.type === "revise_current" || intent.type === "approve_with_changes") {
+      // A revision produces a new current-stage version and suspends again; it never auto-approves that result.
+      await this.interact(workflowId, { type: "message", messageId, text: intent.feedback });
+      return true;
+    }
+    if (intent.type === "restart_from") {
+      // This only persists the existing two-step restart confirmation. A new run starts after explicit confirmation.
+      await this.interact(workflowId, {
+        type: "restart_request",
+        messageId,
+        targetStage: intent.stageId,
+        text: intent.feedback,
+      });
+      return true;
+    }
+    if (intent.type === "clarify") {
+      const workflow = await this.repository.findWorkflow(workflowId);
+      if (!workflow?.conversationId) {
+        throw new NotFoundException({
+          code: "CONVERSATION_NOT_FOUND",
+          message: "Conversation not found.",
+        });
+      }
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId,
+        role: "user",
+        content: rawText,
+      });
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId: decisionId,
+        role: "assistant",
+        content: intent.question,
+      });
+      return true;
+    }
+    return false;
+  }
 
   async create(input: CreateVideoWorkflowRequest): Promise<CreateVideoWorkflowResponse> {
     const conversationId = input.conversationId ?? randomUUID();
@@ -123,6 +286,8 @@ export class VideoWorkflowService {
       id: workflowId,
       conversationId,
       requestId,
+      pipelineId: CINEMATIC_PIPELINE_DEFINITION.id,
+      currentStageId: CINEMATIC_PIPELINE_DEFINITION.stages[0]?.id ?? "research",
       initialPrompt: input.prompt,
       videoModel: input.videoModel,
       durationSeconds,
@@ -164,57 +329,11 @@ export class VideoWorkflowService {
   }
 
   async getSnapshot(workflowId: string): Promise<VideoWorkflowSnapshot> {
-    const workflow = await this.repository.findWorkflow(workflowId);
-    if (!workflow) throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
-    const [storyboardRow, job, currentArtifactRow] = await Promise.all([
-      this.repository.findLatestStoryboard(workflowId),
-      this.repository.findWorkflowVideoJob(workflowId),
-      this.repository.findLatestCinematicArtifact(workflowId),
-    ]);
-    const [output, queueAhead] = job
-      ? await Promise.all([
-          this.repository.findVideoOutput(job.id),
-          job.status === "queued"
-            ? this.operations.getRenderQueueAhead(job.id)
-            : Promise.resolve(null),
-        ])
-      : [null, null];
-    const playbackUrl = output ? await this.storage.createDownloadUrl(output.objectKey) : null;
-    return VideoWorkflowSnapshotSchema.parse({
-      workflowId: workflow.id,
-      pipeline: "cinematic",
-      cinematicStage: workflow.cinematicStage,
-      currentArtifact: currentArtifactRow ? CinematicArtifactVersionSchema.parse({
-        version: currentArtifactRow.version,
-        revisionRequest: currentArtifactRow.revisionRequest,
-        artifact: currentArtifactRow.artifact,
-        createdAt: currentArtifactRow.createdAt.toISOString(),
-      }) : null,
-      requestId: workflow.requestId,
-      videoModel: workflow.videoModel,
-      durationSeconds: workflow.durationSeconds,
-      initialPrompt: workflow.initialPrompt,
-      status: workflow.status,
-      currentVersion: workflow.currentVersion,
-      storyboard: storyboardRow ? StoryboardVersionSchema.parse({
-        version: storyboardRow.version,
-        revisionRequest: storyboardRow.revisionRequest,
-        storyboard: storyboardRow.storyboard,
-        createdAt: storyboardRow.createdAt.toISOString(),
-      }) : null,
-      videoJob: job ? {
-        jobId: job.id,
-        status: job.status,
-        progress: job.progress,
-        queueAhead,
-        providerTaskId: job.providerTaskId,
-        errorMessage: job.errorMessage,
-        playbackUrl,
-      } : null,
-      errorMessage: workflow.errorMessage,
-      createdAt: workflow.createdAt.toISOString(),
-      updatedAt: workflow.updatedAt.toISOString(),
-    });
+    return buildVideoWorkflowSnapshot({
+      operations: this.operations,
+      repository: this.repository,
+      storage: this.storage,
+    }, workflowId);
   }
 
   async updateModel(
@@ -245,99 +364,97 @@ export class VideoWorkflowService {
   }
 
   async retry(workflowId: string): Promise<RetryVideoWorkflowResponse> {
+    return retryVideoWorkflow({
+      conversations: this.conversations,
+      operations: this.operations,
+      repository: this.repository,
+    }, workflowId);
+  }
+
+  async recover(workflowId: string): Promise<RecoverVideoWorkflowResponse> {
     const workflow = await this.repository.findWorkflow(workflowId);
-    if (!workflow) {
-      throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
-    }
+    if (!workflow) throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
     if (!workflow.conversationId || !await this.conversations.findActiveConversation(workflow.conversationId)) {
       throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
     }
-    const job = await this.repository.findWorkflowVideoJob(workflowId);
-    if (workflow.status !== "failed" || job?.status !== "failed" || !job.providerTaskId) {
-      throw new ConflictException({
-        code: "VIDEO_WORKFLOW_NOT_RECOVERABLE",
-        message: "Only a failed video task with an existing provider task can be safely retried.",
-      });
+    if (workflow.failureCode === "QUEUE_PROGRESS_STALLED" || workflow.failureCode === "VIDEO_PROGRESS_STALLED") {
+      const retry = await retryVideoWorkflow({
+        conversations: this.conversations,
+        operations: this.operations,
+        repository: this.repository,
+      }, workflowId);
+      return RecoverVideoWorkflowResponseSchema.parse({ accepted: retry.accepted, workflowId });
     }
-    const storyboard = await this.repository.findStoryboard(workflowId, job.storyboardVersion);
-    const editRow = await this.repository.findLatestCinematicArtifact(workflowId, "edit");
-    const sceneRow = await this.repository.findLatestCinematicArtifact(workflowId, "scene_plan");
-    const editArtifact = editRow
-      ? CinematicArtifactSchema.parse(editRow.artifact)
-      : null;
-    const sceneArtifact = sceneRow ? CinematicArtifactSchema.parse(sceneRow.artifact) : null;
-    if (!storyboard && (
-      editArtifact?.stage !== "edit" || sceneArtifact?.stage !== "scene_plan"
-    )) {
-      throw new ConflictException({
-        code: "VIDEO_WORKFLOW_NOT_RECOVERABLE",
-        message: "The cinematic edit plan for this video task is unavailable.",
-      });
+    if (!await this.recovery.recoverAgentRun(workflowId, true)) {
+      throw new ConflictException({ code: "VIDEO_WORKFLOW_NOT_RECOVERABLE", message: "The stalled workflow could not be recovered." });
     }
-    const retryPrompt = editArtifact?.stage === "edit"
-      ? editArtifact.data.renderPrompt
-      : storyboard
-        ? StoryboardVersionSchema.parse({
-            version: storyboard.version,
-            revisionRequest: storyboard.revisionRequest,
-            storyboard: storyboard.storyboard,
-            createdAt: storyboard.createdAt.toISOString(),
-          }).storyboard.videoPrompt
-        : null;
-    if (!retryPrompt) throw new Error("Recoverable video task is missing its render prompt.");
-    const isClaimed = await this.repository.claimVideoJobRetry(workflowId, job.id);
-    if (!isClaimed) {
-      throw new ConflictException({
-        code: "VIDEO_WORKFLOW_RETRY_CLAIMED",
-        message: "The video task is already being retried.",
-      });
-    }
-    const videoModel = VideoModelSchema.parse(workflow.videoModel);
-    const payload = RenderVideoJobPayloadSchema.parse({
-      workflowId,
-      requestId: workflow.requestId,
-      jobId: job.id,
-      storyboardVersion: job.storyboardVersion,
-      videoModel,
-      cinematic: editArtifact?.stage === "edit" && sceneArtifact?.stage === "scene_plan"
-        ? {
-            rendererFamily: "ffmpeg",
-            durationSeconds: workflow.durationSeconds,
-            modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(videoModel),
-            scenes: sceneArtifact.data.scenes.map((scene) => ({
-              ...scene,
-              generationDurationSeconds: roundVideoModelDurationSeconds(
-                videoModel,
-                scene.durationSeconds,
-              ),
-            })),
-          }
-        : undefined,
-      videoPrompt: retryPrompt,
-      objectKey: job.objectKey,
-    });
-    try {
-      await this.operations.retryVideo(payload);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Video retry queue handoff failed.";
-      await this.repository.updateVideoJob(job.id, { status: "failed", errorMessage: message });
-      await this.repository.updateWorkflow(workflowId, { status: "failed", errorMessage: message });
-      throw new ServiceUnavailableException({
-        code: "VIDEO_WORKFLOW_RETRY_FAILED",
-        message: "The video task could not be requeued.",
-      });
-    }
-    return RetryVideoWorkflowResponseSchema.parse({ accepted: true, jobId: job.id });
+    return RecoverVideoWorkflowResponseSchema.parse({ accepted: true, workflowId });
   }
 
   async interact(workflowId: string, interaction: VideoWorkflowInteraction): Promise<VideoWorkflowInteractionResult> {
     const workflow = await this.repository.findWorkflow(workflowId);
     if (!workflow) throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
+    if (!workflow.conversationId || !await this.conversations.findActiveConversation(workflow.conversationId)) {
+      throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
+    }
+    if (interaction.type === "restart_request") {
+      return this.requestRestart(workflow, interaction);
+    }
+    if (interaction.type === "restart_cancel") {
+      return this.cancelRestart(workflow, interaction);
+    }
+    if (interaction.type === "restart_confirm") {
+      return this.confirmRestart(workflow, interaction);
+    }
+    if (workflow.pendingRestartId) {
+      throw new ConflictException({
+        code: "VIDEO_WORKFLOW_RESTART_CONFIRMATION_PENDING",
+        message: "Confirm or cancel the pending workflow restart before continuing.",
+      });
+    }
     if (workflow.status !== "awaiting_input" || workflow.currentVersion < 1) {
       throw new ConflictException({ code: "VIDEO_WORKFLOW_NOT_WAITING", message: "The workflow is not waiting for review input." });
     }
-    if (!workflow.conversationId || !await this.conversations.findActiveConversation(workflow.conversationId)) {
-      throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
+    if (workflow.currentStageId === "assets") {
+      const batch = await this.repository.findLatestCinematicAssetBatch(workflowId);
+      if (batch?.status === "awaiting_approval") {
+        if (interaction.type !== "approve") {
+          throw new ConflictException({
+            code: "CINEMATIC_ASSET_REVIEW_REQUIRES_APPROVAL_OR_RESTART",
+            message: "Approve the generated assets, or restart the assets stage with revision instructions.",
+          });
+        }
+        const claimed = await this.repository.claimCinematicAssetBatchApproval(
+          workflowId,
+          workflow.currentVersion,
+        );
+        if (!claimed) {
+          throw new ConflictException({
+            code: "VIDEO_WORKFLOW_NOT_WAITING",
+            message: "The asset review was already claimed or is no longer waiting.",
+          });
+        }
+        try {
+          await this.mastraRuntime.continueAfterAssetApproval({
+            workflowId: workflow.id,
+            requestId: workflow.requestId,
+            initialPrompt: workflow.initialPrompt,
+            videoModel: VideoModelSchema.parse(workflow.videoModel),
+            durationSeconds: workflow.durationSeconds,
+            continuation: {
+              kind: "assets_approved",
+              baseVersion: workflow.currentVersion,
+            },
+          }, (runId) => this.repository.setRunId(workflow.id, runId));
+        } catch (error: unknown) {
+          await this.recordRuntimeFailure(workflow.id, workflow.requestId, error);
+          throw new ServiceUnavailableException({
+            code: "VIDEO_WORKFLOW_CONTINUATION_FAILED",
+            message: "The workflow could not continue after asset approval.",
+          });
+        }
+        return VideoWorkflowInteractionResultSchema.parse({ accepted: true, intent: "approve" });
+      }
     }
     if (!workflow.runId) {
       throw new ConflictException({
@@ -346,7 +463,7 @@ export class VideoWorkflowService {
       });
     }
     if (interaction.type === "scene_durations") {
-      if (workflow.cinematicStage !== "scene_plan") {
+      if (workflow.currentStageId !== "scene_plan") {
         throw new ConflictException({
           code: "SCENE_DURATIONS_NOT_AVAILABLE",
           message: "Scene durations can only be changed during scene plan review.",
@@ -403,7 +520,15 @@ export class VideoWorkflowService {
       });
     }
     try {
-      await this.mastraRuntime.resume(workflow.runId, payload);
+      await this.mastraRuntime.resume(
+        workflow.runId,
+        payload,
+        {
+          workflowId: workflow.id,
+          stage: CinematicGenerativeStageSchema.parse(workflow.currentStageId),
+          version: workflow.currentVersion,
+        },
+      );
     } catch (error: unknown) {
       await this.recordRuntimeFailure(workflow.id, workflow.requestId, error);
       if (error instanceof MastraRunNotResumableError) {
@@ -420,10 +545,259 @@ export class VideoWorkflowService {
     return VideoWorkflowInteractionResultSchema.parse({ accepted: true, intent });
   }
 
+  async createArchivedPlaybackUrl(objectKey: string): Promise<string> {
+    return this.storage.createDownloadUrl(objectKey);
+  }
+
+  private async requestRestart(
+    workflow: NonNullable<Awaited<ReturnType<VideoWorkflowRepository["findWorkflow"]>>>,
+    interaction: Extract<VideoWorkflowInteraction, { type: "restart_request" }>,
+  ): Promise<VideoWorkflowInteractionResult> {
+    if (!workflow.conversationId) throw new Error("Restartable workflow is missing its conversation.");
+    const pipeline = findWorkflowPipelineDefinition(workflow.pipelineId);
+    const targetStage = pipeline
+      ? parseWorkflowRestartTarget(pipeline, interaction.targetStage)
+      : null;
+    if (!pipeline || !targetStage) {
+      throw new ConflictException({
+        code: "VIDEO_WORKFLOW_RESTART_STAGE_UNAVAILABLE",
+        message: "The requested stage is not restartable in this workflow pipeline.",
+      });
+    }
+    const currentStageIndex = getWorkflowStageIndex(pipeline, workflow.currentStageId);
+    const targetStageIndex = getWorkflowStageIndex(pipeline, targetStage.id);
+    const previousWorkflow = workflow.conversationId && (
+      PREVIOUS_WORKFLOW_REFERENCE.test(interaction.text) || targetStageIndex > currentStageIndex
+    )
+      ? await this.repository.findPreviousWorkflow(
+          workflow.conversationId,
+          workflow.createdAt,
+          workflow.id,
+        )
+      : null;
+    if (previousWorkflow?.status === "succeeded") {
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId: interaction.messageId,
+        role: "user",
+        content: interaction.text,
+      });
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId: randomUUID(),
+        role: "assistant",
+        content: PREVIOUS_WORKFLOW_RESTART_NOTICE,
+      });
+      return VideoWorkflowInteractionResultSchema.parse({
+        accepted: true,
+        intent: "restart_unavailable",
+      });
+    }
+    if (!["awaiting_input", "failed", "succeeded"].includes(workflow.status)) {
+      throw new ConflictException({
+        code: "VIDEO_WORKFLOW_RESTART_NOT_ALLOWED",
+        message: "The workflow cannot restart while work is drafting, queued, running, or cancelled.",
+      });
+    }
+    if (currentStageIndex < 0 || targetStageIndex > currentStageIndex) {
+      throw new ConflictException({
+        code: "VIDEO_WORKFLOW_RESTART_STAGE_UNAVAILABLE",
+        message: "The workflow can only restart from the current stage or an earlier review stage.",
+      });
+    }
+    const prerequisite = getPreviousWorkflowStage(pipeline, targetStage.id);
+    if (prerequisite && !await this.repository.findLatestActiveStageCheckpoint(
+      workflow.id,
+      pipeline.id,
+      prerequisite.id,
+    )) {
+      throw new ConflictException({
+        code: "VIDEO_WORKFLOW_RESTART_PREREQUISITE_MISSING",
+        message: "The upstream artifact required for this restart is unavailable.",
+      });
+    }
+    const requestedAt = new Date();
+    const expiresAt = new Date(requestedAt.getTime() + RESTART_CONFIRMATION_TTL_MS);
+    const restartRequestId = randomUUID();
+    const isSaved = await this.repository.requestRestart({
+      workflowId: workflow.id,
+      pipelineId: pipeline.id,
+      restartRequestId,
+      targetStage: targetStage.id,
+      text: interaction.text,
+      expectedVersion: workflow.currentVersion,
+      requestedAt,
+      expiresAt,
+    });
+    if (!isSaved) {
+      throw new ConflictException({
+        code: "VIDEO_WORKFLOW_RESTART_REQUEST_STALE",
+        message: "The workflow changed before the restart request could be saved.",
+      });
+    }
+    await this.conversations.appendMessage({
+      conversationId: workflow.conversationId,
+      messageId: interaction.messageId,
+      role: "user",
+      content: interaction.text,
+    });
+    await this.conversations.appendMessage({
+      conversationId: workflow.conversationId,
+      messageId: restartRequestId,
+      role: "assistant",
+      content: `**确认从${targetStage.label}重新开始？**\n\n` +
+        "该步骤及后续产物会保留为历史版本，并重新生成新的版本。\n\n" +
+        "请回复“确认”或“取消”。",
+    });
+    const pendingRestart = PendingVideoWorkflowRestartSchema.parse({
+      restartRequestId,
+      targetStage: targetStage.id,
+      text: interaction.text,
+      expectedVersion: workflow.currentVersion,
+      requestedAt: requestedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    });
+    await this.events.append({
+      eventId: `${workflow.id}:restart:${restartRequestId}:requested`,
+      workflowId: workflow.id,
+      requestId: workflow.requestId,
+      type: "workflow.restart.requested",
+      data: pendingRestart,
+    });
+    return VideoWorkflowInteractionResultSchema.parse({
+      accepted: true,
+      intent: "restart_requested",
+      restartRequestId,
+    });
+  }
+
+  private async cancelRestart(
+    workflow: NonNullable<Awaited<ReturnType<VideoWorkflowRepository["findWorkflow"]>>>,
+    interaction: Extract<VideoWorkflowInteraction, { type: "restart_cancel" }>,
+  ): Promise<VideoWorkflowInteractionResult> {
+    if (!workflow.conversationId) throw new Error("Restartable workflow is missing its conversation.");
+    const pipeline = findWorkflowPipelineDefinition(workflow.pipelineId);
+    const targetStage = pipeline && workflow.pendingRestartStage
+      ? parseWorkflowRestartTarget(pipeline, workflow.pendingRestartStage)
+      : null;
+    if (!targetStage || workflow.pendingRestartId !== interaction.restartRequestId ||
+        !await this.repository.cancelRestart(workflow.id, interaction.restartRequestId)) {
+      throw new ConflictException({
+        code: "VIDEO_WORKFLOW_RESTART_CONFIRMATION_STALE",
+        message: "The restart confirmation is no longer current.",
+      });
+    }
+    await this.conversations.appendMessage({
+      conversationId: workflow.conversationId,
+      messageId: interaction.messageId,
+      role: "user",
+      content: "取消重新开始",
+    });
+    await this.events.append({
+      eventId: `${workflow.id}:restart:${interaction.restartRequestId}:cancelled`,
+      workflowId: workflow.id,
+      requestId: workflow.requestId,
+      type: "workflow.restart.cancelled",
+      data: { restartRequestId: interaction.restartRequestId, targetStage: targetStage.id },
+    });
+    return VideoWorkflowInteractionResultSchema.parse({
+      accepted: true,
+      intent: "restart_cancelled",
+      restartRequestId: interaction.restartRequestId,
+    });
+  }
+
+  private async confirmRestart(
+    workflow: NonNullable<Awaited<ReturnType<VideoWorkflowRepository["findWorkflow"]>>>,
+    interaction: Extract<VideoWorkflowInteraction, { type: "restart_confirm" }>,
+  ): Promise<VideoWorkflowInteractionResult> {
+    if (!workflow.conversationId) throw new Error("Restartable workflow is missing its conversation.");
+    const pipeline = findWorkflowPipelineDefinition(workflow.pipelineId);
+    const targetStage = pipeline && workflow.pendingRestartStage
+      ? parseWorkflowRestartTarget(pipeline, workflow.pendingRestartStage)
+      : null;
+    const claimed = pipeline && targetStage
+      ? await this.repository.claimRestart({
+          workflowId: workflow.id,
+          pipelineId: pipeline.id,
+          restartRequestId: interaction.restartRequestId,
+          targetStage: targetStage.id,
+          stagesToSupersede: getWorkflowStagesFrom(pipeline, targetStage.id).map((stage) => stage.id),
+          now: new Date(),
+        })
+      : null;
+    if (!claimed) {
+      if (workflow.pendingRestartExpiresAt && workflow.pendingRestartExpiresAt.getTime() <= Date.now()) {
+        await this.repository.cancelRestart(workflow.id, interaction.restartRequestId);
+      }
+      throw new ConflictException({
+        code: "VIDEO_WORKFLOW_RESTART_CONFIRMATION_STALE",
+        message: "The restart confirmation expired or the workflow changed.",
+      });
+    }
+    const cinematicTargetStage = CinematicGenerativeStageSchema.parse(claimed.targetStage);
+    const targetStageLabel = targetStage?.label ?? claimed.targetStage;
+    await this.conversations.appendMessage({
+      conversationId: workflow.conversationId,
+      messageId: interaction.messageId,
+      role: "user",
+      content: "确认重新开始",
+    });
+    try {
+      const runId = await this.mastraRuntime.restart(
+        {
+        workflowId: workflow.id,
+        requestId: workflow.requestId,
+        initialPrompt: workflow.initialPrompt,
+        videoModel: VideoModelSchema.parse(workflow.videoModel),
+        durationSeconds: workflow.durationSeconds,
+        restart: {
+          restartRequestId: interaction.restartRequestId,
+          targetStage: cinematicTargetStage,
+          text: claimed.text,
+          previousArtifactVersion: claimed.previousArtifactVersion,
+        },
+        },
+        claimed.baseVersion,
+        (nextRunId) => this.repository.setRunId(workflow.id, nextRunId),
+      );
+      await this.events.append({
+        eventId: `${workflow.id}:restart:${interaction.restartRequestId}:started`,
+        workflowId: workflow.id,
+        requestId: workflow.requestId,
+        type: "workflow.restart.started",
+        data: {
+          restartRequestId: interaction.restartRequestId,
+          targetStage: claimed.targetStage,
+          previousRunId: claimed.previousRunId,
+          runId,
+        },
+      });
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId: `${interaction.restartRequestId}:started`,
+        role: "assistant",
+        content: `已确认从${targetStageLabel}重新开始，正在生成新的版本。` +
+          "旧版本将作为历史记录保留。",
+      });
+    } catch (error: unknown) {
+      await this.recordRuntimeFailure(workflow.id, workflow.requestId, error);
+      throw new ServiceUnavailableException({
+        code: "VIDEO_WORKFLOW_RESTART_FAILED",
+        message: "The workflow could not restart from the selected stage.",
+      });
+    }
+    return VideoWorkflowInteractionResultSchema.parse({
+      accepted: true,
+      intent: "restart_confirmed",
+      restartRequestId: interaction.restartRequestId,
+    });
+  }
+
   private async recordRuntimeFailure(workflowId: string, requestId: string, error: unknown): Promise<void> {
     const message = error instanceof Error ? error.message : "Mastra runtime failure.";
     const workflow = await this.repository.findWorkflow(workflowId);
-    const parsedStage = CinematicStageSchema.safeParse(workflow?.cinematicStage);
+    const parsedStage = CinematicStageSchema.safeParse(workflow?.currentStageId);
     const failedStep = parsedStage.success ? parsedStage.data : "understanding";
     await this.repository.updateWorkflow(workflowId, { status: "failed", errorMessage: message });
     try {
@@ -445,4 +819,5 @@ export class VideoWorkflowService {
       // MySQL remains authoritative when Redis publishing is itself unavailable.
     }
   }
+
 }

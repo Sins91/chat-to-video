@@ -2,8 +2,14 @@ import { z } from "zod";
 
 export * from "./apimart-account.js";
 export * from "./cinematic.js";
+export * from "./cinematic-assets.js";
 export * from "./conversation.js";
+export * from "./generated-video.js";
 export * from "./video-workflow.js";
+export * from "./user-intent.js";
+export * from "./workflow-pipeline.js";
+export * from "./workflow-pipelines.js";
+export * from "./workflow-capability.js";
 
 import { ConversationIdSchema, ConversationMessageIdSchema } from "./conversation.js";
 

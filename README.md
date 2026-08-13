@@ -56,7 +56,7 @@ pnpm sdk:docs:ai -- "ToolLoopAgent"
 
 API 通过内部 `ModelGateway`、Mastra Agent 和 `@ai-sdk/openai-compatible` 调用 OpenAI 兼容的文本模型。当前 `LLM_PROVIDER` 默认是 `apimart`，聊天、分镜和创作 Agent 使用 `APIMART_CHAT_MODEL`；DeepSeek 直连入口及其环境变量继续保留，仅在显式设置 `LLM_PROVIDER=deepseek` 时启用。APIMart 的账户余额和视频生成链路不受该开关影响。纯文本聊天不调用 BullMQ 或 Worker，也不保存会话。Web 仅保留创作中心，根路径会跳转到 `/studio`；`/studio/agent` 子页面通过 `/api/chat` BFF 消费该接口。页面只保留对话输入：普通内容进入聊天 Agent，只有“生成/制作视频”“把内容做成短片”等明确执行意图才创建视频工作流；咨询、脚本、文案、创意和分镜讨论继续作为普通聊天。
 
-如需验证聊天 Agent，复制 `.env.example` 为根目录 `.env.local`，填写 `APIMART_API_KEY`，并按账号实际可用模型调整 `APIMART_CHAT_MODEL`。只有需要启用保留的 DeepSeek 直连入口时，才设置 `LLM_PROVIDER=deepseek` 并填写 `DEEPSEEK_API_KEY`。API 在开发和生产启动时默认读取该文件；由操作系统或部署平台注入的环境变量优先。可使用以下命令同时启动 API 和 Web：
+如需验证聊天 Agent，复制 `.env.example` 为根目录 `.env.local`，填写 `APIMART_API_KEY`，并按账号实际可用模型调整 `APIMART_CHAT_MODEL`。聊天总超时由 `APIMART_TIMEOUT_MS` 或 `DEEPSEEK_TIMEOUT_MS` 控制，默认值为 `600000` 毫秒（10 分钟）；分镜超时继续由独立变量控制。只有需要启用保留的 DeepSeek 直连入口时，才设置 `LLM_PROVIDER=deepseek` 并填写 `DEEPSEEK_API_KEY`。API 在开发和生产启动时默认读取该文件；由操作系统或部署平台注入的环境变量优先。可使用以下命令同时启动 API 和 Web：
 
 对话页右上角通过 NestJS API 查询 APIMart 账户级余额；Web 只能读取经过共享 Schema 校验的余额快照，不会接触 `APIMART_API_KEY`。余额查询使用同一服务端密钥，无需新增环境变量。
 
@@ -114,6 +114,12 @@ docker compose down
 pnpm --filter @chat-to-video/database db:migrate
 ```
 
+如需为历史侧栏添加简要演示数据，可在迁移完成后执行以下幂等种子命令。它会为“今天、昨天、过去 7 天、更早”各写入一条简单的一问一答，不创建视频工作流；重复执行会更新同一组固定记录：
+
+```powershell
+pnpm db:seed:history
+```
+
 ## 对话历史
 
 `/studio/agent` 使用 URL 中的 `conversationId` 恢复会话。普通聊天消息、视频创作提示和历次分镜均持久化到 MySQL；同一会话可以依次创建多个视频工作流，详情和 SSE 跟随最近一次工作流，但在已有工作流仍处于分镜、排队或生成状态时不会并发创建。历史栏删除为软删除，不会取消仍在执行的任务，也不会删除 MinIO 中的媒体产物。首次消息会自动创建会话，空白“新对话”不会提前写入数据库。
@@ -124,7 +130,9 @@ Docker Compose 已包含 MySQL、数据库迁移、Redis、MinIO、API、Worker 
 
 ## Cinematic Agent 扩展
 
-API 内的 `chat-default` 与 `cinematic-director` 已接入首批 Mastra Skills 和四个白名单只读 Tools：`get_agent_capabilities`、`get_video_model_constraints`、`get_cinematic_context`、`estimate_cinematic_cost`。`cinematic-director` 按当前 `scene_plan` 等阶段只暴露对应 Skill 与 reviewer；媒体计算和付费视频生成仍只通过现有 `cinematic-production` 工作流、BullMQ 与 `render-jobs` 执行。
+API 内的 `chat-default` 与 `cinematic-director` 已接入首批 Mastra Skills 和四个白名单只读 Tools：`get_agent_capabilities`、`get_video_model_constraints`、`get_cinematic_context`、`estimate_cinematic_cost`。两个 Agent 均先加载适配自 OpenMontage 的 `cinematic-governance` 全局治理 Skill；`cinematic-director` 再按当前 `scene_plan` 等阶段加载对应 Skill 与 reviewer。媒体计算和付费视频生成仍只通过现有 `cinematic-production` 工作流、BullMQ 与 `render-jobs` 执行；治理边界详见 [`docs/cinematic-agent-governance.md`](./docs/cinematic-agent-governance.md)。
+
+Cinematic 素材阶段现已采用双审批：第一次确认素材规划后，API 按能力注册表将 Seedream 图片、Sharp 标题卡、视频镜头和 FlowMusic 音乐分别交给 `image-jobs`、`render-jobs` 与 `agent-jobs`；Worker 将对象键、适配器和任务状态持久化到 MySQL。全部素材完成后进入第二次人工审批，批准后创建新的 Mastra continuation run 生成剪辑方案并入队最终合成。最终 FFmpeg 合成只消费已批准对象键，并对音乐执行循环、增益与淡入淡出处理。
 
 APIMart 真实 Tool Calling 冒烟门禁尚未在本次变更中执行；验证 Chat Completions、工具循环、结构化输出、流式转换、取消/超时/限流/usage 语义前，不得以默认开启状态部署。
 
