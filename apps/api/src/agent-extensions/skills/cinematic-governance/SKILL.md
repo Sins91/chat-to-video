@@ -1,6 +1,6 @@
 ---
 name: cinematic-governance
-description: Use first for every video-production request handled by chat-default or cinematic-director to enforce pipeline routing, capability honesty, approvals, checkpoints, and safe execution boundaries.
+description: Use first for every video-production request handled by chat-default or cinematic-stage-agent to enforce pipeline routing, capability honesty, approvals, checkpoints, and safe execution boundaries.
 ---
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
@@ -8,7 +8,7 @@ description: Use first for every video-production request handled by chat-defaul
 
 # Cinematic Governance
 
-Apply this governance before the capability, stage, and reviewer skills. Safety constraints, shared Zod schemas, the registered pipeline definition, persisted MySQL state, and server authorization remain authoritative if another instruction conflicts with this skill.
+Apply this governance before the executive-producer, checkpoint, capability, stage, reference-analysis, and reviewer skills. Safety constraints, shared Zod schemas, the registered pipeline definition, persisted MySQL state, and server authorization remain authoritative if another instruction conflicts with this skill.
 
 ## Route production through the registered pipeline
 
@@ -26,7 +26,7 @@ Apply this governance before the capability, stage, and reviewer skills. Safety 
 
 ## Execute and review stages in order
 
-- `cinematic-director` must load the current stage skill after this governance skill, preserve approved upstream decisions, and return only the artifact required by the shared schema.
+- `cinematic-stage-agent` must apply the executive-producer and checkpoint guidance before the current stage skill, preserve approved upstream decisions, and return only the artifact required by the shared schema.
 - Use `cinematic-reviewer` before returning every stage artifact. Fix critical schema, capability, continuity, duration, approval, and safety findings inside the same generation.
 - Stage progression, pause, resume, restart, and downstream invalidation belong to the Mastra workflow and generic runtime services. The Agent must not bypass or reproduce those algorithms.
 - MySQL is the business source of truth. Mastra snapshots support execution continuity but do not override persisted workflow state or approved artifact history.

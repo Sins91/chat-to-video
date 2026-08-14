@@ -79,8 +79,8 @@ export function VideoWorkflowVisualization() {
     return <aside className="checkerboard grid h-full min-w-0 place-items-center p-6" aria-labelledby="visualization-title"><div className="max-w-sm rounded-xl border border-red-950 bg-[#111315]/95 p-6 text-center"><CircleAlertIcon className="mx-auto size-7 text-red-400" /><h2 className="mt-4 font-sans text-sm font-medium text-zinc-200" id="visualization-title">{failure.stage ? <>失败环节：{failure.stage}</> : "视频生成失败"}</h2><p className="mt-2 text-xs leading-5 text-zinc-500">{failure.detail}</p><Button className="mt-4" onClick={() => void refresh()} size="sm" type="button" variant="outline"><RefreshCwIcon />刷新状态</Button></div></aside>;
   }
 
-  if (snapshot && isQueuedStatus(snapshot.status)) {
-    const queueAhead = job?.queueAhead ?? null;
+  if (snapshot && job && isQueuedStatus(snapshot.status)) {
+    const queueAhead = job.queueAhead ?? null;
     const model = getVideoModelPresentation(snapshot.videoModel);
     const queueMessage = queueAhead === null
       ? "\u6b63\u5728\u83b7\u53d6\u5b9e\u65f6\u6392\u961f\u4f4d\u7f6e\u2026"
@@ -119,8 +119,8 @@ export function VideoWorkflowVisualization() {
     );
   }
 
-  if (snapshot?.status === "queued" || snapshot?.status === "running") {
-    const progress = job?.progress ?? 0;
+  if (job && (snapshot?.status === "queued" || snapshot?.status === "running")) {
+    const progress = job.progress ?? 0;
     const model = getVideoModelPresentation(snapshot.videoModel);
     const generationMessage = stepProgress?.stepId === "video-generation"
       ? stepProgress.message
@@ -138,7 +138,6 @@ export function VideoWorkflowVisualization() {
             {snapshot.assetBatch ? (
               <CinematicAssetReviewCard
                 batch={snapshot.assetBatch}
-                canReview={canReview && snapshot.assetBatch.status === "awaiting_approval"}
               />
             ) : null}
             {snapshot.currentArtifact ? (
@@ -172,5 +171,5 @@ export function VideoWorkflowVisualization() {
     );
   }
 
-  return <aside className="checkerboard grid h-full min-w-0 place-items-center" aria-labelledby="visualization-title"><div className="flex max-w-sm items-center gap-4 text-zinc-500"><span className="grid size-12 shrink-0 place-items-center rounded-xl border border-white/10 bg-[#111315]"><SparklesIcon className="size-5" /></span><div><h2 className="font-sans text-sm font-medium text-zinc-400" id="visualization-title">可视化工作区</h2><p className="mt-1 text-xs leading-5">Agent 生成的分镜、流程状态和媒体结果将在这里呈现</p></div></div></aside>;
+  return <aside className="checkerboard grid h-full min-w-0 place-items-center" aria-labelledby="visualization-title"><div className="flex max-w-sm items-center gap-4 text-zinc-500"><span className="grid size-12 shrink-0 place-items-center rounded-xl border border-white/10 bg-[#111315]"><SparklesIcon className="size-5" /></span><div><h2 className="font-sans text-sm font-medium text-zinc-400" id="visualization-title">可视化工作区</h2><p className="mt-1 text-xs leading-5">管线编排生成的规划、流程状态和媒体结果将在这里呈现</p></div></div></aside>;
 }

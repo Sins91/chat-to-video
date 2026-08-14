@@ -1,6 +1,6 @@
 ---
 name: cinematic-scene-plan
-description: Use when producing the scene_plan artifact for the scene_plan stage of the fixed cinematic-production workflow.
+description: Use when translating an approved cinematic script into executable, model-safe scenes for the scene_plan approval stage.
 ---
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
@@ -8,13 +8,27 @@ description: Use when producing the scene_plan artifact for the scene_plan stage
 
 # Cinematic Scene Plan
 
-Convert the approved script into executable, ordered scenes.
+Translate the approved script into ordered scenes whose visual, motion, transition, and audio intent can be executed by registered capabilities.
 
-- Query video-model constraints and keep every scene within the selected model's single-generation limit.
-- Split longer beats into sequential scenes while preserving narrative, subject, lighting, wardrobe, spatial, and motion continuity.
-- Make scene durations total exactly the requested final duration and keep orders contiguous from 1.
-- Use only `generated_video`, `generated_image`, or `title_card`; no supplied media is authorized in the current demo.
-- A motion-required scene must use generated video. Do not hide a still-image downgrade behind camera wording.
-- Specify a concrete visual prompt, camera direction, transition, audio direction, and narrative purpose for every scene.
+## Plan hero moments and continuity
 
-Self-check duration arithmetic, model limits, source types, visual variety, and continuity.
+- Define which scenes carry the hook, reveal, emotional peak, and landing; give them intentional framing rather than treating every scene equally.
+- Preserve subject identity, wardrobe, lighting direction, spatial relationships, palette, and movement between adjacent generated scenes.
+- Vary shot size and visual grammar with narrative purpose. Repeated compositions, decorative visuals, weak motion, and typography-heavy coverage create slideshow risk.
+- Use a small transition vocabulary. Prefer `cut`; use `match_cut`, `crossfade`, or `fade_black` only when the emotional or spatial logic supports it.
+
+## Respect execution limits
+
+Query model constraints when generated video is planned. Keep `generationDurationSeconds` within the selected model limit and long enough to cover the final scene duration. Split longer beats into coherent sequential scenes.
+
+Use `supplied_video` only when approved server context includes authorized source assets. Otherwise use `generated_video`, `generated_image`, or `title_card`. A motion-required scene must use an actual motion source; do not disguise a still-image downgrade with camera wording.
+
+For every scene specify:
+
+- A concrete `narrativeBeat` and `visualPrompt`.
+- Source type and honest `motionRequired` value.
+- Camera framing or movement with a reason.
+- One supported transition.
+- Music, ambience, narration, dialogue, silence, or sound-effect intent.
+
+Keep orders contiguous from 1 and make durations total exactly `durationSeconds`. Before returning, review hero-frame clarity, model safety, source authorization, visual variety, continuity, aspect-ratio suitability, and exact timing.

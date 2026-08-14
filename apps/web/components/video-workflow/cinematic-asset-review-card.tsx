@@ -2,12 +2,18 @@
 
 import type { CinematicAssetBatch } from "@chat-to-video/contracts";
 
+const assetStatusText = (status: CinematicAssetBatch["assets"][number]["status"]): string => ({
+  queued: "等待中",
+  running: "生成中",
+  succeeded: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+})[status];
+
 export function CinematicAssetReviewCard({
   batch,
-  canReview,
 }: {
   readonly batch: CinematicAssetBatch;
-  readonly canReview: boolean;
 }) {
   return (
     <article className="rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm">
@@ -34,22 +40,28 @@ export function CinematicAssetReviewCard({
             ) : asset.reviewUrl && asset.kind === "music" ? (
               <div className="p-4"><audio className="w-full" controls preload="metadata" src={asset.reviewUrl} /></div>
             ) : (
-              <div className="grid aspect-video place-items-center text-xs text-muted-foreground">
-                {asset.status === "failed" ? asset.errorMessage ?? "生成失败" : "素材生成中"}
+              <div className="grid aspect-video place-items-center px-6 text-xs text-muted-foreground">
+                <div className="w-full max-w-48 text-center">
+                  <p>{asset.status === "failed" ? asset.errorMessage ?? "生成失败" : assetStatusText(asset.status)}</p>
+                  {asset.status === "running" ? <>
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-border/70">
+                      <div
+                        className="h-full rounded-full bg-primary transition-[width]"
+                        style={{ width: `${asset.progress}%` }}
+                      />
+                    </div>
+                    <p className="mt-2 font-numeric tabular-nums">{asset.progress}%</p>
+                  </> : null}
+                </div>
               </div>
             )}
             <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-muted-foreground">
               <span>{asset.kind === "music" ? "背景音乐" : `镜头 ${asset.sceneOrder ?? "—"}`}</span>
-              <span>{asset.status}</span>
+              <span>{asset.status === "running" ? `${assetStatusText(asset.status)} ${asset.progress}%` : assetStatusText(asset.status)}</span>
             </div>
           </section>
         ))}
       </div>
-      {canReview ? (
-        <p className="mt-4 rounded-lg border border-warning/30 bg-warning-muted px-4 py-3 text-xs leading-5 text-warning-foreground">
-          请检查画面、运动、标题文字和音乐。确认后回复“确认”；如需重做，请明确要求从素材阶段重新生成。
-        </p>
-      ) : null}
     </article>
   );
 }

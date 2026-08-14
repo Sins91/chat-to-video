@@ -1,6 +1,6 @@
 ---
 name: cinematic-edit
-description: Use when producing edit decisions for the edit stage of the fixed cinematic-production workflow.
+description: Use when translating approved scenes and assets into deterministic FFmpeg-oriented edit decisions for the edit stage.
 ---
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
@@ -8,13 +8,21 @@ description: Use when producing edit decisions for the edit stage of the fixed c
 
 # Cinematic Edit Decisions
 
-Translate approved scenes and assets into deterministic FFmpeg-oriented edit decisions.
+Create editorial decisions; do not execute FFmpeg or enqueue the render job.
 
-- Preserve scene order and make timeline durations total exactly the requested final duration.
-- Use supported transitions only and keep audio gain within the schema range.
-- Lock `rendererFamily` to `ffmpeg`.
-- Describe one coherent color grade and audio mix aligned with the approved direction.
-- Build a final provider prompt consistent with the approved scenes; do not introduce new assets or providers.
-- Include quality checks for duration, continuity, motion promise, audio, and output playability.
+## Cut for the emotional arc
 
-Return decisions only. FFmpeg execution and `render-jobs` handoff remain workflow/Worker responsibilities.
+- Preserve scene order while shaping pace through shot duration, sound transitions, and contrast.
+- Protect hero moments, reveals, reaction space, and intentional silence. Do not overcut strong footage or cover it with unnecessary text.
+- Use only supported transitions and justify anything other than a cut through emotional, visual, or spatial continuity.
+- Keep `rendererFamily: ffmpeg`; never switch renderer or introduce unapproved assets or providers.
+
+## Make the timeline deterministic
+
+Keep `sceneOrder` contiguous, `startSeconds` monotonic, and timeline durations equal exactly `durationSeconds`. Keep audio gain within schema bounds. Use `audioMix` to state hierarchy among dialogue or narration, music, ambience, and effects, including ducking and peak-control intent.
+
+Describe one coherent `colorGrade` tied to the approved palette and lighting rather than a generic “cinematic” preset. Make `renderPrompt` summarize the approved scene, pacing, grade, audio, aspect-ratio, and motion commitments without adding creative scope.
+
+Include quality checks for timeline arithmetic, source coverage, continuity, motion-promise preservation, subtitle intent, audio intelligibility, peak control, output duration, and playability.
+
+Before returning, recompute slideshow risk qualitatively: flag repeated layouts, weak shot intent, typography dependence, or a motion-led promise with insufficient real motion.

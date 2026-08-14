@@ -412,11 +412,11 @@ export class RenderProcessor {
       });
       if (!isCompleted) throw new RenderJobInactiveError(payload.jobId);
       await this.event({
-        eventId: `${payload.jobId}:director-pending`,
+        eventId: `${payload.jobId}:completed`,
         workflowId: payload.workflowId,
         requestId: payload.requestId,
-        type: "job.progress",
-        data: { jobId: payload.jobId, status: "succeeded", progress: 100 },
+        type: "job.completed",
+        data: { jobId: payload.jobId },
       });
     } catch (error: unknown) {
       const message = renderFailureMessage(activeStage, error);

@@ -5,6 +5,10 @@ import { WorkflowCapabilityIdSchema } from "./workflow-capability.js";
 import { WorkflowStageIdSchema } from "./workflow-pipeline.js";
 import { VideoWorkflowIdSchema } from "./video-workflow-common.js";
 
+// Legacy persistence contracts only. The active cinematic runtime no longer creates
+// Director cycles, actions, or production decisions; these schemas remain exported
+// temporarily so historical database rows stay typed and readable until a later migration.
+
 export const WorkflowDirectorSchemaVersionSchema = z.literal(1);
 
 export const WorkflowProductionDecisionCategorySchema = z.enum([

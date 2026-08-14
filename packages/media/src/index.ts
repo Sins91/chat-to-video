@@ -4,6 +4,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
 
+export {
+  probeAudio,
+  type AudioProbeResult,
+  type AudioProbeStream,
+} from "./audio-probe.js";
+export { AUDIO_ENHANCEMENT_PRESETS, enhanceAudio, type AudioEnhancementPreset } from "./audio-enhancer.js";
+export { inspectAvSync } from "./av-sync-qa.js";
+export { COLOR_GRADE_PROFILES, gradeVideoColor, gradeVideoWithLut, type ColorGradeProfile } from "./color-grader.js";
+export { sampleFrames, type FrameSamplingStrategy, type SampledFrame, type SceneBoundary } from "./frame-sampler.js";
+export { detectScenes, type DetectedScene } from "./scene-detector.js";
+export { cutSilence, detectSilence, type SilenceSegment, type SpeechSegment } from "./silence-cutter.js";
+export { burnSubtitles } from "./subtitle-burner.js";
+export {
+  generateSubtitles,
+  type SubtitleFormat,
+  type SubtitleHighlightStyle,
+  type SubtitleSegment,
+  type SubtitleWord,
+} from "./subtitle-generator.js";
+export { changeVideoSpeed, concatVideoSegments, trimVideo, type VideoConcatSegment } from "./video-trimmer.js";
+export { reviewVisualMedia, type AudioLevelResult, type VisualQaFrame } from "./visual-qa.js";
+
 export type CinematicClip = {
   body: Uint8Array;
   durationSeconds: number;

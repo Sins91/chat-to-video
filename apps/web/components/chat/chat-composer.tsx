@@ -1,7 +1,7 @@
 "use client";
 
 import type { VideoModel } from "@chat-to-video/contracts";
-import { ChevronDownIcon, Clock3Icon, PauseIcon, VideoIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, Clock3Icon, VideoIcon, XIcon } from "lucide-react";
 import { useCallback, useState, type Ref } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -166,13 +166,11 @@ export function ChatComposer({
           <span className="hidden pl-1 font-sans text-xs font-normal tracking-normal text-muted-foreground sm:inline">Enter 发送 · Shift+Enter 换行</span>
         </PromptInputTools>
         <PromptInputSubmit
-          aria-label={canStop ? "暂停并停止当前回复" : willQueueInput ? "加入发送队列" : "发送消息"}
+          aria-label={canStop ? "停止当前 Agent" : willQueueInput ? "加入发送队列" : "发送消息"}
           disabled={!canStop && !input.trim()}
           onStop={onStop}
           status={canStop ? "streaming" : "ready"}
-        >
-          {canStop ? <PauseIcon className="size-4 fill-current" /> : undefined}
-        </PromptInputSubmit>
+        />
       </PromptInputFooter>
     </PromptInput>
     <p className="mt-2 text-center text-[10px] text-muted-foreground">

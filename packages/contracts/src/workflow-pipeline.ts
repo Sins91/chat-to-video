@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { WorkflowStageCapabilities } from "./workflow-capability.js";
+import { WorkflowStageToolsSchema, type WorkflowStageTools } from "./workflow-tool.js";
 
 export const WorkflowPipelineIdSchema = z.string().trim()
   .regex(/^[a-z][a-z0-9-]{0,63}$/u);
@@ -29,12 +30,13 @@ export type WorkflowStageDefinition<StageId extends WorkflowStageId = WorkflowSt
     allowsRevision: boolean;
   };
   capabilities: WorkflowStageCapabilities;
+  tools: WorkflowStageTools;
   allowedNextStageIds: readonly StageId[];
   inputArtifactKinds: readonly string[];
   outputArtifactKinds: readonly string[];
   execution: "agent" | "queue" | "system";
   planningReview: { requiresApproval: boolean; allowsRevision: boolean };
-  directorSkillId?: string;
+  stageSkillId?: string;
   reviewerSkillId?: string;
 };
 
@@ -88,6 +90,11 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
     ];
     if (new Set(capabilityIds).size !== capabilityIds.length) {
       throw new Error(`Workflow stage ${stage.id} declares a capability more than once.`);
+    }
+    const tools = WorkflowStageToolsSchema.parse(stage.tools);
+    const toolIds = [...tools.required, ...tools.optional];
+    if (new Set(toolIds).size !== toolIds.length) {
+      throw new Error(`Workflow stage ${stage.id} declares a tool more than once.`);
     }
     if (stepIds.has(stage.stepId)) {
       throw new Error(`Duplicate Mastra step id: ${stage.stepId}`);

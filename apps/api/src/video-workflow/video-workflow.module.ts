@@ -12,8 +12,6 @@ import { WorkflowEventService } from "./workflow-event.service.js";
 import { VideoWorkflowOperations } from "./video-workflow.operations.js";
 import { WorkflowRecoveryService } from "./workflow-recovery.service.js";
 import { UserIntentResolverService } from "./user-intent-resolver.service.js";
-import { WorkflowDirectorService } from "./workflow-director.service.js";
-import { WorkflowDirectorDispatcherService } from "./workflow-director-dispatcher.service.js";
 
 @Module({
   imports: [DatabaseModule, ModelGatewayModule],
@@ -25,8 +23,6 @@ import { WorkflowDirectorDispatcherService } from "./workflow-director-dispatche
     MastraRuntimeService,
     WorkflowRecoveryService,
     UserIntentResolverService,
-    WorkflowDirectorService,
-    WorkflowDirectorDispatcherService,
     { provide: MASTRA_RUNTIME, useExisting: MastraRuntimeService },
     { provide: VIDEO_OBJECT_STORAGE, useFactory: () => new ObjectStorage(loadStorageConfig()) },
   ],

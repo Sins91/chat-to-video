@@ -47,15 +47,9 @@ import {
   ConfirmationRequest,
   ConfirmationTitle,
 } from "@/src/components/ai-elements/confirmation";
-import {
-  ChainOfThought,
-  ChainOfThoughtContent,
-  ChainOfThoughtHeader,
-  ChainOfThoughtStep,
-  type ChainOfThoughtStepStatus,
-} from "@/src/components/ai-elements/chain-of-thought";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/src/components/ai-elements/message";
 import { Shimmer } from "@/src/components/ai-elements/shimmer";
+import { Task, TaskContent, TaskItem, TaskTrigger } from "@/src/components/ai-elements/task";
 
 interface ChatConversationProps {
   conversationId: string | null;
@@ -73,6 +67,7 @@ interface ChatConversationProps {
   pendingActionMessage: string | null;
   workflowErrorMessage: string | null;
   workflowStepProgress: WorkflowStepProgress | null;
+  workflowStepProgressHistory: readonly WorkflowStepProgress[];
 }
 
 type CopyFeedback = { id: string; state: "copied" | "failed" } | null;
@@ -178,13 +173,20 @@ const ArchivedVideoMessage = ({
   </AssistantSurface>;
 };
 
+const workflowActivityDetail = (progress: WorkflowStepProgress): string =>
+  progress.toolActivity
+    ? `${progress.toolActivity.toolLabel} · ${progress.toolActivity.summary}`
+    : progress.message;
+
 const WorkflowActivityText = ({
   processingSeconds,
   progress,
+  progressHistory,
   showProgressMeta = true,
 }: {
   processingSeconds: number;
   progress: WorkflowStepProgress;
+  progressHistory: readonly WorkflowStepProgress[];
   showProgressMeta?: boolean;
 }) => {
   const progressSignature = JSON.stringify([
@@ -205,64 +207,66 @@ const WorkflowActivityText = ({
     return () => window.clearInterval(timerId);
   }, [progress.stepState, showProgressMeta]);
 
-  const detail = progress.toolActivity?.summary ?? progress.message;
-  const status: ChainOfThoughtStepStatus = progress.stepState === "running"
-    ? "active"
-    : progress.stepState === "completed"
-      ? "complete"
-      : "pending";
-  const StepIcon = progress.stepState === "running"
-    ? LoaderCircleIcon
-    : progress.stepState === "completed"
-      ? CheckCircle2Icon
-      : progress.stepState === "failed"
-        ? CircleAlertIcon
-        : progress.stepState === "awaiting_input"
-          ? PauseCircleIcon
-          : CircleDashedIcon;
   const silenceMs = Math.max(0, nowMs - lastProgressAtMs);
   const isPossiblyStalled = progress.stepState === "running"
     && silenceMs >= WORKFLOW_PROGRESS_STALL_THRESHOLD_MS;
   const stalledActivity = isPossiblyStalled
     ? `可能阻塞 · ${formatProgressSilence(silenceMs)}无更新`
     : undefined;
+  const activeActivityDetail = workflowActivityDetail(progress);
   const title = progress.stepState === "running"
-    ? <Shimmer as="span">{progress.stepLabel}</Shimmer>
+    ? <Shimmer as="span">{progress.toolActivity ? activeActivityDetail : progress.stepLabel}</Shimmer>
     : progress.stepLabel;
   return <AssistantSurface processingSeconds={processingSeconds}>
-    <ChainOfThought defaultOpen>
-      <ChainOfThoughtHeader
+    <Task defaultOpen>
+      <TaskTrigger
+        activity={showProgressMeta && stalledActivity
+          ? { label: stalledActivity, state: "stalled" }
+          : undefined}
         aria-label={showProgressMeta
           ? `${progress.stepLabel}${stalledActivity ? `，${stalledActivity}` : ""}`
           : progress.stepLabel}
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
-          {showProgressMeta && stalledActivity ? <span
-            aria-hidden="true"
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-warning/35 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning-foreground"
+        progress={showProgressMeta
+          ? { current: progress.stepIndex, total: progress.stepTotal }
+          : undefined}
+        status={progress.stepState}
+        title={title}
+      />
+      <TaskContent aria-live="polite" role="status">
+        {progressHistory.map((activity, index) => {
+          const isLatest = index === progressHistory.length - 1;
+          const activityState = !isLatest && activity.stepState === "running"
+            ? "completed"
+            : activity.stepState;
+          const activityDetail = workflowActivityDetail(activity);
+          const ActivityIcon = activityState === "running"
+            ? LoaderCircleIcon
+            : activityState === "completed"
+              ? CheckCircle2Icon
+              : activityState === "failed"
+                ? CircleAlertIcon
+                : activityState === "awaiting_input"
+                  ? PauseCircleIcon
+                  : CircleDashedIcon;
+          return <TaskItem
+            className={activityState === "running"
+              ? "flex items-start gap-2 text-foreground [&_svg]:animate-spin [&_svg]:motion-reduce:animate-none"
+              : activityState === "failed"
+                ? "flex items-start gap-2 text-destructive"
+                : activityState === "awaiting_input"
+                  ? "flex items-start gap-2 text-warning-foreground"
+                  : "flex items-start gap-2"}
+            data-state={activityState}
+            key={`${activity.stepId}:${index}`}
           >
-            <span className="size-1.5 rounded-full bg-warning" />
-            {stalledActivity}
-          </span> : null}
-        </span>
-      </ChainOfThoughtHeader>
-      <ChainOfThoughtContent aria-live="polite" role="status">
-        <ChainOfThoughtStep
-          className={progress.stepState === "running"
-            ? "[&_svg]:animate-spin [&_svg]:motion-reduce:animate-none"
-            : progress.stepState === "failed"
-              ? "text-destructive"
-              : progress.stepState === "awaiting_input"
-                ? "text-warning-foreground"
-                : undefined}
-          icon={StepIcon}
-          isAnimated={false}
-          label={progress.stepState === "running" ? <Shimmer as="span">{detail}</Shimmer> : detail}
-          status={status}
-        />
-      </ChainOfThoughtContent>
-    </ChainOfThought>
+            <ActivityIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+            <span className="min-w-0">
+              {activityState === "running" ? <Shimmer as="span">{activityDetail}</Shimmer> : activityDetail}
+            </span>
+          </TaskItem>;
+        })}
+      </TaskContent>
+    </Task>
   </AssistantSurface>;
 };
 
@@ -325,6 +329,7 @@ export const ChatConversation = memo(function ChatConversation({
   pendingActionMessage,
   workflowErrorMessage,
   workflowStepProgress,
+  workflowStepProgressHistory,
 }: ChatConversationProps) {
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>(null);
   const [processingSeconds, setProcessingSeconds] = useState(0);
@@ -382,7 +387,15 @@ export const ChatConversation = memo(function ChatConversation({
     }
     return durations;
   }, [entries]);
-  const hasReviewableWorkflowAnswer = snapshot?.status === "awaiting_input" && entries.some((entry) => {
+  const reviewableAssetBatch = snapshot?.status === "awaiting_input" &&
+    snapshot.assetBatch?.status === "awaiting_approval" &&
+    snapshot.assetBatch.assets.length > 0 &&
+    snapshot.assetBatch.assets.every((asset) =>
+      asset.status === "succeeded" && asset.reviewUrl !== null
+    )
+    ? snapshot.assetBatch
+    : null;
+  const hasReviewableWorkflowAnswer = reviewableAssetBatch !== null || snapshot?.status === "awaiting_input" && entries.some((entry) => {
     if (entry.type === "cinematic_artifact") {
       return entry.workflowId === snapshot.workflowId
         && snapshot.currentArtifact?.version === entry.artifact.version
@@ -396,8 +409,6 @@ export const ChatConversation = memo(function ChatConversation({
     ? snapshot
     : null;
   const hasCompletedVideo = completedVideoSnapshot !== null;
-  const hasDirectorFallback = snapshot?.status === "failed"
-    && snapshot.failureCode === "DIRECTOR_ACTION_LIMIT_EXCEEDED";
   const completedVideoJobId = completedVideoSnapshot?.videoJob?.jobId ?? null;
   const timelineItems = useMemo(() => insertConversationTimelineMarker(entries, completedVideoSnapshot
     ? {
@@ -406,9 +417,12 @@ export const ChatConversation = memo(function ChatConversation({
         type: "workflow_completion",
       }
     : null), [completedVideoSnapshot, entries]);
-  const visibleWorkflowStepProgress = hasCompletedVideo || hasDirectorFallback || snapshot?.status === "cancelled" ? null : workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer
+  const visibleWorkflowStepProgress = hasCompletedVideo || snapshot?.status === "cancelled" ? null : workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer
     ? null
     : workflowStepProgress;
+  const visibleWorkflowStepProgressHistory = visibleWorkflowStepProgress
+    ? workflowStepProgressHistory
+    : [];
   const workflowReviewNotice = workflowStepProgress?.stepState === "awaiting_input"
     ? workflowStepProgress.message
     : "当前规划已完成，等待确认或提出修改。";
@@ -599,7 +613,8 @@ export const ChatConversation = memo(function ChatConversation({
           return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={message.notice} onCopy={handleCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role={entry.role} text={message.text} />;
         }
         if (entry.type === "cinematic_artifact") {
-          const canReview = snapshot?.status === "awaiting_input" &&
+          const canReview = reviewableAssetBatch === null &&
+            snapshot?.status === "awaiting_input" &&
             entry.workflowId === snapshot.workflowId &&
             snapshot.currentArtifact?.version === entry.artifact.version &&
             snapshot.currentArtifact.artifact.stage === entry.artifact.artifact.stage;
@@ -617,6 +632,16 @@ export const ChatConversation = memo(function ChatConversation({
         return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={canReview ? workflowReviewNotice : undefined} onCopy={handleCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={storyboardSummaryText(entry.storyboard, false)} />;
       })}
 
+      {reviewableAssetBatch ? <TextMessage
+        copyFeedback={copyFeedback}
+        id={`asset-review:${reviewableAssetBatch.batchId}`}
+        notice="确认后请回复“确认”；如需调整，请直接说明需要修改或重新生成的素材。"
+        onCopy={handleCopy}
+        processingSeconds={processingSeconds}
+        role="assistant"
+        text="**素材已生成，等待确认**\n\n所有素材均已生成并加载到右侧预览区，请逐项检查画面、运动、标题文字和音乐。"
+      /> : null}
+
       {liveMessages.map((message) => {
         const text = message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
         const messageProcessingSeconds = message.role === "assistant"
@@ -627,9 +652,9 @@ export const ChatConversation = memo(function ChatConversation({
         return text ? <TextMessage copyFeedback={copyFeedback} id={message.id} key={message.id} onCopy={handleCopy} processingSeconds={messageProcessingSeconds} role={message.role} text={text} /> : null;
       })}
 
-      {temporaryProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={temporaryProgress} showProgressMeta={false} /> : visibleWorkflowStepProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={visibleWorkflowStepProgress} /> : null}
+      {temporaryProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={temporaryProgress} progressHistory={[temporaryProgress]} showProgressMeta={false} /> : visibleWorkflowStepProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={visibleWorkflowStepProgress} progressHistory={visibleWorkflowStepProgressHistory} /> : null}
       {workflowErrorMessage ? <TextMessage copyFeedback={copyFeedback} id="workflow-service-error" onCopy={handleCopy} processingSeconds={processingSeconds} role="assistant" text={WORKFLOW_SERVICE_ERROR_MESSAGE} /> : null}
-      {!workflowErrorMessage && !snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.canRecover ? <AssistantSurface processingSeconds={processingSeconds}><Confirmation approval={{ id: `recover:${snapshot.workflowId}` }} state="approval-requested"><ConfirmationRequest><ConfirmationTitle>可以从最近的有效阶段继续，不会重复生成已保存的内容。</ConfirmationTitle></ConfirmationRequest><ConfirmationActions><ConfirmationAction disabled={isWorkflowSubmitting} onClick={onRecoverWorkflow} variant="outline"><RotateCcwIcon />重新尝试</ConfirmationAction></ConfirmationActions></Confirmation></AssistantSurface> : null}
+      {!workflowErrorMessage && !snapshot?.pendingControl && snapshot?.status === "failed" && snapshot.canRecover ? <AssistantSurface processingSeconds={processingSeconds}><Confirmation approval={{ id: `recover:${snapshot.workflowId}` }} state="approval-requested"><ConfirmationRequest><ConfirmationTitle>可以从最近的有效阶段继续，不会重复生成已保存的内容。</ConfirmationTitle></ConfirmationRequest><ConfirmationActions><ConfirmationAction disabled={isWorkflowSubmitting} onClick={onRecoverWorkflow} variant="outline"><RotateCcwIcon />重新尝试</ConfirmationAction></ConfirmationActions></Confirmation></AssistantSurface> : null}
       </div>
     </ConversationContent>
     <ConversationScrollButton aria-label="滚动到最新消息" />

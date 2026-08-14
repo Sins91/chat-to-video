@@ -7,7 +7,6 @@ import type {
   WorkflowToolActivity,
   WorkflowUserIntent,
   WorkflowStageId,
-  WorkflowDirectorDecision,
 } from "@chat-to-video/contracts";
 import type { UIMessageChunk } from "ai";
 
@@ -26,14 +25,6 @@ export type ModelToolActivityCallback =
   (activity: ModelToolActivity) => void | Promise<void>;
 
 export interface ModelGateway {
-  decideWorkflowAction(request: {
-    requestId: string;
-    workflowId: string;
-    conversationId?: string;
-    tenantId: string;
-    projectId: string;
-    context: Record<string, unknown>;
-  }): Promise<WorkflowDirectorDecision>;
   classifyWorkflowIntent(request: {
     requestId: string;
     workflowId: string;
@@ -86,6 +77,7 @@ export interface ModelGateway {
     projectId: string;
     initialPrompt: string;
     stage: CinematicGenerativeStage;
+    videoModel: VideoModel;
     durationSeconds: number;
     modelMaxDurationSeconds: number;
     previousArtifact?: CinematicArtifact;

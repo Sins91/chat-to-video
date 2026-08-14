@@ -6,6 +6,10 @@ const migration = readFileSync(
   fileURLToPath(new URL("../migrations/0007_workflow_stage_restart.sql", import.meta.url)),
   "utf8",
 );
+const unifiedControlMigration = readFileSync(
+  fileURLToPath(new URL("../migrations/0015_unify_workflow_controls.sql", import.meta.url)),
+  "utf8",
+);
 
 describe("workflow stage restart migration", () => {
   it("persists pending confirmation and soft-supersession metadata", () => {
@@ -15,5 +19,10 @@ describe("workflow stage restart migration", () => {
     expect(migration).toContain("workflow_stage_checkpoint_active_idx");
     expect(migration).toContain("SELECT CONCAT(`workflow_id`, ':', `version`)");
     expect(migration).toContain("video_jobs_active_workflow_idx");
+  });
+
+  it("removes the legacy pending restart columns after control requests take ownership", () => {
+    expect(unifiedControlMigration).toContain("DROP COLUMN `pending_restart_id`");
+    expect(unifiedControlMigration).toContain("DROP COLUMN `pending_restart_expires_at`");
   });
 });

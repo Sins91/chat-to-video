@@ -1,0 +1,25 @@
+{
+  "name": "@chat-to-video/tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "types": "./src/index.ts",
+    "import": "./dist/index.js"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "preinstall": "node ../../scripts/enforce-pnpm.cjs",
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@chat-to-video/media": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0"
+  }
+}

@@ -10,10 +10,10 @@
 - SSE 使用独立服务封装，不进入普通 HTTP 缓存层。事件优先使用共享协议中的 `message.delta`、`message.completed`、`agent.step`、`job.progress`、`job.completed`、`job.failed`、`heartbeat`，并支持心跳、取消、游标补发和重连后快照。
 - 所有控制器输入、队列交接、模型输出和 Provider 响应都先按 `unknown` 处理，并使用 `@chat-to-video/contracts` 的共享 Schema 解析。
 
-## Agent 控制流与模型接入
+## 工作流控制与模型接入
 
-- Agent 只提出版本化结构化动作；Pipeline Policy 依据当前触发器、统一管线定义和 MySQL 状态裁决；Runtime 只执行通过裁决的动作，不得静默改写 Agent 提议。
-- 审批、Worker 完成和恢复触发器必须先在 MySQL 中原子认领。Policy 驳回时原样保存动作与拒绝原因，不产生业务副作用，也不丢失当前触发器。
+- `cinematic-production` 是视频生产的唯一 Mastra 工作流入口，并根据统一管线定义确定性推进；阶段 Agent 只生成当前步骤的结构化产物，不得返回或执行工作流控制动作。
+- 审批、Worker 完成和恢复必须先在 MySQL 中原子认领，再恢复对应 Mastra run 或创建显式 continuation run；不得重新引入 LLM Director、Policy 驳回循环或 Dispatcher 旁路。
 - 模型供应商只通过内部 `ModelGateway` 接入；领域代码使用场景别名，不散落供应商模型名、密钥、超时、重试或错误码细节。
 - APIMart 适配器须持续验证流式协议、工具调用、结构化输出、超时、限流、错误码、重试和用量统计语义；不得把兼容接口当作领域边界。
 - 模型输入、结构化输出和工具参数必须经 Zod 运行时校验；校验失败只允许有限次数的受控修复，未经验证的输出不得写数据库、形成对象路径或进入队列。

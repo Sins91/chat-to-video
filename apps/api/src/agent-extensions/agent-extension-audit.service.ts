@@ -66,7 +66,7 @@ export class AgentExtensionAuditService {
     const extensionId = extensionKind === "skill"
       ? getSkillId(input.toolInput) ?? input.toolName
       : safeIdentifier(input.toolName) ?? "unknown-tool";
-    const stage = input.context.agentId === "cinematic-director"
+    const stage = input.context.agentId === "cinematic-stage-agent"
       ? input.context.stage
       : undefined;
     const callKey = [
@@ -81,7 +81,7 @@ export class AgentExtensionAuditService {
         id: randomUUID(),
         callKey,
         requestId: input.context.requestId,
-        workflowId: input.context.agentId === "cinematic-director"
+        workflowId: input.context.agentId === "cinematic-stage-agent"
           ? input.context.workflowId
           : undefined,
         conversationId: input.context.conversationId,

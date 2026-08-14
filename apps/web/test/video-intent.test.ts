@@ -13,6 +13,10 @@ describe("video creation intent", () => {
     "我想要一个 10 秒的产品宣传片",
     "生成雨夜街道的画面，时长 10 秒，使用缓慢推进运镜",
     "Create a video from this idea",
+    "帮我构思一个产品视频脚本",
+    "帮我生成一个宣传片脚本",
+    "给我一个产品视频分镜",
+    "制作一版视频分镜方案",
   ])("enters the workflow for an explicit creation request: %s", (content) => {
     expect(isVideoCreationIntent(content)).toBe(true);
   });
@@ -21,10 +25,6 @@ describe("video creation intent", () => {
     "你好，今天过得怎么样？",
     "聊聊视频生成技术",
     "怎么制作一个好视频？",
-    "帮我构思一个产品视频脚本",
-    "帮我生成一个宣传片脚本",
-    "给我一个产品视频分镜",
-    "制作一版视频分镜方案",
     "先别生成视频，我们继续讨论",
   ])("keeps informational or negated content in chat: %s", (content) => {
     expect(isVideoCreationIntent(content)).toBe(false);

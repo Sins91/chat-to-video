@@ -27,6 +27,7 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       execution: "agent",
       planningReview: { requiresApproval: true, allowsRevision: false },
       capabilities: { required: [], optional: [], conditional: [] },
+      tools: { required: [], optional: [] },
     },
     {
       id: "mix",
@@ -46,6 +47,7 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       execution: "agent",
       planningReview: { requiresApproval: false, allowsRevision: false },
       capabilities: { required: [], optional: [], conditional: [] },
+      tools: { required: [], optional: [] },
     },
     {
       id: "sources",
@@ -65,6 +67,7 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       execution: "agent",
       planningReview: { requiresApproval: true, allowsRevision: true },
       capabilities: { required: [], optional: [], conditional: [] },
+      tools: { required: [], optional: [] },
     },
   ],
 });

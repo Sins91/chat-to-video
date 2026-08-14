@@ -9,7 +9,7 @@
 - 队列载荷从 `unknown` 开始，以 `@chat-to-video/contracts` 的共享 Schema 解析；只接受 ID、对象键和已验证配置，不接受 Base64、大文件、任意文件系统路径或 Provider 密钥。
 - 每个任务必须有稳定幂等键，并遵守 `queued -> running -> succeeded | failed | cancelled` 状态机。重试、超时与取消不得重复生成产物、覆盖已生效终态或重复计费。
 - Worker 只通过 `@chat-to-video/database` 持久化任务事实，通过 `@chat-to-video/storage` 访问对象，通过 `@chat-to-video/media` 执行媒体操作；不得散落原始数据库连接、S3 SDK 调用或 Shell 命令。
-- Worker 完成或失败时先以条件事务写入 MySQL 事实和可补发事件，再由 API/Director continuation 消费；Worker 不直接恢复 Mastra run，也不自行宣告工作流完成。
+- Worker 完成或失败时先以条件事务写入 MySQL 事实和可补发事件，再由 API 的确定性工作流协调逻辑消费；Worker 不直接恢复 Mastra run。素材批准后由 API 创建 continuation run，最终合成任务可原子提交工作流终态。
 
 ## 媒体与外部服务安全
 

@@ -3,7 +3,6 @@ import {
   CinematicArtifactVersionSchema,
   CinematicGenerativeStageSchema,
   CinematicStageSchema,
-  PendingVideoWorkflowRestartSchema,
   StoryboardVersionSchema,
   VideoWorkflowSnapshotSchema,
   type VideoWorkflowSnapshot,
@@ -54,6 +53,7 @@ export const buildVideoWorkflowSnapshot = async (
     sceneOrder: asset.sceneOrder,
     kind: asset.kind,
     status: asset.status,
+    progress: asset.progress,
     capabilityResolution: asset.capabilityResolution,
     mimeType: asset.mimeType,
     sizeBytes: asset.sizeBytes,
@@ -136,18 +136,6 @@ export const buildVideoWorkflowSnapshot = async (
           playbackUrl,
         }
       : null,
-    pendingRestart: workflow.pendingRestartId && workflow.pendingRestartStage &&
-        workflow.pendingRestartText && workflow.pendingRestartExpectedVersion !== null &&
-        workflow.pendingRestartRequestedAt && workflow.pendingRestartExpiresAt
-      ? PendingVideoWorkflowRestartSchema.parse({
-          restartRequestId: workflow.pendingRestartId,
-          targetStage: workflow.pendingRestartStage,
-          text: workflow.pendingRestartText,
-          expectedVersion: workflow.pendingRestartExpectedVersion,
-          requestedAt: workflow.pendingRestartRequestedAt.toISOString(),
-          expiresAt: workflow.pendingRestartExpiresAt.toISOString(),
-        })
-      : null,
     pendingControl: pendingControlRow
       ? repository.toPendingWorkflowControl(pendingControlRow)
       : null,
@@ -159,7 +147,6 @@ export const buildVideoWorkflowSnapshot = async (
     lastProgressAt: workflow.lastProgressAt.toISOString(),
     failureCode: workflow.failureCode,
     canRecover: workflow.status === "failed" && (
-      workflow.failureCode === "DIRECTOR_ACTION_LIMIT_EXCEEDED" ||
       (workflow.failureCode === "AGENT_PROGRESS_STALLED" && workflow.runId !== null) ||
       ((workflow.failureCode === "QUEUE_PROGRESS_STALLED" ||
         workflow.failureCode === "VIDEO_PROGRESS_STALLED") && job?.providerTaskId != null)

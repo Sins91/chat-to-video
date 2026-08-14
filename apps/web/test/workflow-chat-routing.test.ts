@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { defineWorkflowPipeline } from "@chat-to-video/contracts";
+import {
+  CINEMATIC_PIPELINE_DEFINITION,
+  defineWorkflowPipeline,
+  parseWorkflowControlCommand,
+} from "@chat-to-video/contracts";
 
 import {
-  classifyWorkflowRestartConfirmation,
   classifyWorkflowReviewInput,
-  parseWorkflowRestartCommand,
 } from "@/lib/workflow-review-intent";
 
 const webRoot = resolve(import.meta.dirname, "..");
@@ -61,7 +63,8 @@ describe("workflow and chat routing", () => {
     ["restart from assets with generated footage only", "assets"],
     ["redo proposal and make it warmer", "proposal"],
   ])("recognizes an explicit single-stage restart command: %s", (content, targetStage) => {
-    expect(parseWorkflowRestartCommand(content)).toMatchObject({ targetStage, text: content });
+    expect(parseWorkflowControlCommand(content, CINEMATIC_PIPELINE_DEFINITION))
+      .toMatchObject({ type: "restart_stage", stageId: targetStage, text: content });
   });
 
   it.each([
@@ -74,13 +77,16 @@ describe("workflow and chat routing", () => {
     "修改脚本，让旁白更短",
     "继续完善当前素材方案",
   ])("keeps ambiguous or non-restart wording out of restart routing: %s", (content) => {
-    expect(parseWorkflowRestartCommand(content)).toBeNull();
+    expect(parseWorkflowControlCommand(content, CINEMATIC_PIPELINE_DEFINITION)).toBeNull();
   });
 
   it("classifies only explicit confirmation responses while restart is pending", () => {
-    expect(classifyWorkflowRestartConfirmation("确认")).toBe("confirm");
-    expect(classifyWorkflowRestartConfirmation("cancel restart")).toBe("cancel");
-    expect(classifyWorkflowRestartConfirmation("确认一下脚本内容是什么？")).toBe("chat");
+    expect(parseWorkflowControlCommand("确认", CINEMATIC_PIPELINE_DEFINITION))
+      .toEqual({ type: "confirm" });
+    expect(parseWorkflowControlCommand("取消", CINEMATIC_PIPELINE_DEFINITION))
+      .toEqual({ type: "cancel" });
+    expect(parseWorkflowControlCommand("确认一下脚本内容是什么？", CINEMATIC_PIPELINE_DEFINITION))
+      .toBeNull();
   });
 
   it("parses stages from a newly registered pipeline without parser changes", () => {
@@ -90,14 +96,14 @@ describe("workflow and chat routing", () => {
       initialStageId: "brief",
       terminalStageIds: ["voice"],
       stages: [
-        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["voice"], inputArtifactKinds: [], outputArtifactKinds: ["brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] } },
-        { id: "voice", label: "配音", aliases: ["配音", "voice"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["brief"], outputArtifactKinds: ["voice"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["voice"], inputArtifactKinds: [], outputArtifactKinds: ["brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
+        { id: "voice", label: "配音", aliases: ["配音", "voice"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["brief"], outputArtifactKinds: ["voice"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
       ],
     });
-    expect(parseWorkflowRestartCommand("从配音重新开始", pipeline))
-      .toMatchObject({ targetStage: "voice" });
-    expect(parseWorkflowRestartCommand("回到步骤2", pipeline))
-      .toMatchObject({ targetStage: "voice" });
+    expect(parseWorkflowControlCommand("从配音重新开始", pipeline))
+      .toMatchObject({ type: "restart_stage", stageId: "voice" });
+    expect(parseWorkflowControlCommand("回到步骤2", pipeline))
+      .toMatchObject({ type: "restart_stage", stageId: "voice" });
   });
 
   it.each([
@@ -109,7 +115,7 @@ describe("workflow and chat routing", () => {
     "回到步骤99",
     "restart from the twentieth stage",
   ])("does not route a non-restartable, conflicting, or invalid ordinal: %s", (content) => {
-    expect(parseWorkflowRestartCommand(content)).toBeNull();
+    expect(parseWorkflowControlCommand(content, CINEMATIC_PIPELINE_DEFINITION)).toBeNull();
   });
 
   it.each([
@@ -227,12 +233,11 @@ describe("workflow and chat routing", () => {
     expect(panel).toContain("current.filter((item) => item.id !== id)");
     expect(panel).toContain("setQueuedInputs([])");
     expect(composer).not.toContain("disabled={isGenerating}");
-    expect(composer).toContain('aria-label={willQueueInput ? "加入发送队列" : "发送消息"}');
-    expect(composer).toContain('aria-label={canStop ? "暂停并停止当前回复"');
+    expect(composer).toContain('aria-label={canStop ? "停止当前 Agent"');
     expect(composer).toContain('status={canStop ? "streaming" : "ready"}');
     expect(composer).toContain("onStop={onStop}");
-    expect(composer).toContain("PauseIcon");
-    expect(composer).not.toContain("SquareIcon");
+    expect(composer).not.toContain("PauseIcon");
+    expect(composer).not.toContain("PlayIcon");
     expect(composer).toContain('aria-label="待发送消息"');
     expect(composer).toContain("queuedInputs.map");
     expect(composer).toContain("条排队消息");
@@ -260,8 +265,9 @@ describe("workflow and chat routing", () => {
     expect(panel.indexOf("await workflow.prepareConversationSwitch(conversationId)")).toBeLessThan(panel.lastIndexOf("activateConversation(conversationId)"));
     expect(panel).toContain("messages={messages}");
     expect(panel).toContain("status={status}");
-    expect(panel).not.toContain("void stop();\n    setMessages([]);");
-    expect(panel).not.toContain("if (isChatGenerating) void stop()");
+    expect(panel).not.toContain("activeSession.controller");
+    expect(panel).toContain("const { messages, sendMessage, status, stop }");
+    expect(panel).toContain("void stop();");
     expect(panel).toContain("const completedIds = new Set(completedMessageIds);");
     expect(panel).toContain("session.chat.messages.filter((message) => !completedIds.has(message.id))");
     expect(panel.indexOf("refreshConversationRef.current().then")).toBeLessThan(panel.indexOf("releasePersistedMessages();"));

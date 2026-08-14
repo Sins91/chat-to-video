@@ -1,6 +1,6 @@
 ---
 name: cinematic-proposal
-description: Use when producing the proposal artifact for the proposal stage of the fixed cinematic-production workflow.
+description: Use when turning approved cinematic research into three distinct, feasible proposal directions for the proposal approval stage.
 ---
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
@@ -8,12 +8,34 @@ description: Use when producing the proposal artifact for the proposal stage of 
 
 # Cinematic Proposal
 
-Turn approved research into exactly three emotionally distinct and reviewable directions.
+Convert approved research into exactly three emotionally distinct, reviewable directions. This is a planning gate: do not generate assets, spend money, or enqueue work.
 
-- Give each direction a unique hook, emotional arc, camera language, palette, sound direction, and visual treatment.
-- Recommend exactly one direction and explain its fit through the schema fields rather than adding undeclared properties.
-- Lock `rendererFamily` to `ffmpeg` and preserve the requested total duration.
-- Use the cost tool when a trustworthy estimate is required. If pricing is unavailable, keep the schema-valid estimate conservative and do not claim it is a provider quote.
-- Make the delivery promise achievable with currently registered capabilities; never silently downgrade motion requirements.
+## Audit feasibility first
 
-This stage proposes work only. It does not generate assets, spend money, or enqueue jobs.
+Use `get_workflow_tools`, provider selectors, model constraints, and reviewed pricing when the proposal depends on them. Treat `unconfigured` as unavailable for the promise. The only registered renderer family is `ffmpeg`; do not offer Remotion, HyperFrames, or an unregistered fallback.
+
+Resolve the music plan at proposal time. State whether music is generated, supplied, selected from a configured library, or intentionally omitted. Do not defer a known music blocker to assets.
+
+## Design three differentiated directions
+
+Give every direction:
+
+- A specific title and emotional logline.
+- An `emotionalArc` with at least three ordered beats and a clear landing.
+- A concrete visual treatment covering framing, camera behavior, lighting, texture, typography restraint, and editing rhythm.
+- A palette of three to eight usable color or material descriptors.
+- A music and sound direction that reinforces its arc.
+
+Make the directions differ in more than adjectives. Vary the primary emotional arc, shot language, pacing, or sound strategy. Include an intimate or texture-led alternative when spectacle would make all three converge.
+
+For reference-driven work, preserve explicitly valued traits while changing at least one major creative dimension. Never propose a carbon copy.
+
+## Lock an honest promise
+
+- Recommend exactly one existing direction ID and explain the fit through declared fields only.
+- Preserve the requested `durationSeconds` and set `rendererFamily: ffmpeg`.
+- Make `deliveryPromise` explicit about motion coverage, source dependence, quality floor, audio treatment, and any approved fallback.
+- Never describe a still-led treatment as motion-led. If required motion cannot be delivered, state the constraint rather than silently weakening the promise.
+- Use reviewed pricing when available. If pricing is unavailable, do not present `estimatedCostUsd` as a provider quote; keep it schema-valid and conservative.
+
+Before returning, verify three-way creative diversity, capability feasibility, music resolution, duration, recommendation validity, and the absence of undeclared schema fields.

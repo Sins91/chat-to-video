@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorkflowToolResolutionSchema } from "./workflow-tool.js";
 
 export const WORKFLOW_CAPABILITY_SNAPSHOT_KEY = "chat-to-video:worker-capabilities";
 export const WORKFLOW_CAPABILITY_SNAPSHOT_TTL_SECONDS = 90;
@@ -67,6 +68,7 @@ export const WorkflowCapabilitySnapshotSchema = z.object({
   workerId: z.string().trim().min(1).max(100),
   generatedAt: z.string().datetime({ offset: true }),
   resolutions: z.array(WorkflowCapabilityResolutionSchema),
+  tools: z.array(WorkflowToolResolutionSchema).default([]),
 }).strict();
 
 export type WorkflowCapabilityId = z.infer<typeof WorkflowCapabilityIdSchema>;

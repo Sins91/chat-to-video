@@ -1,6 +1,6 @@
 ---
 name: cinematic-reviewer
-description: Use alongside every cinematic stage skill to self-review the artifact before returning structured output.
+description: Use alongside every cinematic stage skill to perform a bounded schema, continuity, capability, promise, and creative-quality review before returning structured output.
 ---
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
@@ -8,22 +8,27 @@ description: Use alongside every cinematic stage skill to self-review the artifa
 
 # Cinematic Self-Review
 
-Review the artifact inside the same Agent generation. Do not create another Agent call or emit a separate review artifact.
+Review inside the same Agent generation. Do not call another reviewer Agent, emit an undeclared review artifact, or advance workflow state.
 
-Check every stage for:
+## Review protocol
 
-1. Exact stage discriminator, required properties, size limits, enum literals, and absence of undeclared fields.
-2. Alignment with approved upstream decisions and the requested duration.
-3. Honest capability, asset, cost, and provider claims.
-4. No bypass of approval, `ModelGateway`, BullMQ, Worker, storage authorization, or FFmpeg safety boundaries.
+1. Validate the exact stage discriminator, required properties, enum literals, length limits, strict-object shape, ordering, and duration arithmetic.
+2. Compare the artifact with approved upstream decisions and trusted source/reference evidence.
+3. Check every capability, provider, source, cost, file, and completed-action claim against registered facts.
+4. Check delivery-promise preservation, creative differentiation, continuity, and practical executability.
+5. Fix critical findings before returning. Keep useful non-critical limitations in fields allowed by the stage schema.
 
-Stage focus:
+Treat as critical: invalid schema, fabricated evidence, unauthorized source media, unavailable provider commitment, duration mismatch, broken ordering, silent motion downgrade, unapproved direction change, missing scene coverage, or an instruction that bypasses ModelGateway, approval, BullMQ, Worker, or storage authorization.
 
-- research: concrete visual/audio direction and no fabricated sources.
-- proposal: three distinct directions, valid recommendation, FFmpeg lock, achievable promise.
-- script: coherent arc, contiguous beats, exact duration total.
-- `scene_plan`: exact duration total, model-safe scenes, continuity, visual variety, honest motion sources.
-- assets: complete scene coverage, planned status, consistent prompts, honest cost and slideshow risk.
-- edit: complete timeline, exact duration, supported transitions, audio/grade consistency, quality checks.
+## Stage focus
 
-Fix critical findings before returning. Server-side Zod and deterministic invariants remain authoritative.
+- **research:** specific visual/audio evidence, source diversity, honest null URLs, reference differentiation, and no fabricated claims.
+- **proposal:** three materially different directions, valid recommendation, resolved music plan, FFmpeg lock, feasible cost language, and explicit achievable promise.
+- **script:** clear escalation and payoff, restrained dialogue/title cards, contiguous beats, exact duration, and verified claims.
+- **scene_plan:** hero moments, exact timing, model-safe clips, source authorization, continuity, visual variety, and real motion for motion-required scenes.
+- **assets:** complete scene coverage, planned status, provenance, selector-backed routes, consistent prompts, honest cost arithmetic, music resolution, and slideshow risk.
+- **edit:** full monotonic timeline, supported transitions, emotional pacing, grade/audio consistency, promise preservation, and complete quality checks.
+- **compose/final review:** valid output probe, plausible duration and streams, sampled-frame review, audio and subtitle checks, no silent fallback, and explicit failure when evidence is incomplete.
+- **publish:** only approved passing outputs, accurate metadata, clearly labeled deliverables, and no unsupported distribution claim.
+
+For reference-driven work, distinguish fidelity to user-valued traits from copying. For every stage after proposal, verify that approved major decisions were preserved. Server Zod validation, Policy, MySQL facts, and Worker verification remain authoritative.

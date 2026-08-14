@@ -9,6 +9,7 @@ describe("DeepSeek structured-output prompts", () => {
       workflowId: "00000000-0000-4000-8000-000000000002",
       initialPrompt: "雨夜中的神秘来信",
       stage: "research",
+      videoModel: "MiniMax-Hailuo-2.3",
       durationSeconds: 10,
       modelMaxDurationSeconds: 10,
       approvedArtifacts: [],

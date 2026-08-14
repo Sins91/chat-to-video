@@ -2,17 +2,26 @@ import { Inject, Injectable, type OnModuleDestroy } from "@nestjs/common";
 import {
   CinematicArtifactSchema,
   CinematicGenerativeStageSchema,
+  CINEMATIC_PIPELINE_DEFINITION,
+  CinematicStageSchema,
   VIDEO_MODEL_DURATION_OPTIONS,
   VideoModelSchema,
   getVideoModelMaxDurationSeconds,
-  roundVideoModelDurationSeconds,
   type CinematicArtifact,
   type CinematicGenerativeStage,
   type VideoModel,
   WorkflowCapabilitySnapshotSchema,
   WORKFLOW_CAPABILITY_SNAPSHOT_KEY,
+  type CinematicStage,
+  type WorkflowToolId,
 } from "@chat-to-video/contracts";
 import type { VideoWorkflowRepository } from "@chat-to-video/database";
+import {
+  selectImageProvider,
+  selectTtsProvider,
+  selectVideoProvider,
+  type ProviderSelection,
+} from "@chat-to-video/tools";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { Redis } from "ioredis";
@@ -28,6 +37,21 @@ import {
   CINEMATIC_REVIEWER_SKILL_ID,
   CINEMATIC_STAGE_SKILL_IDS,
 } from "./agent-skill.catalog.js";
+import {
+  RESEARCH_TOOL_GATEWAY,
+  type ResearchToolGateway,
+} from "./research-tool-gateway.js";
+import {
+  EstimateCinematicCostInputSchema,
+  EstimateCinematicCostOutputSchema,
+  estimateCinematicCost,
+} from "./cinematic-pricing.js";
+
+export {
+  EstimateCinematicCostInputSchema,
+  EstimateCinematicCostOutputSchema,
+  estimateCinematicCost,
+} from "./cinematic-pricing.js";
 
 const CapabilityStatusSchema = z.enum([
   "available",
@@ -54,6 +78,85 @@ export const GetAgentCapabilitiesInputSchema = z.object({
 export const GetAgentCapabilitiesOutputSchema = z.object({
   capabilities: z.array(AgentCapabilitySchema).max(20),
 }).strict();
+
+const WorkflowToolStatusSchema = z.enum(["available", "unconfigured", "unavailable"]);
+const WorkflowToolSchema = z.object({
+  id: z.string().trim().min(1).max(100),
+  stages: z.array(CinematicStageSchema).min(1).max(10),
+  requirement: z.enum(["required", "optional"]),
+  status: WorkflowToolStatusSchema,
+  executionBoundary: z.enum(["api_readonly", "agent_job", "image_job", "render_job", "media_probe_job"]),
+  adapterId: z.string().trim().min(1).max(100).nullable(),
+  provider: z.string().trim().min(1).max(100).nullable(),
+  reason: z.string().trim().min(1).max(500).nullable(),
+}).strict();
+
+export const GetWorkflowToolsInputSchema = z.object({
+  stage: CinematicStageSchema.optional(),
+}).strict();
+export const GetWorkflowToolsOutputSchema = z.object({
+  tools: z.array(WorkflowToolSchema).max(100),
+}).strict();
+
+export const SearchWebInputSchema = z.object({
+  query: z.string().trim().min(1).max(500),
+  count: z.number().int().min(1).max(20).default(8),
+  freshness: z.enum(["day", "week", "month", "year"]).optional(),
+}).strict();
+export const SearchWebOutputSchema = z.object({
+  provider: z.literal("apimart"),
+  query: z.string(),
+  results: z.array(z.object({
+    title: z.string(),
+    url: z.string().url(),
+    description: z.string(),
+    age: z.string().nullable(),
+  }).strict()).max(20),
+}).strict();
+
+const SelectProviderInputSchema = z.object({
+  preferredProvider: z.string().trim().min(1).max(100).optional(),
+}).strict();
+const SelectProviderOutputSchema = z.object({
+  status: z.enum(["selected", "unavailable"]),
+  selected: z.object({ id: z.string(), provider: z.string() }).strict().nullable(),
+  alternatives: z.array(z.object({ id: z.string(), provider: z.string() }).strict()),
+  score: z.number().min(0).max(1).nullable(),
+  reason: z.string().nullable(),
+}).strict();
+
+type ToolRuntime = {
+  executionBoundary: "api_readonly" | "agent_job" | "image_job" | "render_job" | "media_probe_job";
+  adapterId: string | null;
+  provider: string | null;
+  status: "available" | "unconfigured" | "unavailable";
+  reason: string | null;
+};
+
+const TOOL_CAPABILITIES: Partial<Record<WorkflowToolId, string>> = {
+  image_generator: "image.generate",
+  video_generator: "video.generate",
+  music_generator: "music.generate",
+  title_card: "image.render.title-card",
+  video_compose: "video.compose.ffmpeg",
+  audio_mixer: "audio.mix",
+  audio_probe: "video.probe",
+};
+
+const API_TOOL_RUNTIMES: Partial<Record<WorkflowToolId, ToolRuntime>> = {
+  web_search: { executionBoundary: "api_readonly", adapterId: "apimart.responses-web-search", provider: "apimart", status: "available", reason: null },
+  image_selector: { executionBoundary: "api_readonly", adapterId: "tools.image-selector", provider: "local", status: "available", reason: null },
+  video_selector: { executionBoundary: "api_readonly", adapterId: "tools.video-selector", provider: "local", status: "available", reason: null },
+  tts_selector: { executionBoundary: "api_readonly", adapterId: "tools.tts-selector", provider: "local", status: "available", reason: null },
+};
+
+const UNCONNECTED_TOOL_RUNTIME: ToolRuntime = {
+  executionBoundary: "media_probe_job",
+  adapterId: null,
+  provider: "local",
+  status: "unconfigured",
+  reason: "Tool is registered for the stage but has no queue consumer or artifact handoff yet.",
+};
 
 const VideoModelConstraintSchema = z.object({
   model: VideoModelSchema,
@@ -85,42 +188,6 @@ export const GetCinematicContextOutputSchema = z.object({
   currentVersion: z.number().int().nonnegative(),
   approvedArtifacts: z.array(CinematicContextArtifactSchema).max(6),
 }).strict();
-
-export const EstimateCinematicCostInputSchema = z.object({
-  model: VideoModelSchema,
-  durationsSeconds: z.array(z.number().int().positive()).min(1).max(60),
-}).strict().superRefine((input, context) => {
-  const maximum = getVideoModelMaxDurationSeconds(input.model);
-  input.durationsSeconds.forEach((duration, index) => {
-    if (duration > maximum) {
-      context.addIssue({
-        code: "custom",
-        message: `Scene duration exceeds the ${maximum} second model limit.`,
-        path: ["durationsSeconds", index],
-      });
-    }
-  });
-});
-
-export const EstimateCinematicCostOutputSchema = z.object({
-  status: z.enum(["estimated", "unavailable"]),
-  amountUsd: z.number().min(0).max(1_000_000).nullable(),
-  pricingSource: z.string().trim().min(1).max(500).nullable(),
-  pricingVersion: z.string().trim().min(1).max(100).nullable(),
-  reason: z.literal("pricing_not_configured").nullable(),
-}).strict();
-
-type CinematicPrice = {
-  readonly usdPerGeneratedSecond: number;
-  readonly source: string;
-  readonly version: string;
-};
-
-export type CinematicPricingCatalog = Partial<
-  Readonly<Record<VideoModel, CinematicPrice>>
->;
-
-const REVIEWED_PRICING: CinematicPricingCatalog = Object.freeze({});
 
 const CAPABILITIES = Object.freeze([
   {
@@ -186,37 +253,6 @@ export const getVideoModelConstraints = (model?: VideoModel) => {
       status: "available" as const,
     }));
   return GetVideoModelConstraintsOutputSchema.parse({ models });
-};
-
-export const estimateCinematicCost = (
-  input: z.infer<typeof EstimateCinematicCostInputSchema>,
-  pricing: CinematicPricingCatalog = REVIEWED_PRICING,
-) => {
-  const parsed = EstimateCinematicCostInputSchema.parse(input);
-  const price = pricing[parsed.model];
-  if (!price) {
-    return EstimateCinematicCostOutputSchema.parse({
-      status: "unavailable",
-      amountUsd: null,
-      pricingSource: null,
-      pricingVersion: null,
-      reason: "pricing_not_configured",
-    });
-  }
-  const generatedSeconds = parsed.durationsSeconds.reduce(
-    (total, duration) =>
-      total + roundVideoModelDurationSeconds(parsed.model, duration),
-    0,
-  );
-  return EstimateCinematicCostOutputSchema.parse({
-    status: "estimated",
-    amountUsd: Number(
-      (generatedSeconds * price.usdPerGeneratedSecond).toFixed(6),
-    ),
-    pricingSource: price.source,
-    pricingVersion: price.version,
-    reason: null,
-  });
 };
 
 const summarizeArtifact = (artifact: CinematicArtifact): string => {
@@ -295,6 +331,174 @@ export class AgentToolRegistry implements OnModuleDestroy {
         : combined,
     });
   }
+
+  private async listRuntimeToolResolutions() {
+    const redisUrl = process.env.REDIS_URL?.trim();
+    if (!redisUrl) return [];
+    this.capabilityRedis ??= new Redis(redisUrl, {
+      maxRetriesPerRequest: 1,
+      lazyConnect: true,
+    });
+    try {
+      if (this.capabilityRedis.status === "wait") await this.capabilityRedis.connect();
+      const raw = await this.capabilityRedis.get(WORKFLOW_CAPABILITY_SNAPSHOT_KEY);
+      if (!raw) return [];
+      const snapshot = WorkflowCapabilitySnapshotSchema.safeParse(JSON.parse(raw) as unknown);
+      return snapshot.success ? snapshot.data.tools : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async listWorkflowTools(stage?: CinematicStage) {
+    const [capabilities, runtimeTools] = await Promise.all([
+      this.listRuntimeCapabilities(),
+      this.listRuntimeToolResolutions(),
+    ]);
+    const capabilityById = new Map(capabilities.capabilities.map((capability) => [capability.id, capability]));
+    const runtimeToolById = new Map(runtimeTools.map((toolResolution) => [toolResolution.toolId, toolResolution]));
+    const registrations = new Map<WorkflowToolId, { stages: CinematicStage[]; requirement: "required" | "optional" }>();
+    for (const definition of CINEMATIC_PIPELINE_DEFINITION.stages) {
+      if (stage && definition.id !== stage) continue;
+      for (const requirement of ["required", "optional"] as const) {
+        for (const toolId of definition.tools[requirement]) {
+          const current = registrations.get(toolId);
+          if (current) {
+            if (!current.stages.includes(definition.id)) current.stages.push(definition.id);
+            if (requirement === "required") current.requirement = "required";
+          } else {
+            registrations.set(toolId, { stages: [definition.id], requirement });
+          }
+        }
+      }
+    }
+    const tools = [...registrations.entries()].map(([id, registration]) => {
+      const apiRuntime = API_TOOL_RUNTIMES[id];
+      const workerRuntime = runtimeToolById.get(id);
+      const capabilityId = TOOL_CAPABILITIES[id];
+      const capability = capabilityId ? capabilityById.get(capabilityId) : undefined;
+      const runtime: ToolRuntime = apiRuntime ?? (workerRuntime ? {
+        executionBoundary: workerRuntime.executionBoundary,
+        adapterId: workerRuntime.adapterId,
+        provider: workerRuntime.provider,
+        status: workerRuntime.status,
+        reason: workerRuntime.reason,
+      } : capability ? {
+        executionBoundary: WorkflowToolSchema.shape.executionBoundary.parse(
+          capability.executionBoundary ?? "media_probe_job",
+        ),
+        adapterId: capability.adapterId ?? null,
+        provider: capability.provider,
+        status: capability.status === "disabled" ? "unavailable" : capability.status,
+        reason: capability.description,
+      } : UNCONNECTED_TOOL_RUNTIME);
+      return { id, ...registration, ...runtime };
+    });
+    return GetWorkflowToolsOutputSchema.parse({ tools });
+  }
+
+  private async selectProvider(
+    kind: "image" | "video" | "tts",
+    preferredProvider?: string,
+  ) {
+    const capabilities = await this.listRuntimeCapabilities();
+    const capabilityId = kind === "image"
+      ? "image.generate"
+      : kind === "video"
+        ? "video.generate"
+        : "audio.speech";
+    const candidates = capabilities.capabilities
+      .filter((capability) => capability.id === capabilityId)
+      .map((capability) => ({
+        id: capability.adapterId ?? capability.id,
+        provider: capability.provider ?? "unknown",
+        status: capability.status === "available" ? "available" as const : "unconfigured" as const,
+        operations: [kind === "image" ? "generate_image" : kind === "video" ? "text_to_video" : "text_to_speech"],
+        qualityScore: 0.8,
+        costScore: 0.5,
+        latencyScore: 0.5,
+      }));
+    let selection: ProviderSelection;
+    try {
+      const input = { candidates, preferredProvider };
+      selection = kind === "image"
+        ? selectImageProvider(input)
+        : kind === "video"
+          ? selectVideoProvider(input)
+          : selectTtsProvider(input);
+    } catch {
+      return SelectProviderOutputSchema.parse({
+        status: "unavailable",
+        selected: null,
+        alternatives: [],
+        score: null,
+        reason: `No available ${kind} provider is registered.`,
+      });
+    }
+    return SelectProviderOutputSchema.parse({
+      status: "selected",
+      selected: { id: selection.selected.id, provider: selection.selected.provider },
+      alternatives: selection.alternatives.map((candidate) => ({ id: candidate.id, provider: candidate.provider })),
+      score: selection.score,
+      reason: null,
+    });
+  }
+
+  readonly getWorkflowTools = createTool({
+    id: "get_workflow_tools",
+    description: "按 cinematic 阶段查询统一注册的 Tool、真实可用状态和执行边界。",
+    strict: true,
+    requireApproval: false,
+    inputSchema: GetWorkflowToolsInputSchema,
+    outputSchema: GetWorkflowToolsOutputSchema,
+    requestContextSchema: AgentExtensionRequestContextSchema,
+    execute: ({ stage }) => this.listWorkflowTools(stage),
+  });
+
+  readonly searchWeb = createTool({
+    id: "web_search",
+    description: "通过 APIMart 内置 Web Search 获取带来源 URL 的 research 参考资料。",
+    strict: true,
+    requireApproval: false,
+    inputSchema: SearchWebInputSchema,
+    outputSchema: SearchWebOutputSchema,
+    requestContextSchema: CinematicAgentRequestContextSchema,
+    execute: (input) => this.researchToolGateway.searchWeb(input),
+  });
+
+  readonly imageSelector = createTool({
+    id: "image_selector",
+    description: "从当前 Worker capability snapshot 中选择可用图像生成适配器。",
+    strict: true,
+    requireApproval: false,
+    inputSchema: SelectProviderInputSchema,
+    outputSchema: SelectProviderOutputSchema,
+    requestContextSchema: CinematicAgentRequestContextSchema,
+    execute: ({ preferredProvider }) => this.selectProvider("image", preferredProvider),
+  });
+
+  readonly videoSelector = createTool({
+    id: "video_selector",
+    description: "从当前 Worker capability snapshot 中选择可用视频生成适配器。",
+    strict: true,
+    requireApproval: false,
+    inputSchema: SelectProviderInputSchema,
+    outputSchema: SelectProviderOutputSchema,
+    requestContextSchema: CinematicAgentRequestContextSchema,
+    execute: ({ preferredProvider }) => this.selectProvider("video", preferredProvider),
+  });
+
+  readonly ttsSelector = createTool({
+    id: "tts_selector",
+    description: "查询并选择已实际注册的 TTS 执行适配器；没有执行边界时明确返回 unavailable。",
+    strict: true,
+    requireApproval: false,
+    inputSchema: SelectProviderInputSchema,
+    outputSchema: SelectProviderOutputSchema,
+    requestContextSchema: CinematicAgentRequestContextSchema,
+    execute: ({ preferredProvider }) => this.selectProvider("tts", preferredProvider),
+  });
+
   readonly getAgentCapabilities = createTool({
     id: "get_agent_capabilities",
     description: "查询当前服务端实际注册的 cinematic Agent 能力、状态、风险和关联技能。",
@@ -319,7 +523,7 @@ export class AgentToolRegistry implements OnModuleDestroy {
 
   readonly estimateCinematicCost = createTool({
     id: "estimate_cinematic_cost",
-    description: "使用经过审核且版本化的价格估算 cinematic 场景批次成本；没有可信价格时返回 unavailable。",
+    description: "使用经过审核且版本化的 APIMart 价格估算视频秒数、2K 图片和音乐生成成本；没有可信价格时返回 unavailable。",
     strict: true,
     requireApproval: false,
     inputSchema: EstimateCinematicCostInputSchema,
@@ -385,23 +589,37 @@ export class AgentToolRegistry implements OnModuleDestroy {
   constructor(
     @Inject(VIDEO_WORKFLOW_REPOSITORY)
     private readonly repository: VideoWorkflowRepository,
+    @Inject(RESEARCH_TOOL_GATEWAY)
+    private readonly researchToolGateway: ResearchToolGateway,
   ) {}
 
   forChat() {
     return {
       get_agent_capabilities: this.getAgentCapabilities,
+      get_workflow_tools: this.getWorkflowTools,
       get_video_model_constraints: this.getVideoModelConstraints,
       estimate_cinematic_cost: this.estimateCinematicCost,
     };
   }
 
-  forCinematic() {
-    return {
+  forCinematic(stage: CinematicGenerativeStage) {
+    const common = {
       get_agent_capabilities: this.getAgentCapabilities,
+      get_workflow_tools: this.getWorkflowTools,
       get_video_model_constraints: this.getVideoModelConstraints,
       get_cinematic_context: this.getCinematicContext,
       estimate_cinematic_cost: this.estimateCinematicCost,
     };
+    if (stage === "research") return { ...common, web_search: this.searchWeb };
+    if (stage === "proposal" || stage === "assets") {
+      return {
+        ...common,
+        tts_selector: this.ttsSelector,
+        image_selector: this.imageSelector,
+        video_selector: this.videoSelector,
+      };
+    }
+    return common;
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -43,6 +43,7 @@ const createRequest = (onToolActivity: (activity: ModelToolActivity) => void | P
   projectId: "project-1",
   initialPrompt: "Create a rainy noir short film.",
   stage: "research" as const,
+  videoModel: "MiniMax-Hailuo-2.3" as const,
   durationSeconds: 10,
   modelMaxDurationSeconds: 10,
   approvedArtifacts: [],
@@ -106,9 +107,15 @@ describe("Cinematic tool activity", () => {
     ]);
     expect(activities[0]).toMatchObject({
       toolName: "search_assets",
-      toolLabel: "\u5de5\u5177 \u00b7 search assets",
-      summary: "\u6b63\u5728\u6267\u884c\u5de5\u5177\u64cd\u4f5c\u2026",
+      toolLabel: "search assets",
+      summary: "调用 search assets",
     });
+    expect(activities[1]).toMatchObject({
+      toolName: "search_assets",
+      toolLabel: "search assets",
+      summary: "调用 search assets",
+    });
+    expect(JSON.stringify(activities)).not.toContain("运行完成");
     expect(activities[2]?.toolName).toBe("inspect-source");
     expect(JSON.stringify(activities)).not.toContain("secret");
   });

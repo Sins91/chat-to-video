@@ -34,18 +34,24 @@ const waitingWorkflow = {
 describe("VideoWorkflowService interactions", () => {
   const repository = {
     findWorkflow: vi.fn(),
+    findActiveWorkflowByConversation: vi.fn(),
+    findWorkflowControlRequestByMessage: vi.fn(),
+    findPendingWorkflowControl: vi.fn(),
+    createWorkflowControlRequest: vi.fn(),
+    findWorkflowControlRequest: vi.fn(),
+    toPendingWorkflowControl: vi.fn(),
+    countActiveWorkflowJobs: vi.fn(),
     findPreviousWorkflow: vi.fn(),
     claimInteraction: vi.fn(),
+    claimCinematicAssetBatchApproval: vi.fn(),
     createWorkflow: vi.fn(),
     findWorkflowVideoJob: vi.fn(),
+    findLatestCinematicAssetBatch: vi.fn(),
     findLatestStoryboard: vi.fn(),
     findLatestCinematicArtifact: vi.fn(),
     findLatestActiveStageCheckpoint: vi.fn(),
     findVideoOutput: vi.fn(),
     findStoryboard: vi.fn(),
-    requestRestart: vi.fn(),
-    cancelRestart: vi.fn(),
-    claimRestart: vi.fn(),
     setRunId: vi.fn(),
     claimVideoJobRetry: vi.fn(),
     updateVideoJob: vi.fn(),
@@ -55,15 +61,20 @@ describe("VideoWorkflowService interactions", () => {
     findWorkflowScope: vi.fn(),
     saveWorkflowUserDecision: vi.fn(),
     markWorkflowUserDecisionApplied: vi.fn(),
-    recoverDirectorActionLimit: vi.fn(),
   };
   const storage = { createDownloadUrl: vi.fn() };
   const conversations = { findActiveConversation: vi.fn(), appendMessage: vi.fn(), findWorkflow: vi.fn(), createWithUserMessage: vi.fn(), listModelMessages: vi.fn() };
-  const modelGateway = { inferCinematicDuration: vi.fn() };
-  const runtime = { resume: vi.fn(), restart: vi.fn(), start: vi.fn(), cancel: vi.fn() };
+  const modelGateway = { inferCinematicDuration: vi.fn(), generateCinematicArtifact: vi.fn() };
+  const runtime = {
+    resume: vi.fn(),
+    restart: vi.fn(),
+    start: vi.fn(),
+    cancel: vi.fn(),
+    continueAfterAssetApproval: vi.fn(),
+  };
   const events = { append: vi.fn() };
   const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn(), cancelQueuedWork: vi.fn() };
-  const recovery = { recoverAgentRun: vi.fn(), recoverDirectorActionLimit: vi.fn() };
+  const recovery = { recoverAgentRun: vi.fn() };
   const intentResolver = { resolve: vi.fn() };
   const service = new VideoWorkflowService(
     repository as unknown as VideoWorkflowRepository,
@@ -80,10 +91,16 @@ describe("VideoWorkflowService interactions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repository.findWorkflow.mockResolvedValue(waitingWorkflow);
+    repository.findActiveWorkflowByConversation.mockResolvedValue(waitingWorkflow);
+    repository.findWorkflowControlRequestByMessage.mockResolvedValue(null);
+    repository.findPendingWorkflowControl.mockResolvedValue(null);
+    repository.createWorkflowControlRequest.mockResolvedValue(true);
+    repository.countActiveWorkflowJobs.mockResolvedValue(0);
     repository.findWorkflowUserDecision.mockResolvedValue(null);
     repository.saveWorkflowUserDecision.mockResolvedValue(true);
     repository.markWorkflowUserDecisionApplied.mockResolvedValue(undefined);
     repository.findPreviousWorkflow.mockResolvedValue(null);
+    repository.findLatestCinematicAssetBatch.mockResolvedValue(null);
     conversations.findActiveConversation.mockResolvedValue({ id: waitingWorkflow.conversationId });
     repository.claimInteraction.mockResolvedValue({
       stateVersion: 2,
@@ -95,9 +112,8 @@ describe("VideoWorkflowService interactions", () => {
         targetVersion: 1,
       }],
     });
-    repository.requestRestart.mockResolvedValue(true);
+    repository.claimCinematicAssetBatchApproval.mockResolvedValue(true);
     repository.findLatestActiveStageCheckpoint.mockResolvedValue({ version: 1 });
-    repository.cancelRestart.mockResolvedValue(true);
     repository.setRunId.mockResolvedValue(undefined);
     runtime.resume.mockResolvedValue(undefined);
     runtime.restart.mockResolvedValue("run-restarted");
@@ -111,17 +127,73 @@ describe("VideoWorkflowService interactions", () => {
     conversations.listModelMessages.mockResolvedValue([]);
     modelGateway.inferCinematicDuration.mockResolvedValue(30);
     runtime.start.mockResolvedValue("run-created");
+    runtime.continueAfterAssetApproval.mockResolvedValue("run-assets-approved");
     operations.retryVideo.mockResolvedValue(undefined);
     operations.getRenderQueueAhead.mockResolvedValue(null);
     operations.cancelQueuedWork.mockResolvedValue(undefined);
     recovery.recoverAgentRun.mockResolvedValue(true);
-    recovery.recoverDirectorActionLimit.mockResolvedValue(true);
     intentResolver.resolve.mockResolvedValue({
       intent: { type: "approve", stageId: "proposal" },
       source: "rule",
       resolverVersion: "v1",
       requiresConfirmation: false,
     });
+  });
+
+  it("does not call paid models before direct-entry confirmation", async () => {
+    const control = {
+      id: "00000000-0000-4000-8000-000000000099",
+      conversationId: waitingWorkflow.conversationId,
+      sourceWorkflowId: waitingWorkflow.id,
+      sourceMessageId: "direct-entry-message",
+      kind: "start_from_stage",
+      targetPipelineId: "cinematic",
+      targetStageId: "script",
+      expectedStateVersion: 1,
+      rawText: "直接从脚本开始",
+      candidate: null,
+      impact: {
+        skippedStageIds: ["research"],
+        reusedArtifactKinds: [],
+        invalidatedStageIds: ["proposal", "script", "scene_plan", "assets", "edit", "compose"],
+        activeJobCount: 0,
+        summary: "确认后才会生成导入产物，并从脚本开始新的工作流。",
+      },
+      status: "pending",
+      requestedAt: new Date("2026-08-14T00:00:00.000Z"),
+      expiresAt: new Date("2099-08-14T00:15:00.000Z"),
+    };
+    repository.findWorkflowControlRequest.mockResolvedValue(control);
+    repository.toPendingWorkflowControl.mockReturnValue({
+      controlRequestId: control.id,
+      kind: control.kind,
+      sourceWorkflowId: control.sourceWorkflowId,
+      targetPipelineId: control.targetPipelineId,
+      targetStageId: control.targetStageId,
+      expectedStateVersion: control.expectedStateVersion,
+      candidate: null,
+      impact: control.impact,
+      requestedAt: control.requestedAt.toISOString(),
+      expiresAt: control.expiresAt.toISOString(),
+    });
+
+    await expect(service.resolveVideoIntent({
+      workflowId: waitingWorkflow.id,
+      conversationId: waitingWorkflow.conversationId,
+      messageId: control.sourceMessageId,
+      text: control.rawText,
+    })).resolves.toMatchObject({
+      route: "workflow",
+      applied: false,
+      pendingAction: { kind: "start_from_stage", candidate: null },
+    });
+
+    expect(repository.createWorkflowControlRequest).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "start_from_stage",
+      candidate: null,
+    }));
+    expect(modelGateway.inferCinematicDuration).not.toHaveBeenCalled();
+    expect(modelGateway.generateCinematicArtifact).not.toHaveBeenCalled();
   });
 
   it("infers and persists duration before starting the selected video model", async () => {
@@ -159,6 +231,27 @@ describe("VideoWorkflowService interactions", () => {
         stepTotal: 8,
         message: "正在理解你的需求并准备电影化创作流程。",
       },
+    }));
+  });
+
+  it("starts the fixed pipeline for a video planning request at the unified intent boundary", async () => {
+    repository.findWorkflow.mockResolvedValue(null);
+    repository.findActiveWorkflowByConversation.mockResolvedValue(null);
+
+    await expect(service.resolveVideoIntent({
+      messageId: "video-script-message",
+      text: "帮我编写一个产品视频脚本",
+      videoModel: "MiniMax-Hailuo-2.3",
+    })).resolves.toMatchObject({
+      route: "workflow",
+      applied: true,
+      intent: { type: "start_workflow", pipelineId: "cinematic" },
+    });
+
+    expect(runtime.start).toHaveBeenCalledTimes(1);
+    expect(repository.createWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      pipelineId: "cinematic",
+      initialPrompt: "帮我编写一个产品视频脚本",
     }));
   });
 
@@ -258,17 +351,6 @@ describe("VideoWorkflowService interactions", () => {
         stage: "proposal",
         version: 1,
       },
-      {
-        type: "approval_claimed",
-        stateVersion: 2,
-        approvals: [{
-          approvalId: "00000000-0000-4000-8000-000000000020",
-          scope: "artifact",
-          stageId: "proposal",
-          targetId: `${waitingWorkflow.id}:1`,
-          targetVersion: 1,
-        }],
-      },
     );
   });
 
@@ -282,17 +364,6 @@ describe("VideoWorkflowService interactions", () => {
       "run-1",
       { type: "approve" },
       { workflowId: waitingWorkflow.id, stage: "proposal", version: 1 },
-      {
-        type: "approval_claimed",
-        stateVersion: 2,
-        approvals: [{
-          approvalId: "00000000-0000-4000-8000-000000000020",
-          scope: "artifact",
-          stageId: "proposal",
-          targetId: `${waitingWorkflow.id}:1`,
-          targetVersion: 1,
-        }],
-      },
     );
     expect(repository.claimInteraction).toHaveBeenCalledWith(waitingWorkflow.id, 1, true);
     expect(conversations.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
@@ -353,7 +424,6 @@ describe("VideoWorkflowService interactions", () => {
         advanceAfterChange: true,
       },
       { workflowId: waitingWorkflow.id, stage: "proposal", version: 1 },
-      null,
     );
   });
 
@@ -487,146 +557,6 @@ describe("VideoWorkflowService interactions", () => {
     expect(snapshot.currentArtifact).toBeNull();
   });
 
-  it("creates a fifteen-minute restart confirmation without starting a run", async () => {
-    repository.findWorkflow.mockResolvedValue({
-      ...waitingWorkflow,
-      currentStageId: "assets",
-      durationSeconds: 10,
-      pendingRestartId: null,
-    });
-    repository.findLatestActiveStageCheckpoint.mockResolvedValue({ version: 4 });
-
-    const result = await service.interact(waitingWorkflow.id, {
-      type: "restart_request",
-      messageId: "restart-request-message",
-      targetStage: "script",
-      text: "从脚本重新开始，并缩短旁白",
-    });
-
-    expect(result).toMatchObject({ accepted: true, intent: "restart_requested" });
-    expect(repository.requestRestart).toHaveBeenCalledWith(expect.objectContaining({
-      workflowId: waitingWorkflow.id,
-      targetStage: "script",
-      expectedVersion: 1,
-    }));
-    expect(runtime.restart).not.toHaveBeenCalled();
-    expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
-      type: "workflow.restart.requested",
-    }));
-    const appendedMessages = conversations.appendMessage.mock.calls
-      .map((call) => call[0] as { content: string; messageId: string; role: string } | undefined)
-      .filter((message): message is { content: string; messageId: string; role: string } => message !== undefined);
-    const confirmationMessage = appendedMessages.find((message) => message.role === "assistant");
-    expect(confirmationMessage).toMatchObject({ role: "assistant" });
-    expect(confirmationMessage?.messageId).toBe(result.restartRequestId);
-    expect(confirmationMessage?.content).toContain("请回复“确认”或“取消”");
-  });
-
-  it("answers in the conversation instead of failing when a request points to a completed previous workflow", async () => {
-    repository.findWorkflow.mockResolvedValue({
-      ...waitingWorkflow,
-      currentStageId: "proposal",
-      currentVersion: 3,
-    });
-    repository.findPreviousWorkflow.mockResolvedValue({
-      ...waitingWorkflow,
-      id: "96266859-3b37-4834-afca-734390142ac4",
-      status: "succeeded",
-      currentStageId: "compose",
-      currentVersion: 10,
-    });
-
-    await expect(service.interact(waitingWorkflow.id, {
-      type: "restart_request",
-      messageId: "previous-workflow-restart-message",
-      targetStage: "script",
-      text: "回到前一个已完成的工作流的脚本阶段",
-    })).resolves.toEqual({ accepted: true, intent: "restart_unavailable" });
-
-    expect(repository.findPreviousWorkflow).toHaveBeenCalledWith(
-      waitingWorkflow.conversationId,
-      waitingWorkflow.createdAt,
-      waitingWorkflow.id,
-    );
-    expect(repository.requestRestart).not.toHaveBeenCalled();
-    expect(conversations.appendMessage).toHaveBeenCalledTimes(2);
-    expect(conversations.appendMessage).toHaveBeenLastCalledWith(expect.objectContaining({
-      role: "assistant",
-    }));
-  });
-
-  it("atomically claims a confirmation and starts a fresh Mastra run", async () => {
-    const restartRequestId = "00000000-0000-4000-8000-000000000099";
-    repository.findWorkflow.mockResolvedValue({
-      ...waitingWorkflow,
-      currentStageId: "assets",
-      durationSeconds: 10,
-      pendingRestartId: restartRequestId,
-      pendingRestartStage: "script",
-      pendingRestartExpiresAt: new Date("2099-08-12T01:15:00.000Z"),
-    });
-    repository.claimRestart.mockResolvedValue({
-      targetStage: "script",
-      text: "从脚本重新开始",
-      baseVersion: 7,
-      previousArtifactVersion: 3,
-      previousRunId: "run-1",
-    });
-
-    await expect(service.interact(waitingWorkflow.id, {
-      type: "restart_confirm",
-      messageId: "restart-confirm-message",
-      restartRequestId,
-    })).resolves.toEqual({
-      accepted: true,
-      intent: "restart_confirmed",
-      restartRequestId,
-    });
-
-    expect(repository.claimRestart).toHaveBeenCalledWith(expect.objectContaining({
-      workflowId: waitingWorkflow.id,
-      pipelineId: "cinematic",
-      restartRequestId,
-      targetStage: "script",
-      stagesToSupersede: ["script", "scene_plan", "assets", "edit", "compose"],
-    }));
-    expect(runtime.restart).toHaveBeenCalledWith(
-      expect.any(Object),
-      7,
-      expect.any(Function),
-    );
-    expect(runtime.cancel).toHaveBeenCalledWith("run-1");
-    expect(operations.cancelQueuedWork).toHaveBeenCalledWith(waitingWorkflow.id);
-    expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
-      type: "workflow.restart.started",
-    }));
-    expect(conversations.appendMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      conversationId: waitingWorkflow.conversationId,
-      messageId: `${restartRequestId}:started`,
-      role: "assistant",
-      content: "已确认从脚本重新开始，正在生成新的版本。旧版本将作为历史记录保留。",
-    }));
-  });
-
-  it("creates a restart confirmation while work is running", async () => {
-    repository.findWorkflow.mockResolvedValue({
-      ...waitingWorkflow,
-      status: "running",
-      currentStageId: "assets",
-    });
-
-    await expect(service.interact(waitingWorkflow.id, {
-      type: "restart_request",
-      messageId: "restart-running-message",
-      targetStage: "script",
-      text: "从脚本重新开始",
-    })).resolves.toMatchObject({ accepted: true, intent: "restart_requested" });
-    expect(repository.requestRestart).toHaveBeenCalledWith(expect.objectContaining({
-      workflowId: waitingWorkflow.id,
-      targetStage: "script",
-    }));
-  });
-
   it("treats a natural next-stage message as approval", async () => {
     await expect(service.interact(waitingWorkflow.id, {
       type: "message",
@@ -644,17 +574,44 @@ describe("VideoWorkflowService interactions", () => {
         stage: "proposal",
         version: 1,
       },
-      {
-        type: "approval_claimed",
-        stateVersion: 2,
-        approvals: [{
-          approvalId: "00000000-0000-4000-8000-000000000020",
-          scope: "artifact",
-          stageId: "proposal",
-          targetId: `${waitingWorkflow.id}:1`,
-          targetVersion: 1,
-        }],
-      },
+    );
+  });
+
+  it("accepts a text confirmation after generated assets and starts the edit continuation", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      currentStageId: "assets",
+      currentVersion: 6,
+    });
+    repository.findLatestCinematicAssetBatch.mockResolvedValue({
+      id: "asset-batch-1",
+      workflowId: waitingWorkflow.id,
+      planVersion: 6,
+      status: "awaiting_approval",
+    });
+
+    await expect(service.interact(waitingWorkflow.id, {
+      type: "message",
+      messageId: "asset-confirmation-message",
+      text: "确认",
+    })).resolves.toEqual({ accepted: true, intent: "approve" });
+
+    expect(repository.claimCinematicAssetBatchApproval).toHaveBeenCalledWith(
+      waitingWorkflow.id,
+      6,
+    );
+    expect(conversations.appendMessage).toHaveBeenCalledWith({
+      conversationId: waitingWorkflow.conversationId,
+      messageId: "asset-confirmation-message",
+      role: "user",
+      content: "确认",
+    });
+    expect(runtime.continueAfterAssetApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowId: waitingWorkflow.id,
+        continuation: { kind: "assets_approved", baseVersion: 6 },
+      }),
+      expect.any(Function),
     );
   });
 
@@ -733,22 +690,6 @@ describe("VideoWorkflowService interactions", () => {
       workflowId: waitingWorkflow.id,
     });
     expect(recovery.recoverAgentRun).toHaveBeenCalledWith(waitingWorkflow.id, true);
-    expect(operations.retryVideo).not.toHaveBeenCalled();
-  });
-
-  it("recovers an exhausted Director run through a new continuation cycle", async () => {
-    repository.findWorkflow.mockResolvedValue({
-      ...waitingWorkflow,
-      status: "failed",
-      failureCode: "DIRECTOR_ACTION_LIMIT_EXCEEDED",
-    });
-
-    await expect(service.recover(waitingWorkflow.id)).resolves.toEqual({
-      accepted: true,
-      workflowId: waitingWorkflow.id,
-    });
-    expect(recovery.recoverDirectorActionLimit).toHaveBeenCalledWith(waitingWorkflow.id);
-    expect(recovery.recoverAgentRun).not.toHaveBeenCalled();
     expect(operations.retryVideo).not.toHaveBeenCalled();
   });
 

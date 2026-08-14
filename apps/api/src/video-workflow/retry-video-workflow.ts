@@ -46,7 +46,8 @@ export const retryVideoWorkflow = async (
     });
   }
   const job = await repository.findWorkflowVideoJob(workflowId);
-  if (workflow.pendingRestartId || workflow.status !== "failed" ||
+  const pendingControl = await repository.findPendingWorkflowControl({ workflowId });
+  if (pendingControl || workflow.status !== "failed" ||
       job?.status !== "failed" || !job.providerTaskId) {
     throw new ConflictException({
       code: "VIDEO_WORKFLOW_NOT_RECOVERABLE",

@@ -2,6 +2,7 @@ import {
   WorkflowCapabilitySnapshotSchema,
   type WorkflowCapabilityResolution,
   type WorkflowCapabilitySnapshot,
+  type WorkflowToolResolution,
 } from "@chat-to-video/contracts";
 
 import type { WorkerConfig } from "./config.js";
@@ -9,6 +10,8 @@ import type { WorkerConfig } from "./config.js";
 const resolution = (
   input: WorkflowCapabilityResolution,
 ): WorkflowCapabilityResolution => input;
+
+const tool = (input: WorkflowToolResolution): WorkflowToolResolution => input;
 
 export const resolveWorkerCapabilities = (
   config: WorkerConfig,
@@ -77,6 +80,31 @@ export const resolveWorkerCapabilities = (
       provider: "local",
       reason: "FFprobe is not configured as an independent worker capability.",
     }),
+  ],
+  tools: [
+    tool({ toolId: "video_generator", status: "available", executionBoundary: "render_job", adapterId: "apimart.video-generation", provider: "apimart", reason: null }),
+    tool({ toolId: "image_generator", status: "available", executionBoundary: "image_job", adapterId: "apimart.seedream-5-pro", provider: "apimart", reason: null }),
+    tool({ toolId: "music_generator", status: "available", executionBoundary: "agent_job", adapterId: "apimart.flowmusic", provider: "apimart", reason: null }),
+    tool({ toolId: "title_card", status: "available", executionBoundary: "image_job", adapterId: "media.sharp-title-card", provider: "local", reason: null }),
+    tool({ toolId: "video_compose", status: "available", executionBoundary: "render_job", adapterId: "media.ffmpeg-compose", provider: "local", reason: null }),
+    tool({ toolId: "audio_mixer", status: "available", executionBoundary: "render_job", adapterId: "media.ffmpeg-audio-mix", provider: "local", reason: null }),
+    tool({ toolId: "audio_probe", status: "unconfigured", executionBoundary: "media_probe_job", adapterId: null, provider: "local", reason: "FFprobe is installed but not connected to a media-probe queue consumer." }),
+    tool({ toolId: "video_analyzer", status: "unconfigured", executionBoundary: "media_probe_job", adapterId: null, provider: "local", reason: "Source-media job and authorized object-key handoff are not registered." }),
+    tool({ toolId: "transcriber", status: "unconfigured", executionBoundary: "media_probe_job", adapterId: null, provider: "apimart", reason: "Transcription has no authorized source-media queue payload yet." }),
+    tool({ toolId: "apimart_tts", status: "unconfigured", executionBoundary: "agent_job", adapterId: null, provider: "apimart", reason: "Per-scene narration jobs are not supported by the current asset batch protocol." }),
+    tool({ toolId: "pixabay_music", status: "unconfigured", executionBoundary: "agent_job", adapterId: null, provider: "pixabay", reason: "Library music is rejected by the current generated-only asset handoff." }),
+    tool({ toolId: "freesound_music", status: "unconfigured", executionBoundary: "agent_job", adapterId: null, provider: "freesound", reason: "Library music and FREESOUND_API_KEY are not configured." }),
+    tool({ toolId: "scene_detect", status: "unconfigured", executionBoundary: "media_probe_job", adapterId: null, provider: "local", reason: "No source-media queue consumer is registered." }),
+    tool({ toolId: "frame_sampler", status: "unconfigured", executionBoundary: "media_probe_job", adapterId: null, provider: "local", reason: "No source-media queue consumer is registered." }),
+    tool({ toolId: "subtitle_gen", status: "unconfigured", executionBoundary: "render_job", adapterId: null, provider: "local", reason: "Edit execution does not yet enqueue subtitle jobs." }),
+    tool({ toolId: "subtitle_burn", status: "unconfigured", executionBoundary: "render_job", adapterId: null, provider: "local", reason: "Edit execution does not yet enqueue subtitle jobs." }),
+    tool({ toolId: "audio_enhance", status: "unconfigured", executionBoundary: "render_job", adapterId: null, provider: "local", reason: "Edit execution does not yet enqueue audio enhancement." }),
+    tool({ toolId: "silence_cutter", status: "unconfigured", executionBoundary: "render_job", adapterId: null, provider: "local", reason: "Edit execution does not yet enqueue silence processing." }),
+    tool({ toolId: "video_trimmer", status: "unconfigured", executionBoundary: "render_job", adapterId: null, provider: "local", reason: "Edit execution does not yet enqueue trimming." }),
+    tool({ toolId: "color_grade", status: "unconfigured", executionBoundary: "render_job", adapterId: null, provider: "local", reason: "Edit execution has no validated color-grade preset handoff." }),
+    tool({ toolId: "visual_qa", status: "unconfigured", executionBoundary: "media_probe_job", adapterId: null, provider: "local", reason: "There is no persisted final-review stage or QA job handoff." }),
+    tool({ toolId: "av_sync_qa", status: "unconfigured", executionBoundary: "media_probe_job", adapterId: null, provider: "local", reason: "There is no persisted final-review stage or QA job handoff." }),
+    tool({ toolId: "export_bundle", status: "unconfigured", executionBoundary: "render_job", adapterId: null, provider: "local", reason: "There is no approved publish stage or export queue payload." }),
   ],
   });
 };

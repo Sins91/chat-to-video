@@ -11,7 +11,6 @@ import {
   UpdateVideoWorkflowModelRequestSchema,
   StoryboardSchema,
   ConversationEntrySchema,
-  PendingVideoWorkflowRestartSchema,
   VideoWorkflowInteractionSchema,
   VideoWorkflowInteractionResultSchema,
   VideoWorkflowEventSchema,
@@ -121,39 +120,18 @@ describe("video workflow contracts", () => {
     expect(VideoWorkflowInteractionSchema.safeParse({ type: "message", messageId: "message-1", text: "" }).success).toBe(false);
   });
 
-  it("validates restart requests, confirmations, cancellations, and pending state", () => {
-    const restartRequestId = "00000000-0000-4000-8000-000000000099";
-    const messageId = "restart-message";
-    expect(VideoWorkflowInteractionSchema.parse({
+  it("rejects the removed legacy restart interactions", () => {
+    expect(VideoWorkflowInteractionSchema.safeParse({
       type: "restart_request",
-      messageId,
-      targetStage: "script",
-      text: "从脚本重新开始，并把旁白改得更克制",
-    })).toMatchObject({ type: "restart_request", targetStage: "script" });
-    expect(VideoWorkflowInteractionSchema.parse({
-      type: "restart_confirm",
-      messageId,
-      restartRequestId,
-    }).type).toBe("restart_confirm");
-    expect(VideoWorkflowInteractionSchema.parse({
-      type: "restart_cancel",
-      messageId,
-      restartRequestId,
-    }).type).toBe("restart_cancel");
-    expect(VideoWorkflowInteractionResultSchema.parse({
-      accepted: true,
-      intent: "restart_unavailable",
-    }).intent).toBe("restart_unavailable");
-
-    const pending = PendingVideoWorkflowRestartSchema.parse({
-      restartRequestId,
+      messageId: "restart-message",
       targetStage: "script",
       text: "从脚本重新开始",
-      expectedVersion: 7,
-      requestedAt: "2026-08-12T01:00:00.000Z",
-      expiresAt: "2026-08-12T01:15:00.000Z",
-    });
-    expect(pending.expectedVersion).toBe(7);
+    }).success).toBe(false);
+    expect(VideoWorkflowInteractionSchema.safeParse({
+      type: "restart_confirm",
+      messageId: "restart-message",
+      restartRequestId: "00000000-0000-4000-8000-000000000099",
+    }).success).toBe(false);
   });
 
   it("derives restart behavior from one pipeline definition", () => {
@@ -163,10 +141,10 @@ describe("video workflow contracts", () => {
       initialStageId: "brief",
       terminalStageIds: ["mix"],
       stages: [
-        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["outline"], inputArtifactKinds: [], outputArtifactKinds: ["brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] } },
-        { id: "outline", label: "大纲", aliases: ["大纲"], stepId: "outline", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["大纲"], ownedArtifactKinds: ["outline"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["voice"], inputArtifactKinds: ["brief"], outputArtifactKinds: ["outline"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] } },
-        { id: "voice", label: "配音", aliases: ["配音"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["mix"], inputArtifactKinds: ["outline"], outputArtifactKinds: ["voice"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] } },
-        { id: "mix", label: "混音", aliases: ["混音"], stepId: "mix", producesArtifact: false, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["混音"], ownedArtifactKinds: ["mix"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["voice"], outputArtifactKinds: ["mix"], execution: "queue", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["outline"], inputArtifactKinds: [], outputArtifactKinds: ["brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
+        { id: "outline", label: "大纲", aliases: ["大纲"], stepId: "outline", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["大纲"], ownedArtifactKinds: ["outline"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["voice"], inputArtifactKinds: ["brief"], outputArtifactKinds: ["outline"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
+        { id: "voice", label: "配音", aliases: ["配音"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["mix"], inputArtifactKinds: ["outline"], outputArtifactKinds: ["voice"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
+        { id: "mix", label: "混音", aliases: ["混音"], stepId: "mix", producesArtifact: false, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["混音"], ownedArtifactKinds: ["mix"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["voice"], outputArtifactKinds: ["mix"], execution: "queue", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
       ],
     });
 
@@ -175,6 +153,17 @@ describe("video workflow contracts", () => {
     expect(getPreviousWorkflowStage(pipeline, "voice")?.id).toBe("outline");
     expect(getWorkflowStagesFrom(pipeline, "outline").map((stage) => stage.id))
       .toEqual(["outline", "voice", "mix"]);
+  });
+
+  it("derives cinematic Tool registration from the pipeline definition", () => {
+    const research = CINEMATIC_PIPELINE_DEFINITION.stages.find((stage) => stage.id === "research");
+    const assets = CINEMATIC_PIPELINE_DEFINITION.stages.find((stage) => stage.id === "assets");
+    const compose = CINEMATIC_PIPELINE_DEFINITION.stages.find((stage) => stage.id === "compose");
+    expect(research?.tools.required).toEqual(["web_search"]);
+    expect(assets?.tools.optional).toContain("image_selector");
+    expect(assets?.tools.optional).toContain("apimart_tts");
+    expect(compose?.tools.required).toEqual(["video_compose"]);
+    expect(compose?.tools.optional).toContain("visual_qa");
   });
 
   it("validates persisted restart events and read-only archived videos", () => {

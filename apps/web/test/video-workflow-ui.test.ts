@@ -71,6 +71,7 @@ describe("two-step video workflow UI", () => {
     expect(provider).toContain("previewReturnLocationRef");
     expect(provider).toContain("const returnToCurrentVideo");
     expect(provider).toContain("setChatScrollRestoreRequest");
+    expect(provider).toContain("followCurrentWorkflowPreview();");
     expect(preview).toContain("if (previewVideo)");
     expect(preview).toContain("previewVideo.playbackUrl");
     expect(preview).toContain("视频 · 回看");
@@ -103,17 +104,23 @@ describe("two-step video workflow UI", () => {
   });
 
   it("shows an intent-specific processing message before dispatching the behavior", async () => {
-    const [panel, conversation] = await Promise.all([
+    const [panel, conversation, provider] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/chat/chat-conversation.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
     ]);
 
-    expect(panel).toContain("正在确认重新开始并停止当前执行。");
+    expect(panel).toContain("正在确认并执行本次管线操作。");
     expect(panel).toContain("正在准备退出当前工作流。");
     expect(panel).toContain("正在检查目标管线并准备切换。");
     expect(panel).toContain("waitForPendingActionPaint()");
     expect(conversation).toContain('stepId: "pending-user-action"');
     expect(conversation).toContain("message: pendingActionMessage");
+    expect(provider).toContain("appendOptimisticUserEntry");
+    expect(provider).toContain("await waitForUiPaint()");
+    expect(provider.indexOf("await waitForUiPaint()")).toBeLessThan(
+      provider.indexOf("const result = await resolveVideoWorkflowIntent"),
+    );
   });
 
   it("recovers an existing failed provider task instead of creating a second workflow", async () => {
@@ -143,37 +150,39 @@ describe("two-step video workflow UI", () => {
     expect(recoverRoute).toContain("proxyVideoWorkflow");
   });
 
-  it("moves the preview to the selected stage immediately after restart confirmation", async () => {
+  it("clears the preview immediately after exit confirmation", async () => {
     const provider = await readFile(
       resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"),
       "utf8",
     );
 
-    expect(provider).toContain('result.intent === "restart_confirmed" && cinematicRestartTarget.success');
-    expect(provider).toContain("currentStage: cinematicRestartTarget.data");
+    expect(provider).toContain('pendingControlKind === "exit_workflow" && result.applied');
+    expect(provider).toContain('status: "cancelled"');
     expect(provider).toContain("currentArtifact: null");
     expect(provider).toContain("videoJob: null");
-    expect(provider).toContain("正在从所选步骤重新生成，此前内容已保留为历史记录。");
+    expect(provider).toContain("setPreviewVideo(null)");
     expect(provider).toContain("await refresh()");
   });
 
-  it("refreshes a persisted assistant explanation when a previous workflow is read-only", async () => {
+  it("refreshes persisted workflow guidance after control routing", async () => {
     const provider = await readFile(
       resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"),
       "utf8",
     );
 
-    expect(provider).toContain('result.intent === "restart_unavailable"');
+    expect(provider).toContain('result.route === "workflow"');
+    expect(provider).toContain("notifyConversationHistoryChanged()");
     expect(provider).toContain("await refresh()");
   });
 
-  it("starts a new terminal-following workflow and refreshes it in the same conversation", async () => {
+  it("routes workflow creation through the unified API intent boundary", async () => {
     const [panel, provider] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
     ]);
-    expect(panel).toContain("await workflow.startWorkflow(text, crypto.randomUUID())");
-    expect(panel).toContain("sessionCallbacksRef.current.onConversationId(sessionId, conversationId)");
+    expect(panel).toContain("await workflow.resolveControlIntent(text, messageId)");
+    expect(panel).not.toContain("await workflow.startWorkflow(text, crypto.randomUUID())");
+    expect(panel).toContain('controlRoute.route === "workflow"');
     expect(panel).not.toContain('workflowStatus === "failed" && workflow.snapshot?.videoJob');
     expect(provider).toContain("created.conversationId === loadedConversationId");
     expect(provider).toContain("await refresh()");
@@ -249,16 +258,24 @@ describe("two-step video workflow UI", () => {
     expect(provider).toContain("legacyWorkflowStep");
     expect(provider).toContain("stepProgress");
     expect(conversation).toContain("WorkflowActivityText");
-    expect(conversation).toContain("<ChainOfThought defaultOpen>");
-    expect(conversation).toContain("<ChainOfThoughtHeader");
-    expect(conversation).toContain("<ChainOfThoughtContent");
-    expect(conversation).toContain("<ChainOfThoughtStep");
-    expect(conversation).toContain("isAnimated={false}");
+    expect(conversation).toContain("<Task defaultOpen>");
+    expect(conversation).toContain("<TaskTrigger");
+    expect(conversation).toContain("<TaskContent");
+    expect(conversation).toContain("<TaskItem");
+    expect(conversation).not.toContain("ChainOfThought");
+    expect(conversation).toContain("progressHistory.map");
+    expect(conversation).toContain("workflowStepProgressHistory");
+    expect(conversation).toContain("progress.toolActivity.toolLabel");
+    expect(conversation).toContain("progress.toolActivity.summary");
+    expect(conversation).toContain("progress.toolActivity ? activeActivityDetail : progress.stepLabel");
+    expect(provider).toContain("appendWorkflowStepProgress");
+    expect(provider).toContain("stepProgressHistory");
     expect(conversation).toContain('key="workflow-activity"');
     expect(conversation).toContain("<Shimmer");
     expect(conversation).toContain("WORKFLOW_PROGRESS_STALL_THRESHOLD_MS = 90_000");
     expect(conversation).toContain("可能阻塞");
-    expect(conversation).toContain("showProgressMeta && stalledActivity ? <span");
+    expect(conversation).toContain("activity={showProgressMeta && stalledActivity");
+    expect(conversation).toContain("current: progress.stepIndex, total: progress.stepTotal");
     expect(conversation).not.toContain("正常进行");
     expect(conversation).not.toContain("{progress.stepIndex}/{progress.stepTotal}");
     expect(conversation).not.toContain("步骤 ${progress.stepIndex}/${progress.stepTotal}");
@@ -267,6 +284,10 @@ describe("two-step video workflow UI", () => {
     expect(conversation).toContain("conversationContextRef.current?.scrollToBottom");
     expect(conversation).toContain("hasReviewableWorkflowAnswer");
     expect(conversation).toContain('workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer');
+    expect(conversation).toContain("reviewableAssetBatch");
+    expect(conversation).toContain("所有素材均已生成并加载到右侧预览区");
+    expect(conversation).toContain('id={`asset-review:${reviewableAssetBatch.batchId}`}');
+    expect(conversation).toContain("确认后请回复“确认”");
     expect(conversation).toContain("visibleWorkflowStepProgress ? <WorkflowActivityText");
     expect(conversation).toContain('snapshot.failureCode === "DIRECTOR_ACTION_LIMIT_EXCEEDED"');
     expect(conversation).toContain("workflowReviewNotice");
@@ -347,9 +368,11 @@ describe("two-step video workflow UI", () => {
     expect(provider).toContain("getVideoWorkflow(queuedWorkflowId)");
     expect(provider).toContain("QUEUE_POSITION_REFRESH_MS");
     expect(provider).toContain("window.setInterval");
-    expect(preview).toContain("job?.queueAhead");
+    expect(preview).toContain("snapshot && job && isQueuedStatus(snapshot.status)");
+    expect(preview).toContain("job.queueAhead");
     expect(preview).toContain("queueAhead === 0");
     expect(preview).toContain("queueMessage");
+    expect(preview).toContain('job && (snapshot?.status === "queued" || snapshot?.status === "running")');
   });
 
   it("renders queued and running labels from the selected model snapshot", async () => {
@@ -398,13 +421,23 @@ describe("two-step video workflow UI", () => {
   });
 
   it("merges live job progress into the preview snapshot and renders generation details", async () => {
-    const [provider, preview] = await Promise.all([
+    const [assetCard, provider, preview] = await Promise.all([
+      readFile(resolve(webRoot, "components/video-workflow/cinematic-asset-review-card.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/video-preview.tsx"), "utf8"),
     ]);
 
     expect(provider).toContain('workflowEvent.type === "job.progress"');
     expect(provider).toContain("progress: workflowEvent.data.progress");
+    expect(provider).toContain("asset.assetId === workflowEvent.data.jobId");
+    expect(provider).toContain("assets: assetBatch.assets.map");
+    expect(provider).toContain('workflowEvent.data.status === "succeeded"');
+    expect(provider).toContain('type !== "agent.step" && type !== "job.progress"');
+    expect(provider).toContain('workflowEvent.type === "agent.step" && workflowEvent.data.status === "awaiting_input"');
+    expect(provider).toContain("scheduleRefresh(false)");
+    expect(provider).toContain("scheduleRefresh(true)");
+    expect(provider).not.toContain("void refresh().then(() => notifyConversationHistoryChanged())");
+    expect(provider).toContain("preserveTransientUi: true");
     expect(preview).toContain("snapshot.durationSeconds");
     expect(preview).toContain("getVideoOutputEstimate(snapshot?.durationSeconds)");
     expect(preview).toContain("预计成片 {videoOutputEstimate.duration} · {videoOutputEstimate.resolution}");
@@ -412,5 +445,8 @@ describe("two-step video workflow UI", () => {
     expect(preview).toContain("generationMessage");
     expect(preview).toContain('className="w-full max-w-md rounded-xl');
     expect(preview).toContain('aria-live="polite"');
+    expect(assetCard).toContain("asset.progress");
+    expect(assetCard).toContain('transition-[width]');
+    expect(assetCard).toContain("生成中");
   });
 });

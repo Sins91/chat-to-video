@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "preinstall": "node ../../scripts/enforce-pnpm.cjs",
-    "build:workspace-deps": "pnpm --filter @chat-to-video/contracts --filter @chat-to-video/database --filter @chat-to-video/storage build",
+    "build:workspace-deps": "pnpm --filter @chat-to-video/contracts --filter @chat-to-video/database --filter @chat-to-video/storage --filter @chat-to-video/media build",
     "prebuild": "pnpm run build:workspace-deps",
     "build": "tsc -p tsconfig.json",
     "predev": "pnpm run build:workspace-deps",

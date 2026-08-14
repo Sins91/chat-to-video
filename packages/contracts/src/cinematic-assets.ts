@@ -61,6 +61,7 @@ export const CinematicExecutedAssetSchema = z.object({
   sceneOrder: z.number().int().min(1).max(60).nullable(),
   kind: CinematicAssetKindSchema,
   status: VideoJobStatusSchema,
+  progress: z.number().int().min(0).max(100).default(0),
   capabilityResolution: WorkflowCapabilityResolutionSchema,
   objectKey: DerivedObjectKeySchema,
   mimeType: z.string().trim().min(1).max(100).nullable(),

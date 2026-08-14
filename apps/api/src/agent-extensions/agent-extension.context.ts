@@ -2,16 +2,14 @@ import {
   CinematicGenerativeStageSchema,
   type CinematicGenerativeStage,
 } from "@chat-to-video/contracts";
-import { WorkflowStageIdSchema } from "@chat-to-video/contracts";
 import { RequestContext } from "@mastra/core/request-context";
 import { z } from "zod";
 
 export const AgentExtensionAgentIdSchema = z.enum([
   "chat-default",
   "storyboard-agent",
-  "cinematic-director",
+  "cinematic-stage-agent",
   "workflow-intent-router",
-  "workflow-director",
 ]);
 
 const requestContextBase = {
@@ -34,7 +32,7 @@ export const StoryboardAgentRequestContextSchema = z.object({
 
 export const CinematicAgentRequestContextSchema = z.object({
   ...requestContextBase,
-  agentId: z.literal("cinematic-director"),
+  agentId: z.literal("cinematic-stage-agent"),
   workflowId: z.string().uuid(),
   stage: CinematicGenerativeStageSchema,
 }).strict();
@@ -43,13 +41,6 @@ export const WorkflowIntentAgentRequestContextSchema = z.object({
   ...requestContextBase,
   agentId: z.literal("workflow-intent-router"),
   workflowId: z.string().uuid(),
-}).strict();
-
-export const WorkflowDirectorAgentRequestContextSchema = z.object({
-  ...requestContextBase,
-  agentId: z.literal("workflow-director"),
-  workflowId: z.string().uuid(),
-  stage: WorkflowStageIdSchema,
 }).strict();
 
 export const AgentExtensionRequestContextSchema = z.discriminatedUnion(
@@ -62,28 +53,6 @@ export type StoryboardAgentRequestContext = z.infer<typeof StoryboardAgentReques
 export type CinematicAgentRequestContext = z.infer<typeof CinematicAgentRequestContextSchema>;
 export type AgentExtensionRequestContext = z.infer<typeof AgentExtensionRequestContextSchema>;
 export type WorkflowIntentAgentRequestContext = z.infer<typeof WorkflowIntentAgentRequestContextSchema>;
-export type WorkflowDirectorAgentRequestContext = z.infer<typeof WorkflowDirectorAgentRequestContextSchema>;
-
-export const createWorkflowDirectorAgentRequestContext = (input: {
-  requestId: string;
-  conversationId?: string;
-  workflowId: string;
-  stage: string;
-  tenantId: string;
-  projectId: string;
-}): RequestContext<WorkflowDirectorAgentRequestContext> => {
-  const parsed = WorkflowDirectorAgentRequestContextSchema.parse({ ...input, agentId: "workflow-director" });
-  const context = new RequestContext<WorkflowDirectorAgentRequestContext>();
-  context.set("requestId", parsed.requestId);
-  if (parsed.conversationId) context.set("conversationId", parsed.conversationId);
-  context.set("tenantId", parsed.tenantId);
-  context.set("projectId", parsed.projectId);
-  context.set("agentId", parsed.agentId);
-  context.set("workflowId", parsed.workflowId);
-  context.set("stage", parsed.stage);
-  return context;
-};
-
 export const createWorkflowIntentAgentRequestContext = (input: {
   requestId: string;
   conversationId: string;
@@ -149,7 +118,7 @@ export const createCinematicAgentRequestContext = (input: {
 }): RequestContext<CinematicAgentRequestContext> => {
   const parsed = CinematicAgentRequestContextSchema.parse({
     ...input,
-    agentId: "cinematic-director",
+    agentId: "cinematic-stage-agent",
   });
   const context = new RequestContext<CinematicAgentRequestContext>();
   context.set("requestId", parsed.requestId);

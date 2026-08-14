@@ -41,5 +41,11 @@ describe("worker capability registry", () => {
     expect(snapshot.resolutions.find(
       (capability) => capability.capabilityId === "video.probe",
     )).toMatchObject({ status: "unconfigured", adapterId: null });
+    expect(snapshot.tools.find(
+      (tool) => tool.toolId === "video_compose",
+    )).toMatchObject({ status: "available", adapterId: "media.ffmpeg-compose" });
+    expect(snapshot.tools.find(
+      (tool) => tool.toolId === "video_analyzer",
+    )).toMatchObject({ status: "unconfigured", adapterId: null });
   });
 });

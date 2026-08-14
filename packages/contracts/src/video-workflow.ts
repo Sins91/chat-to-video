@@ -242,17 +242,7 @@ export const VideoJobSnapshotSchema = z
   })
   .strict();
 
-// Compatibility alias: restart targets are pipeline-defined stage IDs, not a global enum.
 export const VideoWorkflowRestartStageSchema = WorkflowStageIdSchema;
-
-export const PendingVideoWorkflowRestartSchema = z.object({
-  restartRequestId: z.string().uuid(),
-  targetStage: VideoWorkflowRestartStageSchema,
-  text: z.string().trim().min(1).max(2_000),
-  expectedVersion: z.number().int().nonnegative(),
-  requestedAt: z.string().datetime({ offset: true }),
-  expiresAt: z.string().datetime({ offset: true }),
-}).strict();
 
 export const VideoWorkflowSnapshotSchema = z
   .object({
@@ -270,7 +260,6 @@ export const VideoWorkflowSnapshotSchema = z
     currentVersion: z.number().int().nonnegative(),
     storyboard: StoryboardVersionSchema.nullable(),
     videoJob: VideoJobSnapshotSchema.nullable(),
-    pendingRestart: PendingVideoWorkflowRestartSchema.nullable().default(null),
     pendingControl: PendingWorkflowControlSchema.nullable().default(null),
     sourceWorkflowId: VideoWorkflowIdSchema.nullable().default(null),
     successorWorkflowId: VideoWorkflowIdSchema.nullable().default(null),
@@ -345,22 +334,6 @@ export const VideoWorkflowInteractionSchema = z.discriminatedUnion("type", [
         .max(60),
     })
     .strict(),
-  z.object({
-    type: z.literal("restart_request"),
-    messageId: RelatedMessageIdSchema,
-    targetStage: VideoWorkflowRestartStageSchema,
-    text: z.string().trim().min(1).max(2_000),
-  }).strict(),
-  z.object({
-    type: z.literal("restart_confirm"),
-    messageId: RelatedMessageIdSchema,
-    restartRequestId: z.string().uuid(),
-  }).strict(),
-  z.object({
-    type: z.literal("restart_cancel"),
-    messageId: RelatedMessageIdSchema,
-    restartRequestId: z.string().uuid(),
-  }).strict(),
 ]);
 
 export const VideoWorkflowInteractionResultSchema = z
@@ -369,12 +342,7 @@ export const VideoWorkflowInteractionResultSchema = z
     intent: z.enum([
       "approve",
       "revise",
-      "restart_requested",
-      "restart_confirmed",
-      "restart_cancelled",
-      "restart_unavailable",
     ]),
-    restartRequestId: z.string().uuid().optional(),
   })
   .strict();
 
@@ -395,16 +363,11 @@ export const VideoWorkflowEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("storyboard.completed"), data: StoryboardVersionSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("cinematic.artifact.completed"), data: CinematicArtifactVersionSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("cinematic.approval.required"), data: z.object({ stage: CinematicStageSchema, version: z.number().int().positive() }).strict() }).strict(),
-  z.object({ ...eventBase, type: z.literal("workflow.restart.requested"), data: PendingVideoWorkflowRestartSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("workflow.restart.started"), data: z.object({
     restartRequestId: z.string().uuid(),
     targetStage: VideoWorkflowRestartStageSchema,
     previousRunId: z.string().min(1).max(200).nullable(),
     runId: z.string().min(1).max(200),
-  }).strict() }).strict(),
-  z.object({ ...eventBase, type: z.literal("workflow.restart.cancelled"), data: z.object({
-    restartRequestId: z.string().uuid(),
-    targetStage: VideoWorkflowRestartStageSchema,
   }).strict() }).strict(),
   z.object({ ...eventBase, type: z.literal("workflow.control.requested"), data: PendingWorkflowControlSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("workflow.control.cancelled"), data: z.object({
@@ -519,7 +482,6 @@ export type WorkflowToolActivity = z.infer<typeof WorkflowToolActivitySchema>;
 export type WorkflowStepProgress = z.infer<typeof WorkflowStepProgressSchema>;
 export type VideoWorkflowSnapshot = z.infer<typeof VideoWorkflowSnapshotSchema>;
 export type VideoWorkflowRestartStage = z.infer<typeof VideoWorkflowRestartStageSchema>;
-export type PendingVideoWorkflowRestart = z.infer<typeof PendingVideoWorkflowRestartSchema>;
 export type CreateVideoWorkflowRequest = z.infer<typeof CreateVideoWorkflowRequestSchema>;
 export type CreateVideoWorkflowResponse = z.infer<typeof CreateVideoWorkflowResponseSchema>;
 export type UpdateVideoWorkflowModelRequest = z.infer<typeof UpdateVideoWorkflowModelRequestSchema>;

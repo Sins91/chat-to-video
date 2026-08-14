@@ -112,10 +112,6 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     }
   }
 
-  async getDirectorCapabilityResolutions(): Promise<WorkflowCapabilityResolution[]> {
-    return this.capabilityResolutions();
-  }
-
   private async cinematicCapabilityContext(workflowId: string): Promise<{
     facts: WorkflowCapabilityFacts;
     scenePlan: Extract<CinematicArtifact, { stage: "scene_plan" }>;
@@ -579,6 +575,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         tenantId: workflowScope.tenantId,
         projectId: workflowScope.projectId,
         initialPrompt: input.initialPrompt,
+        videoModel: selectedVideoModel,
         durationSeconds: input.durationSeconds,
         modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(selectedVideoModel),
         stage: input.stage,

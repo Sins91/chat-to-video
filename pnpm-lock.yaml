@@ -47,6 +47,9 @@ importers:
       '@chat-to-video/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@chat-to-video/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       '@mastra/ai-sdk':
         specifier: 1.7.2
         version: 1.7.2(@mastra/core@1.57.0(ai@7.0.58(zod@4.4.3))(express@5.2.1(supports-color@10.2.2))(rxjs@7.8.2)(supports-color@10.2.2)(zod@4.4.3))(zod@4.4.3)
@@ -276,6 +279,16 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: 3.1106.0
         version: 3.1106.0
+
+  packages/tools:
+    dependencies:
+      '@chat-to-video/media':
+        specifier: workspace:*
+        version: link:../media
+    devDependencies:
+      '@types/node':
+        specifier: 26.2.0
+        version: 26.2.0
 
 packages:
 

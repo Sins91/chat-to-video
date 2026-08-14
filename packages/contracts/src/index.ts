@@ -6,10 +6,12 @@ export * from "./cinematic-assets.js";
 export * from "./conversation.js";
 export * from "./generated-video.js";
 export * from "./video-workflow.js";
+export * from "./video-intent.js";
 export * from "./user-intent.js";
 export * from "./workflow-pipeline.js";
 export * from "./workflow-pipelines.js";
 export * from "./workflow-capability.js";
+export * from "./workflow-tool.js";
 export * from "./workflow-control.js";
 export * from "./workflow-director.js";
 

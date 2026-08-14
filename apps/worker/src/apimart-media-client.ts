@@ -15,28 +15,89 @@ const nonEmptyString = (value: unknown): string | null =>
 
 const wait = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+const SAFE_REQUEST_RETRIES = 2;
+
+type MediaRequestOperation = "submission" | "status polling";
+export type ApimartMediaTaskProgress = {
+  progress: number | null;
+  status: string;
+};
+
+const startsWithBytes = (body: Uint8Array, signature: readonly number[]): boolean =>
+  signature.every((value, index) => body[index] === value);
+
+const asciiAt = (body: Uint8Array, offset: number, value: string): boolean =>
+  [...value].every((character, index) => body[offset + index] === character.charCodeAt(0));
+
+const detectMediaContentType = (body: Uint8Array): string | null => {
+  if (startsWithBytes(body, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (startsWithBytes(body, [0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (asciiAt(body, 0, "GIF87a") || asciiAt(body, 0, "GIF89a")) return "image/gif";
+  if (asciiAt(body, 0, "RIFF") && asciiAt(body, 8, "WEBP")) return "image/webp";
+  if (asciiAt(body, 0, "RIFF") && asciiAt(body, 8, "WAVE")) return "audio/wav";
+  if (asciiAt(body, 0, "OggS")) return "audio/ogg";
+  if (asciiAt(body, 0, "fLaC")) return "audio/flac";
+  if (asciiAt(body, 0, "ID3") || (body[0] === 0xff && ((body[1] ?? 0) & 0xe0) === 0xe0)) {
+    return "audio/mpeg";
+  }
+  if (asciiAt(body, 4, "ftyp")) return "audio/mp4";
+  return null;
+};
 
 export class ApimartMediaClient {
   constructor(private readonly config: WorkerConfig["apimart"]) {}
 
-  private async request(path: string, init?: RequestInit): Promise<unknown> {
-    const response = await fetch(`${this.config.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.config.apiKey}`,
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
-      signal: AbortSignal.timeout(60_000),
-    });
-    if (!response.ok) {
-      throw new PermanentVideoError(`APIMart media request failed with status ${response.status}.`);
+  private async request(
+    path: string,
+    operation: MediaRequestOperation,
+    init?: RequestInit,
+  ): Promise<unknown> {
+    const attempts = operation === "submission" ? 1 : SAFE_REQUEST_RETRIES + 1;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await fetch(`${this.config.baseUrl}${path}`, {
+          ...init,
+          headers: {
+            Authorization: `Bearer ${this.config.apiKey}`,
+            "Content-Type": "application/json",
+            ...init?.headers,
+          },
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (!response.ok) {
+          const message = `APIMart media ${operation} failed with status ${response.status}.`;
+          if (response.status >= 400 && response.status < 500 &&
+              response.status !== 408 && response.status !== 429) {
+            throw new PermanentVideoError(message);
+          }
+          if (operation === "submission") {
+            throw new PermanentVideoError(
+              `${message} The submission outcome is unknown and was not retried to avoid duplicate billing.`,
+            );
+          }
+          throw new Error(message);
+        }
+        return await response.json() as unknown;
+      } catch (error: unknown) {
+        if (error instanceof PermanentVideoError) throw error;
+        if (operation === "submission") {
+          throw new PermanentVideoError(
+            "APIMart media submission network request failed with an unknown outcome and was not retried to avoid duplicate billing.",
+            { cause: error },
+          );
+        }
+        lastError = error;
+        if (attempt < attempts) await wait(1_000 * 2 ** (attempt - 1));
+      }
     }
-    return await response.json() as unknown;
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`APIMart media ${operation} failed.`);
   }
 
   private async submit(path: string, body: JsonObject): Promise<string> {
-    const response = asObject(await this.request(path, {
+    const response = asObject(await this.request(path, "submission", {
       method: "POST",
       body: JSON.stringify(body),
     }), "submission");
@@ -70,20 +131,32 @@ export class ApimartMediaClient {
     });
   }
 
-  async waitForTask(taskId: string, isMusic: boolean): Promise<JsonObject> {
+  async waitForTask(
+    taskId: string,
+    isMusic: boolean,
+    onProgress?: (progress: ApimartMediaTaskProgress) => Promise<void>,
+  ): Promise<JsonObject> {
     const deadline = Date.now() + this.config.taskTimeoutMs;
     const path = isMusic ? `/music/tasks/${encodeURIComponent(taskId)}` : `/tasks/${encodeURIComponent(taskId)}`;
     while (Date.now() < deadline) {
-      const response = asObject(await this.request(`${path}?language=zh`), "task response");
+      const response = asObject(
+        await this.request(`${path}?language=zh`, "status polling"),
+        "task response",
+      );
       const task = asObject(response.data, "task data");
       const status = nonEmptyString(task.status)?.toLowerCase();
-      if (status === "completed") return task;
       if (status === "failed" || status === "cancelled" || status === "canceled") {
         throw new PermanentVideoError(`APIMart media task ${status}.`);
       }
-      if (!status || !["submitted", "pending", "processing", "queued", "running"].includes(status)) {
+      if (!status || !["completed", "submitted", "pending", "processing", "queued", "running"].includes(status)) {
         throw new PermanentVideoError("APIMart media task returned an unknown status.");
       }
+      const providerProgress = typeof task.progress === "number" &&
+          Number.isFinite(task.progress) && task.progress >= 0 && task.progress <= 100
+        ? Math.round(task.progress)
+        : status === "completed" ? 100 : null;
+      await onProgress?.({ progress: providerProgress, status });
+      if (status === "completed") return task;
       await wait(this.config.pollIntervalMs);
     }
     throw new Error("APIMart media task timed out.");
@@ -137,13 +210,22 @@ export class ApimartMediaClient {
     });
     if (!response.ok) throw new Error(`Media download failed with status ${response.status}.`);
     this.assertResultUrl(response.url);
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
-    if (!contentType.startsWith(expectedPrefix)) {
-      throw new PermanentVideoError(`Media download returned invalid MIME ${contentType || "unknown"}.`);
-    }
     const body = new Uint8Array(await response.arrayBuffer());
     if (body.byteLength === 0 || body.byteLength > 100 * 1024 * 1024) {
       throw new PermanentVideoError("Downloaded media size is invalid.");
+    }
+    const declaredContentType = response.headers.get("content-type")
+      ?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    const detectedContentType = detectMediaContentType(body);
+    const contentType = declaredContentType.startsWith(expectedPrefix)
+      ? declaredContentType
+      : declaredContentType === "application/octet-stream" && detectedContentType?.startsWith(expectedPrefix)
+        ? detectedContentType
+        : null;
+    if (!contentType) {
+      throw new PermanentVideoError(
+        `Media download returned invalid MIME ${declaredContentType || "unknown"}.`,
+      );
     }
     return { body, contentType };
   }

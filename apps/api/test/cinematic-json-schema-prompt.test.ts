@@ -8,6 +8,7 @@ const promptFor = (stage: CinematicGenerativeStage): string => buildCinematicPro
   workflowId: "00000000-0000-4000-8000-000000000002",
   initialPrompt: "制作一条十秒美食短片",
   stage,
+  videoModel: "doubao-seedance-2.0",
   durationSeconds: 30,
   modelMaxDurationSeconds: 15,
   approvedArtifacts: [],

@@ -15,13 +15,15 @@ export const toChatAgentRequest = (messages: UIMessage[], conversationId?: strin
 export const createChatTransport = (options: {
   getConversationId: () => string | undefined;
   onConversationId: (conversationId: string) => void;
-}) => new DefaultChatTransport({
-  api: "/api/chat",
-  fetch: async (input, init) => {
-    const response = await fetch(input, init);
-    const conversationId = response.headers.get("x-conversation-id");
-    if (conversationId) options.onConversationId(conversationId);
-    return response;
-  },
-  prepareSendMessagesRequest: ({ messages }) => ({ body: toChatAgentRequest(messages, options.getConversationId()) }),
-});
+}) => {
+  return new DefaultChatTransport({
+    api: "/api/chat",
+    fetch: async (input, init) => {
+      const response = await fetch(input, init);
+      const conversationId = response.headers.get("x-conversation-id");
+      if (conversationId) options.onConversationId(conversationId);
+      return response;
+    },
+    prepareSendMessagesRequest: ({ messages }) => ({ body: toChatAgentRequest(messages, options.getConversationId()) }),
+  });
+};

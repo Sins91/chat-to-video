@@ -4,6 +4,7 @@ import { Chat, useChat } from "@ai-sdk/react";
 import {
   CINEMATIC_PIPELINE_DEFINITION,
   findWorkflowPipelineDefinition,
+  parseWorkflowControlCommand,
 } from "@chat-to-video/contracts";
 import {
   CircleAlertIcon,
@@ -25,10 +26,6 @@ import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-pro
 import { createChatTransport } from "@/lib/chat-transport";
 import { notifyConversationHistoryChanged, notifyPendingConversationHistory } from "@/lib/conversation-client";
 import { isVideoCreationIntent } from "@/lib/video-intent";
-import {
-  classifyWorkflowRestartConfirmation,
-  parseWorkflowRestartCommand,
-} from "@/lib/workflow-review-intent";
 
 type ChatSession = {
   chat: Chat<UIMessage>;
@@ -51,10 +48,6 @@ type PendingActionPresentation = {
 };
 
 const CHAT_FALLBACK_MESSAGE_ID_PREFIX = "chat-fallback:";
-const WORKFLOW_CONTROL_INPUT_PATTERN = /(?:^\s*(?:确认|取消|退出|停止|终止)\s*$|(?:直接)?从\s*(?:创意方案|方案|脚本|分镜|场景规划|素材规划|素材)\s*(?:阶段)?(?:开始|做起|继续|生成)|(?:切换|换)(?:到|成).*(?:管线|流程))/u;
-const EXIT_WORKFLOW_INPUT_PATTERN = /^\s*(?:退出|停止|终止)(?:当前)?(?:视频)?(?:生成|工作流|管线|任务)?[。！!]?\s*$/u;
-const SWITCH_PIPELINE_INPUT_PATTERN = /(?:切换|换)(?:到|成).*(?:管线|流程)/u;
-const DIRECT_ENTRY_INPUT_PATTERN = /(?:直接)?从\s*(?:创意方案|方案|脚本|分镜|场景规划|素材规划|素材)\s*(?:阶段)?(?:开始|做起|继续|生成)/u;
 
 const waitForPendingActionPaint = (): Promise<void> => new Promise((resolve) => {
   let isResolved = false;
@@ -92,14 +85,15 @@ export function ChatPanel() {
 
   const createChatSession = useCallback((conversationId: string | null): ChatSession => {
     const sessionId = crypto.randomUUID();
+    const transport = createChatTransport({
+      getConversationId: () => sessionsRef.current.get(sessionId)?.conversationId ?? undefined,
+      onConversationId: (nextConversationId) => {
+        sessionCallbacksRef.current.onConversationId(sessionId, nextConversationId);
+      },
+    });
     const chat = new Chat<UIMessage>({
       id: sessionId,
-      transport: createChatTransport({
-        getConversationId: () => sessionsRef.current.get(sessionId)?.conversationId ?? undefined,
-        onConversationId: (nextConversationId) => {
-          sessionCallbacksRef.current.onConversationId(sessionId, nextConversationId);
-        },
-      }),
+      transport,
       onError: () => sessionCallbacksRef.current.onError(sessionId),
       onFinish: ({ isError, messages }) => sessionCallbacksRef.current.onFinish(
         sessionId,
@@ -235,7 +229,7 @@ export function ChatPanel() {
     && workflowStatus !== "failed"
     && workflowStatus !== "cancelled";
   const isReviewingStoryboard = workflowStatus === "awaiting_input";
-  const pendingRestart = workflow.snapshot?.pendingRestart ?? null;
+  const pendingControl = workflow.snapshot?.pendingControl ?? null;
   const isGenerating = isChatGenerating || workflow.isSubmitting;
   const isAgentBusy = isGenerating || isQueueDispatching || workflowStatus === "drafting";
   const isAgentProcessing = isAgentBusy || isWorkflowProcessing;
@@ -257,47 +251,24 @@ export function ChatPanel() {
     const pipeline = workflow.snapshot
       ? findWorkflowPipelineDefinition(workflow.snapshot.pipeline) ?? CINEMATIC_PIPELINE_DEFINITION
       : CINEMATIC_PIPELINE_DEFINITION;
-    const restartCommand = parseWorkflowRestartCommand(text, pipeline);
-    if (pendingRestart) {
-      const confirmation = classifyWorkflowRestartConfirmation(text);
-      if (confirmation === "confirm") return "正在确认重新开始并停止当前执行。";
-      if (confirmation === "cancel") return "正在取消本次重新开始操作。";
+    const command = parseWorkflowControlCommand(text, pipeline);
+    if (pendingControl && command?.type === "confirm") return "正在确认并执行本次管线操作。";
+    if (pendingControl && command?.type === "cancel") return "正在取消本次管线操作。";
+    if (command?.type === "restart_stage") {
+      const target = pipeline.stages.find((stage) => stage.id === command.stageId);
+      return `正在申请从${target?.label ?? command.stageId}重新开始。`;
     }
-    if (restartCommand) {
-      const target = pipeline.stages.find((stage) => stage.id === restartCommand.targetStage);
-      return `正在申请从${target?.label ?? restartCommand.targetStage}重新开始。`;
-    }
-    if (EXIT_WORKFLOW_INPUT_PATTERN.test(text)) return "正在准备退出当前工作流。";
-    if (SWITCH_PIPELINE_INPUT_PATTERN.test(text)) return "正在检查目标管线并准备切换。";
-    if (DIRECT_ENTRY_INPUT_PATTERN.test(text)) return "正在整理已有输入并准备从指定阶段开始。";
+    if (command?.type === "exit") return "正在准备退出当前工作流。";
+    if (command?.type === "switch_pipeline") return "正在检查目标管线并准备切换。";
+    if (command?.type === "start_from_stage") return "正在整理已有输入并准备从指定阶段开始。";
     if (isReviewingStoryboard) return "正在理解你的反馈并处理当前阶段。";
     if (!hasActiveWorkflow && isVideoCreationIntent(text)) return "正在理解你的视频需求并准备工作流。";
     return "正在理解你的问题并组织回复。";
-  }, [hasActiveWorkflow, isReviewingStoryboard, pendingRestart, workflow.snapshot]);
+  }, [hasActiveWorkflow, isReviewingStoryboard, pendingControl, workflow.snapshot]);
 
   const dispatchText = useCallback(async (text: string, sessionId: string) => {
-    const pipeline = workflow.snapshot
-      ? findWorkflowPipelineDefinition(workflow.snapshot.pipeline) ?? CINEMATIC_PIPELINE_DEFINITION
-      : CINEMATIC_PIPELINE_DEFINITION;
-    const restartCommand = parseWorkflowRestartCommand(text, pipeline);
-    if (pendingRestart) {
-      const confirmation = classifyWorkflowRestartConfirmation(text);
-      if (confirmation === "confirm") {
-        await workflow.confirmRestart(crypto.randomUUID());
-        return;
-      }
-      if (confirmation === "cancel") {
-        await workflow.cancelRestart(crypto.randomUUID());
-        return;
-      }
-      if (restartCommand) {
-        await workflow.requestRestart(restartCommand.targetStage, restartCommand.text, crypto.randomUUID());
-        return;
-      }
-      await sendChatMessage(text);
-      return;
-    }
-    const controlRoute = await workflow.resolveControlIntent(text, crypto.randomUUID());
+    const messageId = crypto.randomUUID();
+    const controlRoute = await workflow.resolveControlIntent(text, messageId);
     if (controlRoute.route === "workflow") {
       if (controlRoute.conversationId) {
         sessionCallbacksRef.current.onConversationId(sessionId, controlRoute.conversationId);
@@ -309,26 +280,8 @@ export function ChatPanel() {
       }
       return;
     }
-    if (restartCommand && workflow.snapshot && !isReviewingStoryboard) {
-      await workflow.requestRestart(restartCommand.targetStage, restartCommand.text, crypto.randomUUID());
-      return;
-    }
-    if (isReviewingStoryboard) {
-      await sendChatMessage(text);
-    } else if (!hasActiveWorkflow && isVideoCreationIntent(text)) {
-      const conversationId = await workflow.startWorkflow(text, crypto.randomUUID());
-      if (conversationId) {
-        sessionCallbacksRef.current.onConversationId(sessionId, conversationId);
-      } else {
-        const session = sessionsRef.current.get(sessionId);
-        const resolvedPendingId = session?.pendingHistoryId ?? undefined;
-        if (session) session.pendingHistoryId = null;
-        notifyConversationHistoryChanged(resolvedPendingId);
-      }
-    } else {
-      await sendChatMessage(text);
-    }
-  }, [hasActiveWorkflow, isReviewingStoryboard, pendingRestart, sendChatMessage, workflow.cancelRestart, workflow.confirmRestart, workflow.requestRestart, workflow.resolveControlIntent, workflow.snapshot, workflow.startWorkflow]);
+    await sendChatMessage(text);
+  }, [sendChatMessage, workflow.resolveControlIntent]);
 
   const runText = useCallback((text: string) => {
     const sessionId = activeSession.id;
@@ -357,13 +310,17 @@ export function ChatPanel() {
     if (!activeSession.conversationId && !activeSession.pendingHistoryId) {
       activeSession.pendingHistoryId = notifyPendingConversationHistory(trimmed);
     }
-    const canInterruptWorkflow = hasActiveWorkflow && WORKFLOW_CONTROL_INPUT_PATTERN.test(trimmed);
+    const pipeline = workflow.snapshot
+      ? findWorkflowPipelineDefinition(workflow.snapshot.pipeline) ?? CINEMATIC_PIPELINE_DEFINITION
+      : CINEMATIC_PIPELINE_DEFINITION;
+    const canInterruptWorkflow = hasActiveWorkflow &&
+      parseWorkflowControlCommand(trimmed, pipeline) !== null;
     if ((!isAgentAvailable && !canInterruptWorkflow) || queueDispatchInFlightRef.current || queuedInputs.length > 0) {
       setQueuedInputs((current) => [...current, { id: crypto.randomUUID(), text: trimmed }]);
       return;
     }
     runText(trimmed);
-  }, [activeSession, hasActiveWorkflow, isAgentAvailable, queuedInputs.length, runText]);
+  }, [activeSession, hasActiveWorkflow, isAgentAvailable, queuedInputs.length, runText, workflow.snapshot]);
 
   useEffect(() => {
     const nextInput = queuedInputs[0];
@@ -375,6 +332,11 @@ export function ChatPanel() {
   const cancelQueuedInput = useCallback((id: string) => {
     setQueuedInputs((current) => current.filter((item) => item.id !== id));
   }, []);
+
+  const stopAgent = useCallback(() => {
+    if (!isChatGenerating) return;
+    void stop();
+  }, [isChatGenerating, stop]);
 
   const handleNewChat = useCallback(() => {
     activateConversation(null);
@@ -435,15 +397,16 @@ export function ChatPanel() {
           pendingActionMessage={pendingAction?.sessionId === activeSession.id ? pendingAction.message : null}
           workflowErrorMessage={workflowErrorMessage}
           workflowStepProgress={workflow.stepProgress}
+          workflowStepProgressHistory={workflow.stepProgressHistory}
         />
         <ChatComposer
           canStop={isChatGenerating}
           input={input}
           isGenerating={isAgentBusy}
-          isVideoModelLocked={Boolean(pendingRestart) || isWorkflowProcessing}
+          isVideoModelLocked={Boolean(pendingControl) || isWorkflowProcessing}
           onCancelQueuedInput={cancelQueuedInput}
           onInputChange={setInput}
-          onStop={() => void stop()}
+          onStop={stopAgent}
           onSubmitText={sendText}
           onVideoModelChange={workflow.setVideoModel}
           placeholder={isReviewingStoryboard ? "直接说明目标时长、场景时长或其他修改；确认请回复“确认生成”…" : "输入消息；明确要求生成视频时会自动进入工作流…"}

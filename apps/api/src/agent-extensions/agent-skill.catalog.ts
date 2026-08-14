@@ -6,6 +6,17 @@ import { resolve } from "node:path";
 export const CHAT_CAPABILITIES_SKILL_ID = "cinematic-capabilities";
 export const CINEMATIC_GOVERNANCE_SKILL_ID = "cinematic-governance";
 export const CINEMATIC_REVIEWER_SKILL_ID = "cinematic-reviewer";
+export const CINEMATIC_COMPOSE_SKILL_ID = "cinematic-compose";
+export const CINEMATIC_EXECUTIVE_PRODUCER_SKILL_ID = "cinematic-executive-producer";
+export const CINEMATIC_CHECKPOINT_SKILL_ID = "cinematic-checkpoint";
+export const CINEMATIC_REFERENCE_ANALYST_SKILL_ID = "cinematic-reference-analyst";
+export const CINEMATIC_FINAL_REVIEW_SKILL_ID = "cinematic-final-review";
+export const CINEMATIC_PUBLISH_SKILL_ID = "cinematic-publish";
+
+export const CINEMATIC_DEFERRED_STAGE_SKILL_IDS = Object.freeze({
+  final_review: CINEMATIC_FINAL_REVIEW_SKILL_ID,
+  publish: CINEMATIC_PUBLISH_SKILL_ID,
+});
 
 export const CINEMATIC_STAGE_SKILL_IDS = Object.freeze({
   research: "cinematic-research",
@@ -19,7 +30,12 @@ export const CINEMATIC_STAGE_SKILL_IDS = Object.freeze({
 export const ALL_CINEMATIC_SKILL_IDS = Object.freeze([
   CINEMATIC_GOVERNANCE_SKILL_ID,
   CHAT_CAPABILITIES_SKILL_ID,
+  CINEMATIC_EXECUTIVE_PRODUCER_SKILL_ID,
+  CINEMATIC_CHECKPOINT_SKILL_ID,
+  CINEMATIC_REFERENCE_ANALYST_SKILL_ID,
+  ...Object.values(CINEMATIC_DEFERRED_STAGE_SKILL_IDS),
   ...Object.values(CINEMATIC_STAGE_SKILL_IDS),
+  CINEMATIC_COMPOSE_SKILL_ID,
   CINEMATIC_REVIEWER_SKILL_ID,
 ]);
 
@@ -60,13 +76,19 @@ export class AgentSkillCatalog {
     return [
       this.getRequiredPath(CINEMATIC_GOVERNANCE_SKILL_ID),
       this.getRequiredPath(CHAT_CAPABILITIES_SKILL_ID),
+      this.getRequiredPath(CINEMATIC_REFERENCE_ANALYST_SKILL_ID),
     ];
   }
 
   forCinematic(stage: CinematicGenerativeStage): string[] {
     return [
       this.getRequiredPath(CINEMATIC_GOVERNANCE_SKILL_ID),
+      this.getRequiredPath(CINEMATIC_EXECUTIVE_PRODUCER_SKILL_ID),
+      this.getRequiredPath(CINEMATIC_CHECKPOINT_SKILL_ID),
       this.getRequiredPath(CINEMATIC_STAGE_SKILL_IDS[stage]),
+      ...(stage === "research"
+        ? [this.getRequiredPath(CINEMATIC_REFERENCE_ANALYST_SKILL_ID)]
+        : []),
       this.getRequiredPath(CINEMATIC_REVIEWER_SKILL_ID),
     ];
   }
