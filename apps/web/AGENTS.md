@@ -1,6 +1,14 @@
 # Web Agent Rules
 
-本文件补充仓库根规则，适用于 `apps/web`。
+本文件适用于 `apps/web/**`，补充 `apps/AGENTS.md` 与仓库根目录的总体架构原则。
+
+## Web 职责与状态边界
+
+- Web 只负责 Next.js 页面、浏览器交互和轻量 BFF/代理，不复制 NestJS 领域逻辑，不直接访问数据库、Redis 或 MinIO 凭据，也不导入 API/Worker 内部模块。
+- 普通服务端请求状态归 Alova 请求层，编辑器全局交互状态归 Zustand，局部表单状态留在组件或表单层；不得把同一服务端数据复制成多个事实源。
+- SSE 使用独立客户端封装，不塞入普通请求缓存。客户端支持心跳、取消、业务游标或 `Last-Event-ID` 重连，并在重连后先应用服务端任务快照再消费增量事件。
+- 跨边界请求和响应只使用 `@chat-to-video/contracts` 公共入口。浏览器端 Schema 校验仅用于即时反馈，不能替代 API 的授权与重新校验。
+- Next.js 客户端组件不得引入 Node-only 依赖、服务端密钥或完整对象路径；大文件上传下载直接使用 API 签发的短时效 URL。
 
 ## AI Elements 组件使用约束
 

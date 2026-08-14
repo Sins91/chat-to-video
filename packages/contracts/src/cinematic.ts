@@ -16,9 +16,12 @@ export const CinematicGenerativeStageSchema = CinematicStageSchema.exclude(["com
 
 export const CINEMATIC_PIPELINE_DEFINITION = defineWorkflowPipeline({
   id: "cinematic",
+  label: "电影化视频",
+  aliases: ["电影化", "电影感", "cinematic"],
   definitionVersion: 2,
   initialStageId: "research",
   terminalStageIds: ["compose"],
+  directEntryStageIds: ["proposal", "script", "scene_plan", "assets"],
   stages: [
     { id: "research", label: "创作研究", aliases: ["创作研究", "研究", "research"], stepId: "research", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["参考资料", "创作约束", "调研"], ownedArtifactKinds: ["research_brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["proposal"], inputArtifactKinds: [], outputArtifactKinds: ["research_brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, directorSkillId: "cinematic-research", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [] } },
     { id: "proposal", label: "创意方案", aliases: ["创意方案", "方案阶段", "proposal"], stepId: "proposal", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["主题", "受众", "概念", "风格", "预算", "供应商"], ownedArtifactKinds: ["proposal"], allowsAutoAdvanceAfterRevision: true, allowedNextStageIds: ["script"], inputArtifactKinds: ["research_brief"], outputArtifactKinds: ["proposal"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, directorSkillId: "cinematic-proposal", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [] } },

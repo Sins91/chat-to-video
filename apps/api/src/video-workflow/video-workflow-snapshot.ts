@@ -35,7 +35,7 @@ export const buildVideoWorkflowSnapshot = async (
   const currentGenerativeStage = CinematicGenerativeStageSchema.safeParse(
     workflow.currentStageId,
   );
-  const [storyboardRow, job, currentArtifactRow, scriptArtifactRow, assetBatchRow] = await Promise.all([
+  const [storyboardRow, job, currentArtifactRow, scriptArtifactRow, assetBatchRow, pendingControlRow] = await Promise.all([
     repository.findLatestStoryboard(workflowId),
     repository.findWorkflowVideoJob(workflowId),
     repository.findLatestCinematicArtifact(
@@ -44,6 +44,7 @@ export const buildVideoWorkflowSnapshot = async (
     ),
     repository.findLatestCinematicArtifact(workflowId, "script"),
     repository.findLatestCinematicAssetBatch(workflowId),
+    repository.findPendingWorkflowControl({ workflowId }),
   ]);
   const assetRows = assetBatchRow
     ? await repository.listCinematicAssetJobs(assetBatchRow.id)
@@ -147,6 +148,13 @@ export const buildVideoWorkflowSnapshot = async (
           expiresAt: workflow.pendingRestartExpiresAt.toISOString(),
         })
       : null,
+    pendingControl: pendingControlRow
+      ? repository.toPendingWorkflowControl(pendingControlRow)
+      : null,
+    sourceWorkflowId: workflow.sourceWorkflowId,
+    successorWorkflowId: workflow.successorWorkflowId,
+    cancellationReason: workflow.cancellationReason,
+    cancelledAt: workflow.cancelledAt?.toISOString() ?? null,
     errorMessage: workflow.errorMessage,
     lastProgressAt: workflow.lastProgressAt.toISOString(),
     failureCode: workflow.failureCode,

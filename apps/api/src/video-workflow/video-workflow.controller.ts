@@ -21,6 +21,8 @@ import {
   VideoWorkflowIdSchema,
   VideoWorkflowInteractionSchema,
   ResolveWorkflowUserIntentRequestSchema,
+  ResolveVideoWorkflowIntentRequestSchema,
+  type ResolveVideoWorkflowIntentResponse,
   type ResolveWorkflowUserIntentResponse,
   type CreateVideoWorkflowResponse,
   type UpdateVideoWorkflowModelResponse,
@@ -55,6 +57,18 @@ export class VideoWorkflowController {
     const parsed = CreateVideoWorkflowRequestSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException({ code: "INVALID_VIDEO_WORKFLOW_REQUEST", message: "Video workflow request is invalid.", issues: parsed.error.issues });
     return this.workflows.create(parsed.data);
+  }
+
+  @Post("intents/resolve")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async resolveVideoIntent(@Body() body: unknown): Promise<ResolveVideoWorkflowIntentResponse> {
+    const parsed = ResolveVideoWorkflowIntentRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException({
+      code: "INVALID_VIDEO_WORKFLOW_INTENT_REQUEST",
+      message: "Video workflow intent request is invalid.",
+      issues: parsed.error.issues,
+    });
+    return this.workflows.resolveVideoIntent(parsed.data);
   }
 
   @Get(":workflowId")

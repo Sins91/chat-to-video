@@ -13,8 +13,8 @@ export function CinematicAssetReviewCard({
     <article className="rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="font-numeric text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-            素材执行结果 · V{batch.planVersion}
+          <p className="font-sans text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            素材执行结果
           </p>
           <h2 className="mt-1 text-sm font-medium text-foreground">
             {batch.status === "awaiting_approval" ? "实际素材等待确认" : "实际素材"}

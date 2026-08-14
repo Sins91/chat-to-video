@@ -179,8 +179,9 @@ describe("workflow and chat routing", () => {
       "utf8",
     );
 
-    expect(panel).toContain("workflow.resolveUserIntent(text");
-    expect(panel).toContain('if (routed === "chat") await sendChatMessage(text)');
+    expect(panel).toContain("workflow.resolveControlIntent(text");
+    expect(panel).toContain('if (controlRoute.route === "workflow")');
+    expect(panel).toContain("if (isReviewingStoryboard) {\n      await sendChatMessage(text);");
     expect(panel).toContain(
       "const isGenerating = isChatGenerating || workflow.isSubmitting",
     );
@@ -190,6 +191,24 @@ describe("workflow and chat routing", () => {
     expect(panel).not.toContain(
       "const isGenerating = isChatGenerating || isWorkflowLocked",
     );
+  });
+
+  it("reconciles optimistic history when a video workflow creates the conversation", async () => {
+    const [panel, provider] = await Promise.all([
+      readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
+    ]);
+
+    expect(provider).toContain("Promise<string | null>");
+    expect(provider).toContain("return created.conversationId;");
+    expect(panel).toContain("dispatchText(text, sessionId)");
+    expect(panel.indexOf("setPendingAction({ actionId")).toBeLessThan(
+      panel.indexOf(".then(() => dispatchText(text, sessionId))"),
+    );
+    expect(panel).toContain("waitForPendingActionPaint()");
+    expect(panel).toContain("sessionCallbacksRef.current.onConversationId(sessionId, conversationId)");
+    expect(panel).toContain("notifyConversationHistoryChanged(resolvedPendingId)");
+    expect(provider).not.toContain("if (created.conversationId === loadedConversationId) await refresh();\n      notifyConversationHistoryChanged();");
   });
 
   it("queues new input until the current Agent turn is fully available", async () => {

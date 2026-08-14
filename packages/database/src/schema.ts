@@ -8,6 +8,10 @@ import type {
   WorkflowCapabilityResolution,
   WorkflowDirectorCycleStatus,
   WorkflowProductionDecision,
+  WorkflowControlImpact,
+  WorkflowControlKind,
+  WorkflowControlStatus,
+  WorkflowImportedArtifactCandidate,
 } from "@chat-to-video/contracts";
 import type { Storyboard, VideoWorkflowEvent, WorkflowUserIntent } from "@chat-to-video/contracts";
 import {
@@ -38,6 +42,10 @@ export const videoWorkflows = mysqlTable("video_workflows", {
   currentVersion: int("current_version").notNull().default(0),
   stateVersion: int("state_version").notNull().default(0),
   pipelineDefinitionVersion: int("pipeline_definition_version").notNull().default(2),
+  sourceWorkflowId: varchar("source_workflow_id", { length: 36 }),
+  successorWorkflowId: varchar("successor_workflow_id", { length: 36 }),
+  cancellationReason: text("cancellation_reason"),
+  cancelledAt: timestamp("cancelled_at", { mode: "date", fsp: 3 }),
   pendingRestartId: varchar("pending_restart_id", { length: 36 }),
   pendingRestartStage: varchar("pending_restart_stage", { length: 64 }),
   pendingRestartText: text("pending_restart_text"),
@@ -195,6 +203,13 @@ export const workflowArtifactVersions = mysqlTable("workflow_artifact_versions",
   version: int("version").notNull(),
   artifact: json("artifact_json").$type<CinematicArtifact>().notNull(),
   sourceActionId: varchar("source_action_id", { length: 36 }),
+  origin: varchar("origin", { length: 16 }).notNull().default("generated"),
+  sourceMessageId: varchar("source_message_id", { length: 100 }),
+  sourceWorkflowId: varchar("source_workflow_id", { length: 36 }),
+  sourceArtifactVersion: int("source_artifact_version"),
+  controlRequestId: varchar("control_request_id", { length: 36 }),
+  normalizerVersion: varchar("normalizer_version", { length: 32 }),
+  confirmedAt: timestamp("confirmed_at", { mode: "date", fsp: 3 }),
   revisionRequest: text("revision_request"),
   supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
   supersededByRestartId: varchar("superseded_by_restart_id", { length: 36 }),
@@ -347,12 +362,55 @@ export const workflowUserDecisions = mysqlTable("workflow_user_decisions", {
   resolverVersion: varchar("resolver_version", { length: 32 }).notNull(),
   decisionSource: varchar("decision_source", { length: 16 }).notNull(),
   requiresConfirmation: int("requires_confirmation").notNull().default(0),
+  resolutionStatus: varchar("resolution_status", { length: 16 }).notNull().default("resolved"),
   confirmedAt: timestamp("confirmed_at", { mode: "date", fsp: 3 }),
   appliedAt: timestamp("applied_at", { mode: "date", fsp: 3 }),
   createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("workflow_user_decisions_message_uq").on(table.conversationMessageId),
   index("workflow_user_decisions_workflow_idx").on(table.workflowId, table.createdAt),
+]);
+
+export const workflowControlRequests = mysqlTable("workflow_control_requests", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  conversationId: varchar("conversation_id", { length: 36 }),
+  sourceWorkflowId: varchar("source_workflow_id", { length: 36 }),
+  sourceMessageId: varchar("source_message_id", { length: 100 }).notNull(),
+  kind: varchar("kind", { length: 32 }).$type<WorkflowControlKind>().notNull(),
+  status: varchar("status", { length: 16 }).$type<WorkflowControlStatus>().notNull(),
+  targetPipelineId: varchar("target_pipeline_id", { length: 64 }),
+  targetStageId: varchar("target_stage_id", { length: 64 }),
+  expectedStateVersion: int("expected_state_version").notNull(),
+  rawText: text("raw_text").notNull(),
+  candidate: json("candidate_json").$type<WorkflowImportedArtifactCandidate>(),
+  impact: json("impact_json").$type<WorkflowControlImpact>().notNull(),
+  claimToken: varchar("claim_token", { length: 36 }),
+  claimUntil: timestamp("claim_until", { mode: "date", fsp: 3 }),
+  requestedAt: timestamp("requested_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { mode: "date", fsp: 3 }).notNull(),
+  completedAt: timestamp("completed_at", { mode: "date", fsp: 3 }),
+  errorCode: varchar("error_code", { length: 64 }),
+}, (table) => [
+  uniqueIndex("workflow_control_request_message_uq").on(table.sourceMessageId),
+  index("workflow_control_request_pending_idx").on(table.status, table.expiresAt),
+  index("workflow_control_request_workflow_idx").on(table.sourceWorkflowId, table.requestedAt),
+]);
+
+export const workflowStageAttempts = mysqlTable("workflow_stage_attempts", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  pipelineId: varchar("pipeline_id", { length: 64 }).notNull(),
+  stageId: varchar("stage_id", { length: 64 }).notNull(),
+  attempt: int("attempt").notNull(),
+  status: varchar("status", { length: 24 }).notNull(),
+  partialProgress: json("partial_progress_json").$type<Record<string, unknown>>(),
+  resumeCursor: varchar("resume_cursor", { length: 200 }),
+  failureCode: varchar("failure_code", { length: 64 }),
+  startedAt: timestamp("started_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  completedAt: timestamp("completed_at", { mode: "date", fsp: 3 }),
+}, (table) => [
+  uniqueIndex("workflow_stage_attempt_uq").on(table.workflowId, table.stageId, table.attempt),
+  index("workflow_stage_attempt_active_idx").on(table.workflowId, table.status, table.startedAt),
 ]);
 
 export const agentExtensionExecutions = mysqlTable("agent_extension_executions", {
@@ -397,3 +455,5 @@ export type VideoJobRow = typeof videoJobs.$inferSelect;
 export type VideoOutputRow = typeof videoOutputs.$inferSelect;
 export type AgentExtensionExecutionRow = typeof agentExtensionExecutions.$inferSelect;
 export type WorkflowUserDecisionRow = typeof workflowUserDecisions.$inferSelect;
+export type WorkflowControlRequestRow = typeof workflowControlRequests.$inferSelect;
+export type WorkflowStageAttemptRow = typeof workflowStageAttempts.$inferSelect;

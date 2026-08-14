@@ -60,9 +60,9 @@ describe("VideoWorkflowService interactions", () => {
   const storage = { createDownloadUrl: vi.fn() };
   const conversations = { findActiveConversation: vi.fn(), appendMessage: vi.fn(), findWorkflow: vi.fn(), createWithUserMessage: vi.fn(), listModelMessages: vi.fn() };
   const modelGateway = { inferCinematicDuration: vi.fn() };
-  const runtime = { resume: vi.fn(), restart: vi.fn(), start: vi.fn() };
+  const runtime = { resume: vi.fn(), restart: vi.fn(), start: vi.fn(), cancel: vi.fn() };
   const events = { append: vi.fn() };
-  const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn() };
+  const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn(), cancelQueuedWork: vi.fn() };
   const recovery = { recoverAgentRun: vi.fn(), recoverDirectorActionLimit: vi.fn() };
   const intentResolver = { resolve: vi.fn() };
   const service = new VideoWorkflowService(
@@ -101,6 +101,7 @@ describe("VideoWorkflowService interactions", () => {
     repository.setRunId.mockResolvedValue(undefined);
     runtime.resume.mockResolvedValue(undefined);
     runtime.restart.mockResolvedValue("run-restarted");
+    runtime.cancel.mockResolvedValue(undefined);
     repository.updateWorkflow.mockResolvedValue(undefined);
     events.append.mockResolvedValue(undefined);
     repository.createWorkflow.mockResolvedValue(true);
@@ -112,6 +113,7 @@ describe("VideoWorkflowService interactions", () => {
     runtime.start.mockResolvedValue("run-created");
     operations.retryVideo.mockResolvedValue(undefined);
     operations.getRenderQueueAhead.mockResolvedValue(null);
+    operations.cancelQueuedWork.mockResolvedValue(undefined);
     recovery.recoverAgentRun.mockResolvedValue(true);
     recovery.recoverDirectorActionLimit.mockResolvedValue(true);
     intentResolver.resolve.mockResolvedValue({
@@ -396,6 +398,45 @@ describe("VideoWorkflowService interactions", () => {
     expect(runtime.resume).not.toHaveBeenCalled();
   });
 
+  it("politely redirects an out-of-scope action to registered pipeline behavior", async () => {
+    repository.findWorkflowScope.mockResolvedValue({
+      workflow: waitingWorkflow,
+      tenantId: "demo",
+      projectId: "demo",
+    });
+    repository.findLatestCinematicArtifact.mockResolvedValue(null);
+    intentResolver.resolve.mockResolvedValue({
+      intent: { type: "out_of_scope" },
+      source: "model",
+      resolverVersion: "v1",
+      requiresConfirmation: false,
+    });
+
+    await expect(service.resolveUserIntent(waitingWorkflow.id, {
+      messageId: "out-of-scope-message-1",
+      text: "帮我发送一封营销邮件",
+    })).resolves.toMatchObject({
+      accepted: true,
+      applied: true,
+      intent: { type: "out_of_scope" },
+    });
+    const assistantCall: unknown = conversations.appendMessage.mock.calls[1]?.[0];
+    expect(assistantCall).toEqual(expect.objectContaining({
+      conversationId: waitingWorkflow.conversationId,
+      role: "assistant",
+    }));
+    const assistantContent = typeof assistantCall === "object" && assistantCall !== null
+      ? Reflect.get(assistantCall, "content") as unknown
+      : null;
+    expect(assistantContent).toEqual(expect.any(String));
+    if (typeof assistantContent === "string") {
+      expect(assistantContent).toContain("抱歉");
+      expect(assistantContent).toContain("创意方案");
+    }
+    expect(repository.claimInteraction).not.toHaveBeenCalled();
+    expect(runtime.resume).not.toHaveBeenCalled();
+  });
+
   it("replays an unapplied clarification with stable message ids", async () => {
     repository.findWorkflowUserDecision
       .mockResolvedValueOnce({
@@ -554,6 +595,8 @@ describe("VideoWorkflowService interactions", () => {
       7,
       expect.any(Function),
     );
+    expect(runtime.cancel).toHaveBeenCalledWith("run-1");
+    expect(operations.cancelQueuedWork).toHaveBeenCalledWith(waitingWorkflow.id);
     expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
       type: "workflow.restart.started",
     }));
@@ -565,7 +608,7 @@ describe("VideoWorkflowService interactions", () => {
     }));
   });
 
-  it("rejects restart requests while work is drafting or running", async () => {
+  it("creates a restart confirmation while work is running", async () => {
     repository.findWorkflow.mockResolvedValue({
       ...waitingWorkflow,
       status: "running",
@@ -577,8 +620,11 @@ describe("VideoWorkflowService interactions", () => {
       messageId: "restart-running-message",
       targetStage: "script",
       text: "从脚本重新开始",
-    })).rejects.toMatchObject({ response: { code: "VIDEO_WORKFLOW_RESTART_NOT_ALLOWED" } });
-    expect(repository.requestRestart).not.toHaveBeenCalled();
+    })).resolves.toMatchObject({ accepted: true, intent: "restart_requested" });
+    expect(repository.requestRestart).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: waitingWorkflow.id,
+      targetStage: "script",
+    }));
   });
 
   it("treats a natural next-stage message as approval", async () => {

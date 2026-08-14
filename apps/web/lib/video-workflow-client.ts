@@ -6,6 +6,7 @@ import {
   VideoWorkflowInteractionResultSchema,
   VideoWorkflowSnapshotSchema,
   ResolveWorkflowUserIntentResponseSchema,
+  ResolveVideoWorkflowIntentResponseSchema,
   type CreateVideoWorkflowResponse,
   type CreateVideoWorkflowRequest,
   type RecoverVideoWorkflowResponse,
@@ -16,6 +17,8 @@ import {
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
   type ResolveWorkflowUserIntentResponse,
+  type ResolveVideoWorkflowIntentRequest,
+  type ResolveVideoWorkflowIntentResponse,
 } from "@chat-to-video/contracts";
 import { createAlova } from "alova";
 import adapterFetch from "alova/fetch";
@@ -67,4 +70,10 @@ export const resolveWorkflowUserIntent = async (
   request: { messageId: string; text: string },
 ): Promise<ResolveWorkflowUserIntentResponse> => ResolveWorkflowUserIntentResponseSchema.parse(
   await videoApi.Post(`/video-workflows/${encodeURIComponent(workflowId)}/intent`, request).send(),
+);
+
+export const resolveVideoWorkflowIntent = async (
+  request: ResolveVideoWorkflowIntentRequest,
+): Promise<ResolveVideoWorkflowIntentResponse> => ResolveVideoWorkflowIntentResponseSchema.parse(
+  await videoApi.Post("/video-workflows/intents/resolve", request).send(),
 );

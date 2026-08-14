@@ -193,6 +193,12 @@ export class MastraRuntimeService implements OnModuleDestroy {
     await run.restart();
   }
 
+  async cancel(runId: string): Promise<void> {
+    await this.initialize();
+    const run = await this.workflow.createRun({ runId, pubsub: this.pubsub });
+    await run.cancel();
+  }
+
   private logRun(
     action: "Starting" | "Restarting",
     input: CinematicWorkflowInput,

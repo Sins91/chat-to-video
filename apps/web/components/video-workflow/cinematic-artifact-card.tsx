@@ -34,8 +34,8 @@ export function CinematicArtifactCard({
       >
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="font-numeric text-[10px] tabular-nums uppercase tracking-[0.16em] text-muted-foreground">
-              电影化创作 · {getCinematicStageLabel(version.artifact.stage)} V{version.version}
+            <p className="font-sans text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+              电影化创作 · {getCinematicStageLabel(version.artifact.stage)}
             </p>
             <span className="ml-auto inline-flex items-center gap-1 font-numeric text-[10px] tabular-nums text-muted-foreground">
               <Clock3Icon className="size-3" />{durationSeconds ?? "\u2014"}s

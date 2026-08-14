@@ -23,7 +23,6 @@ import {
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { StickToBottomContext } from "use-stick-to-bottom";
 
-import { Button } from "@/components/ui/button";
 import { VideoDownloadContextMenu } from "@/components/video-workflow/video-download-context-menu";
 import type { ChatScrollRestoreRequest, ChatViewportController } from "@/components/video-workflow/video-workflow-provider";
 import { getVideoModelPresentation } from "@/lib/video-models";
@@ -65,13 +64,13 @@ interface ChatConversationProps {
   isLoadingHistory: boolean;
   isWorkflowSubmitting: boolean;
   messages: UIMessage[];
-  onRetryWorkflow: () => void;
   onRecoverWorkflow: () => void;
   snapshot: VideoWorkflowSnapshot | null;
   status: ChatStatus;
   videoFocusRequest: { requestId: number; videoId: string } | null;
   scrollRestoreRequest: ChatScrollRestoreRequest | null;
   onViewportControllerChange: (controller: ChatViewportController | null) => void;
+  pendingActionMessage: string | null;
   workflowErrorMessage: string | null;
   workflowStepProgress: WorkflowStepProgress | null;
 }
@@ -79,6 +78,7 @@ interface ChatConversationProps {
 type CopyFeedback = { id: string; state: "copied" | "failed" } | null;
 const WORKFLOW_REVIEW_ACTION_PATTERN = /(无需确认|确认|修改|取消)/u;
 const RESTART_CONFIRMATION_NOTICE = "请回复“确认”或“取消”。";
+const WORKFLOW_SERVICE_ERROR_MESSAGE = "当前服务出现错误，建议新建对话重新开始。";
 
 const formatProcessingTime = (totalSeconds: number): string => {
   const normalizedSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -165,7 +165,7 @@ const ArchivedVideoMessage = ({
   return <AssistantSurface processingSeconds={processingSeconds}>
     <div className="rounded-xl border border-border bg-muted/30 p-3">
       <p className="text-[13px] font-medium text-foreground">视频生成完成</p>
-      <p className="mt-1 text-xs text-muted-foreground">该轮生成阶段和成片已保留 · V{entry.storyboardVersion}</p>
+      <p className="mt-1 text-xs text-muted-foreground">该轮生成阶段和成片已保留</p>
       <VideoDownloadContextMenu
         triggerClassName="mt-3 block w-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         video={{ id: entry.jobId, playbackUrl: entry.playbackUrl, title }}
@@ -271,7 +271,7 @@ const storyboardSummaryText = (version: StoryboardVersion, canReview: boolean): 
   const action = canReview
     ? "完整分镜已同步到右侧展示区。请确认继续，或在对话中直接说明目标时长、镜头时长及其他修改。"
     : "完整分镜已同步到右侧展示区。";
-  return `**阶段完成：分镜方案 V${version.version}**\n\n${version.storyboard.title} · ${version.storyboard.shots.length} 个镜头 · ${durationSeconds} 秒\n\n${version.storyboard.creativeSummary}\n\n${action}`;
+  return `**阶段完成：分镜方案**\n\n${version.storyboard.title} · ${version.storyboard.shots.length} 个镜头 · ${durationSeconds} 秒\n\n${version.storyboard.creativeSummary}\n\n${action}`;
 };
 
 const cinematicSummaryText = (
@@ -279,15 +279,15 @@ const cinematicSummaryText = (
   canReview: boolean,
 ): string => {
   const durationSeconds = getCinematicArtifactDuration(version);
-  const metadata = durationSeconds === null ? `版本：V${version.version}` : `版本：V${version.version} · 时长：${durationSeconds} 秒`;
+  const metadata = durationSeconds === null ? "" : `\n\n时长：${durationSeconds} 秒`;
   const revision = version.revisionRequest ? `\n\n本次修改：${version.revisionRequest}` : "";
   const action = canReview
     ? "完整结构化产物已同步到右侧展示区。请确认继续，或在对话中直接说明目标时长、场景时长及其他修改。"
     : "完整结构化产物已同步到右侧展示区。";
   const superseded = version.isSuperseded
-    ? "**历史版本：已由重新开始替代**\n\n"
+    ? "**历史内容：已由重新开始替代**\n\n"
     : "";
-  return `${superseded}**阶段完成：${getCinematicStageLabel(version.artifact.stage)}**\n\n${getCinematicArtifactSummary(version)}\n\n${metadata}${revision}\n\n${action}`;
+  return `${superseded}**阶段完成：${getCinematicStageLabel(version.artifact.stage)}**\n\n${getCinematicArtifactSummary(version)}${metadata}${revision}\n\n${action}`;
 };
 
 const automaticStageNotice = (
@@ -316,13 +316,13 @@ export const ChatConversation = memo(function ChatConversation({
   isLoadingHistory,
   isWorkflowSubmitting,
   messages,
-  onRetryWorkflow,
   onRecoverWorkflow,
   snapshot,
   status,
   videoFocusRequest,
   scrollRestoreRequest,
   onViewportControllerChange,
+  pendingActionMessage,
   workflowErrorMessage,
   workflowStepProgress,
 }: ChatConversationProps) {
@@ -406,19 +406,29 @@ export const ChatConversation = memo(function ChatConversation({
         type: "workflow_completion",
       }
     : null), [completedVideoSnapshot, entries]);
-  const visibleWorkflowStepProgress = hasCompletedVideo || hasDirectorFallback ? null : workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer
+  const visibleWorkflowStepProgress = hasCompletedVideo || hasDirectorFallback || snapshot?.status === "cancelled" ? null : workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer
     ? null
     : workflowStepProgress;
   const workflowReviewNotice = workflowStepProgress?.stepState === "awaiting_input"
     ? workflowStepProgress.message
     : "当前规划已完成，等待确认或提出修改。";
-  const isEmpty = !isLoadingHistory && entries.length === 0 && liveMessages.length === 0 && !snapshot;
+  const isEmpty = !isLoadingHistory && entries.length === 0 && liveMessages.length === 0 &&
+    !snapshot && !pendingActionMessage;
   const hasFocusedVideo = videoFocusRequest !== null && (
     entries.some((entry) => entry.type === "archived_video" && entry.jobId === videoFocusRequest.videoId)
     || completedVideoJobId === videoFocusRequest.videoId
   );
   const viewportKey = `${conversationId ?? "new"}:${isLoadingHistory ? "loading" : "ready"}`;
-  const temporaryProgress: WorkflowStepProgress | null = !isLoadingHistory && (status === "submitted" || (status === "streaming" && !hasLiveAssistantText))
+  const temporaryProgress: WorkflowStepProgress | null = !isLoadingHistory && pendingActionMessage
+    ? {
+        stepId: "pending-user-action",
+        stepLabel: "处理请求",
+        stepState: "running",
+        stepIndex: 1,
+        stepTotal: 1,
+        message: pendingActionMessage,
+      }
+    : !isLoadingHistory && (status === "submitted" || (status === "streaming" && !hasLiveAssistantText))
     ? {
         stepId: "chat-response",
         stepLabel: "理解需求",
@@ -618,7 +628,7 @@ export const ChatConversation = memo(function ChatConversation({
       })}
 
       {temporaryProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={temporaryProgress} showProgressMeta={false} /> : visibleWorkflowStepProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={visibleWorkflowStepProgress} /> : null}
-      {workflowErrorMessage ? <AssistantSurface processingSeconds={processingSeconds}><div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-danger-muted p-3 text-destructive" role="alert"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><div><p className="text-xs font-medium">视频工作流操作未完成</p><p className="mt-1 whitespace-pre-line text-xs leading-5 text-destructive/80">{workflowErrorMessage}</p></div>{!snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.canRecover ? <Button className="ml-auto shrink-0" disabled={isWorkflowSubmitting} onClick={onRecoverWorkflow} size="sm" type="button" variant="ghost"><RotateCcwIcon />恢复任务</Button> : !snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.videoJob?.status === "failed" && snapshot.videoJob.providerTaskId ? <Button className="ml-auto shrink-0" disabled={isWorkflowSubmitting} onClick={onRetryWorkflow} size="sm" type="button" variant="ghost"><RotateCcwIcon />重试</Button> : null}</div></AssistantSurface> : null}
+      {workflowErrorMessage ? <TextMessage copyFeedback={copyFeedback} id="workflow-service-error" onCopy={handleCopy} processingSeconds={processingSeconds} role="assistant" text={WORKFLOW_SERVICE_ERROR_MESSAGE} /> : null}
       {!workflowErrorMessage && !snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.canRecover ? <AssistantSurface processingSeconds={processingSeconds}><Confirmation approval={{ id: `recover:${snapshot.workflowId}` }} state="approval-requested"><ConfirmationRequest><ConfirmationTitle>可以从最近的有效阶段继续，不会重复生成已保存的内容。</ConfirmationTitle></ConfirmationRequest><ConfirmationActions><ConfirmationAction disabled={isWorkflowSubmitting} onClick={onRecoverWorkflow} variant="outline"><RotateCcwIcon />重新尝试</ConfirmationAction></ConfirmationActions></Confirmation></AssistantSurface> : null}
       </div>
     </ConversationContent>

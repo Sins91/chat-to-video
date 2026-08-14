@@ -24,7 +24,7 @@ export function StoryboardArtifactCard({ canReview, version }: {
         type="button"
       >
         <div className="min-w-0 flex-1">
-          <p className="font-numeric text-[10px] tabular-nums uppercase tracking-[0.16em] text-muted-foreground">分镜方案 V{version.version}</p>
+          <p className="font-sans text-[10px] uppercase tracking-[0.16em] text-muted-foreground">分镜方案</p>
           <h2 className="mt-1 font-sans text-lg font-semibold text-foreground">{version.storyboard.title}</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">{version.storyboard.creativeSummary}</p>
         </div>

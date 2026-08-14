@@ -20,6 +20,7 @@ export type WorkflowStageDefinition<StageId extends WorkflowStageId = WorkflowSt
   requiresApproval: boolean;
   allowsRevision: boolean;
   isRestartable: boolean;
+  allowsDirectEntry?: boolean;
   intentTopics: readonly string[];
   ownedArtifactKinds: readonly string[];
   allowsAutoAdvanceAfterRevision: boolean;
@@ -39,9 +40,12 @@ export type WorkflowStageDefinition<StageId extends WorkflowStageId = WorkflowSt
 
 export type WorkflowPipelineDefinition<StageId extends WorkflowStageId = WorkflowStageId> = {
   id: WorkflowPipelineId;
+  label?: string;
+  aliases?: readonly string[];
   definitionVersion: number;
   initialStageId: StageId;
   terminalStageIds: readonly StageId[];
+  directEntryStageIds?: readonly StageId[];
   stages: readonly WorkflowStageDefinition<StageId>[];
 };
 
@@ -49,6 +53,12 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
   definition: WorkflowPipelineDefinition<StageId>,
 ): WorkflowPipelineDefinition<StageId> => {
   WorkflowPipelineIdSchema.parse(definition.id);
+  if (definition.label !== undefined && !definition.label.trim()) {
+    throw new Error(`Workflow pipeline ${definition.id} has an empty label.`);
+  }
+  if (definition.aliases?.some((alias) => !alias.trim())) {
+    throw new Error(`Workflow pipeline ${definition.id} has an empty alias.`);
+  }
   if (!Number.isInteger(definition.definitionVersion) || definition.definitionVersion < 1) {
     throw new Error(`Workflow pipeline ${definition.id} has an invalid definition version.`);
   }
@@ -91,6 +101,9 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
   if (definition.terminalStageIds.length < 1 ||
       definition.terminalStageIds.some((stageId) => !ids.has(stageId))) {
     throw new Error(`Workflow pipeline ${definition.id} has an invalid terminal stage.`);
+  }
+  if (definition.directEntryStageIds?.some((stageId) => !ids.has(stageId))) {
+    throw new Error(`Workflow pipeline ${definition.id} has an invalid direct-entry stage.`);
   }
   for (const stage of definition.stages) {
     if (stage.allowedNextStageIds.some((stageId) => !ids.has(stageId))) {
@@ -161,4 +174,27 @@ export const parseWorkflowRestartTarget = (
 ): WorkflowStageDefinition | null => {
   const stage = findWorkflowStage(pipeline, stageId);
   return stage?.isRestartable ? stage : null;
+};
+
+export const parseWorkflowDirectEntryTarget = (
+  pipeline: WorkflowPipelineDefinition,
+  stageId: string,
+): WorkflowStageDefinition | null => {
+  const stage = findWorkflowStage(pipeline, stageId);
+  return stage && (
+    stage.allowsDirectEntry === true || pipeline.directEntryStageIds?.includes(stage.id)
+  ) ? stage : null;
+};
+
+export type WorkflowPipelineArtifactMapping = {
+  sourceArtifactKind: string;
+  targetArtifactKind: string;
+};
+
+export type WorkflowPipelineTransitionDefinition = {
+  id: string;
+  sourcePipelineId: WorkflowPipelineId;
+  targetPipelineId: WorkflowPipelineId;
+  targetStageId: WorkflowStageId;
+  artifactMappings: readonly WorkflowPipelineArtifactMapping[];
 };

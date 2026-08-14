@@ -474,6 +474,30 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     return null;
   }
 
+  async cancelQueuedWork(workflowId: string): Promise<void> {
+    const candidates: Array<{ queue: Queue; jobId: string }> = [];
+    const videoJob = await this.repository.findWorkflowVideoJob(workflowId);
+    if (videoJob) candidates.push({ queue: this.renderQueue, jobId: videoJob.id });
+    const batch = await this.repository.findLatestCinematicAssetBatch(workflowId);
+    if (batch) {
+      for (const asset of await this.repository.listCinematicAssetJobs(batch.id)) {
+        candidates.push({
+          queue: asset.kind === "music" ? this.agentQueue
+            : asset.kind === "video" ? this.renderQueue : this.imageQueue,
+          jobId: asset.id,
+        });
+      }
+    }
+    await Promise.all(candidates.map(async ({ queue, jobId }) => {
+      const job = await queue.getJob(jobId);
+      if (!job) return;
+      const state = await job.getState();
+      if (["waiting", "delayed", "prioritized", "paused"].includes(state)) {
+        await job.remove();
+      }
+    }));
+  }
+
   async generateCinematicArtifact(input: WorkflowInput & {
     stage: CinematicGenerativeStage;
     version: number;

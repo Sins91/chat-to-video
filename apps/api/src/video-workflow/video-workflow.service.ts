@@ -4,9 +4,11 @@ import {
   CinematicStageSchema,
   CINEMATIC_PIPELINE_DEFINITION,
   findWorkflowPipelineDefinition,
+  findWorkflowStage,
   getPreviousWorkflowStage,
   getWorkflowStageIndex,
   getWorkflowStagesFrom,
+  parseWorkflowDirectEntryTarget,
   PendingVideoWorkflowRestartSchema,
   parseWorkflowRestartTarget,
 } from "@chat-to-video/contracts";
@@ -37,6 +39,12 @@ import {
   type UpdateVideoWorkflowModelResponse,
   ResolveWorkflowUserIntentResponseSchema,
   type ResolveWorkflowUserIntentResponse,
+  ResolveVideoWorkflowIntentResponseSchema,
+  WorkflowImportedArtifactCandidateSchema,
+  type ResolveVideoWorkflowIntentRequest,
+  type ResolveVideoWorkflowIntentResponse,
+  type CinematicGenerativeStage,
+  type WorkflowPipelineDefinition,
 } from "@chat-to-video/contracts";
 import {
   DEMO_PROJECT_ID,
@@ -103,6 +111,49 @@ const messageIntent = (message: string): "approve" | "revise" => {
 };
 
 const RESTART_CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
+const CONTROL_CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
+const CONTROL_CONFIRM_PATTERN = /^(?:确认|确定|执行|继续|好的|可以)(?:执行|切换|退出|开始)?[。！!]?$/u;
+const CONTROL_CANCEL_PATTERN = /^(?:取消|不执行|算了|返回)(?:操作|切换|退出|开始)?[。！!]?$/u;
+const EXIT_WORKFLOW_PATTERN = /^(?:退出|停止|终止|取消)(?:当前)?(?:视频)?(?:生成|工作流|管线|任务)?[。！!]?$/u;
+const DIRECT_ENTRY_PATTERN = /(?:直接)?从\s*(创意方案|方案|脚本|分镜|场景规划|素材规划|素材)\s*(?:阶段)?(?:开始|做起|继续|生成)/u;
+const SWITCH_PIPELINE_PATTERN = /(?:切换|换)(?:到|成)\s*([^，。,.]{1,32})(?:管线|流程)/u;
+const DIRECT_ENTRY_STAGE = {
+  创意方案: "proposal",
+  方案: "proposal",
+  脚本: "script",
+  分镜: "scene_plan",
+  场景规划: "scene_plan",
+  素材规划: "assets",
+  素材: "assets",
+} as const;
+const DIRECT_ENTRY_PRODUCER: Record<string, CinematicGenerativeStage> = {
+  proposal: "research",
+  script: "proposal",
+  scene_plan: "script",
+  assets: "scene_plan",
+};
+
+const createPipelineScopeGuidance = (
+  pipeline: WorkflowPipelineDefinition,
+  currentStageId: string,
+): string => {
+  const currentStage = findWorkflowStage(pipeline, currentStageId);
+  const pipelineLabel = pipeline.label ?? pipeline.id;
+  const currentLabel = currentStage?.label ?? currentStageId;
+  const availableActions = [
+    `查看${pipelineLabel}的当前状态`,
+    ...(currentStage?.allowsRevision ? [`修改当前的${currentLabel}`] : []),
+    ...(currentStage?.requiresApproval ? [`确认或要求调整${currentLabel}`] : []),
+    ...pipeline.stages
+      .filter((stage) => stage.isRestartable &&
+        getWorkflowStageIndex(pipeline, stage.id) <= getWorkflowStageIndex(pipeline, currentStageId))
+      .slice(-3)
+      .map((stage) => `从${stage.label}重新开始`),
+    "退出当前工作流",
+  ];
+  return `抱歉，这个请求不属于当前“${pipelineLabel}”管线可以执行的行为。` +
+    `目前处于“${currentLabel}”阶段，你可以让我${availableActions.join("、")}。`;
+};
 const PREVIOUS_WORKFLOW_REFERENCE =
   /(?:上|前|先前|之前|此前)(?:一|这)?(?:个|次|轮)?(?:已完成(?:的)?)?(?:的)?(?:工作流|流程|视频生成|视频|生成)/u;
 const PREVIOUS_WORKFLOW_RESTART_NOTICE =
@@ -121,6 +172,405 @@ export class VideoWorkflowService {
     @Inject(WorkflowRecoveryService) private readonly recovery: WorkflowRecoveryService,
     @Inject(UserIntentResolverService) private readonly intentResolver: UserIntentResolverService,
   ) {}
+
+  async resolveVideoIntent(
+    input: ResolveVideoWorkflowIntentRequest,
+  ): Promise<ResolveVideoWorkflowIntentResponse> {
+    const text = input.text.normalize("NFKC").trim();
+    const explicitWorkflowRow = input.workflowId
+      ? await this.repository.findWorkflow(input.workflowId)
+      : null;
+    const explicitWorkflow = explicitWorkflowRow &&
+        !(["succeeded", "failed", "cancelled"] as const).includes(
+          explicitWorkflowRow.status as "succeeded" | "failed" | "cancelled",
+        )
+      ? explicitWorkflowRow
+      : null;
+    const activeWorkflow = explicitWorkflow ?? (input.conversationId
+      ? await this.repository.findActiveWorkflowByConversation(input.conversationId)
+      : null);
+    const conversationId = activeWorkflow?.conversationId ?? input.conversationId ?? null;
+    const replayedControl = await this.repository.findWorkflowControlRequestByMessage(input.messageId);
+    if (replayedControl?.status === "pending" && replayedControl.expiresAt.getTime() > Date.now()) {
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true, route: "workflow", applied: false,
+        intent: replayedControl.kind === "exit_workflow"
+          ? { type: "exit_workflow", reason: replayedControl.rawText.slice(0, 500) }
+          : {
+              type: "start_from_stage",
+              pipelineId: replayedControl.targetPipelineId ?? "cinematic",
+              stageId: replayedControl.targetStageId ?? "proposal",
+              input: replayedControl.rawText,
+            },
+        conversationId: replayedControl.conversationId,
+        workflowId: replayedControl.sourceWorkflowId,
+        pendingAction: this.repository.toPendingWorkflowControl(replayedControl),
+      });
+    }
+    const pendingRow = input.pendingActionId
+      ? await this.repository.findWorkflowControlRequest(input.pendingActionId)
+      : await this.repository.findPendingWorkflowControl({
+          ...(activeWorkflow ? { workflowId: activeWorkflow.id } : {}),
+          ...(!activeWorkflow && conversationId ? { conversationId } : {}),
+        });
+    const pending = pendingRow?.status === "pending" && pendingRow.expiresAt.getTime() > Date.now()
+      ? pendingRow
+      : null;
+    if (input.pendingActionId && pendingRow && !pending &&
+        (CONTROL_CONFIRM_PATTERN.test(text) || CONTROL_CANCEL_PATTERN.test(text))) {
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true, route: "workflow", applied: false,
+        intent: { type: "clarify", question: "该管线操作已过期或已经处理，请重新发起。" },
+        conversationId, workflowId: activeWorkflow?.id ?? null, pendingAction: null,
+      });
+    }
+
+    if (pending && (CONTROL_CONFIRM_PATTERN.test(text) || CONTROL_CANCEL_PATTERN.test(text))) {
+      if (conversationId) {
+        await this.conversations.appendMessage({
+          conversationId, messageId: input.messageId, role: "user", content: input.text,
+        });
+      }
+      if (CONTROL_CANCEL_PATTERN.test(text)) {
+        await this.repository.cancelWorkflowControlRequest(pending.id);
+        if (conversationId) await this.conversations.appendMessage({
+          conversationId, messageId: `${pending.id}:cancelled`, role: "assistant",
+          content: "已取消本次管线操作，当前工作流状态未改变。",
+        });
+        if (pending.sourceWorkflowId) {
+          const source = await this.repository.findWorkflow(pending.sourceWorkflowId);
+          if (source) await this.events.append({
+            eventId: `${pending.id}:cancelled`, workflowId: source.id, requestId: source.requestId,
+            type: "workflow.control.cancelled", data: { controlRequestId: pending.id },
+          });
+        }
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true, route: "workflow", applied: true,
+          intent: { type: "cancel_pending_action", controlRequestId: pending.id },
+          conversationId, workflowId: activeWorkflow?.id ?? null, pendingAction: null,
+        });
+      }
+      if (pending.kind === "exit_workflow") {
+        const source = pending.sourceWorkflowId
+          ? await this.repository.findWorkflow(pending.sourceWorkflowId)
+          : null;
+        const reason = pending.rawText.slice(0, 500);
+        const cancelledId = await this.repository.applyExitWorkflowControl(pending.id, reason);
+        if (!cancelledId || !source) {
+          throw new ConflictException({ code: "WORKFLOW_CONTROL_STALE", message: "The pending exit action is no longer applicable." });
+        }
+        await Promise.allSettled([
+          source.runId ? this.mastraRuntime.cancel(source.runId) : Promise.resolve(),
+          this.operations.cancelQueuedWork(source.id),
+        ]);
+        await this.events.append({
+          eventId: `${pending.id}:workflow-cancelled`, workflowId: source.id, requestId: source.requestId,
+          type: "workflow.cancelled", data: { controlRequestId: pending.id, reason },
+        });
+        if (source.conversationId) await this.conversations.appendMessage({
+          conversationId: source.conversationId, messageId: `${pending.id}:completed`,
+          role: "assistant", content: "已退出",
+        });
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true, route: "workflow", applied: true,
+          intent: { type: "confirm_pending_action", controlRequestId: pending.id },
+          conversationId: source.conversationId, workflowId: source.id, pendingAction: null,
+        });
+      }
+      if (pending.kind === "start_from_stage" && pending.targetPipelineId && pending.targetStageId &&
+          pending.candidate && pending.conversationId) {
+        const pipeline = findWorkflowPipelineDefinition(pending.targetPipelineId);
+        const target = pipeline ? parseWorkflowDirectEntryTarget(pipeline, pending.targetStageId) : null;
+        const producerStageId = target ? DIRECT_ENTRY_PRODUCER[target.id] : undefined;
+        if (!pipeline || !target || !producerStageId) {
+          throw new ConflictException({ code: "WORKFLOW_DIRECT_ENTRY_UNAVAILABLE", message: "The direct-entry stage is unavailable." });
+        }
+        const workflowId = randomUUID();
+        const requestId = randomUUID();
+        const videoModel = input.videoModel ?? (activeWorkflow
+          ? VideoModelSchema.parse(activeWorkflow.videoModel)
+          : "doubao-seedance-2.0");
+        const previousMessages = await this.conversations.listModelMessages(pending.conversationId);
+        const durationSeconds = activeWorkflow?.durationSeconds ?? await this.modelGateway.inferCinematicDuration({
+          requestId, conversationId: pending.conversationId,
+          tenantId: DEMO_TENANT_ID, projectId: DEMO_PROJECT_ID,
+          messages: previousMessages.slice(-50), videoModel,
+        });
+        const producerIndex = getWorkflowStageIndex(pipeline, producerStageId);
+        const created = await this.repository.applyDirectEntryWorkflowControl({
+          controlRequestId: pending.id, workflowId, requestId,
+          pipelineId: pipeline.id, targetStageId: target.id, producerStageId,
+          skippedStageIds: pipeline.stages.slice(0, Math.max(0, producerIndex)).map((stage) => stage.id),
+          initialPrompt: pending.rawText, videoModel, durationSeconds,
+        });
+        if (!created) {
+          throw new ConflictException({ code: "WORKFLOW_CONTROL_STALE", message: "The pending direct-entry action is no longer applicable." });
+        }
+        if (activeWorkflow) {
+          await Promise.allSettled([
+            activeWorkflow.runId ? this.mastraRuntime.cancel(activeWorkflow.runId) : Promise.resolve(),
+            this.operations.cancelQueuedWork(activeWorkflow.id),
+          ]);
+        }
+        await this.events.append({
+          eventId: `${pending.id}:entry-started`, workflowId, requestId,
+          type: "workflow.entry.started",
+          data: { controlRequestId: pending.id, targetStageId: target.id, workflowId },
+        });
+        try {
+          await this.mastraRuntime.start(
+            { workflowId, requestId, initialPrompt: pending.rawText, videoModel, durationSeconds },
+            (runId) => this.repository.setRunId(workflowId, runId),
+          );
+        } catch (error: unknown) {
+          await this.recordRuntimeFailure(workflowId, requestId, error);
+          throw new ServiceUnavailableException({ code: "VIDEO_WORKFLOW_START_FAILED", message: "The direct-entry workflow could not be started." });
+        }
+        await this.conversations.appendMessage({
+          conversationId: pending.conversationId, messageId: `${pending.id}:completed`,
+          role: "assistant", content: `已从 ${target.label} 开始新的工作流。`,
+        });
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true, route: "workflow", applied: true,
+          intent: { type: "confirm_pending_action", controlRequestId: pending.id },
+          conversationId: pending.conversationId, workflowId, pendingAction: null,
+        });
+      }
+    }
+
+    if (pending) {
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true, route: "workflow", applied: false,
+        intent: { type: "clarify", question: "当前有待确认的管线操作，请回复“确认”或“取消”。" },
+        conversationId, workflowId: activeWorkflow?.id ?? null,
+        pendingAction: this.repository.toPendingWorkflowControl(pending),
+      });
+    }
+
+    if (activeWorkflow && EXIT_WORKFLOW_PATTERN.test(text)) {
+      const activeConversationId = activeWorkflow.conversationId;
+      if (!activeConversationId) {
+        throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
+      }
+      const controlRequestId = randomUUID();
+      const requestedAt = new Date();
+      const activeJobCount = await this.repository.countActiveWorkflowJobs(activeWorkflow.id);
+      const activePipeline = findWorkflowPipelineDefinition(activeWorkflow.pipelineId);
+      await this.conversations.appendMessage({
+        conversationId: activeConversationId, messageId: input.messageId,
+        role: "user", content: input.text,
+      });
+      await this.repository.createWorkflowControlRequest({
+        id: controlRequestId, conversationId: activeWorkflow.conversationId,
+        sourceWorkflowId: activeWorkflow.id, sourceMessageId: input.messageId,
+        kind: "exit_workflow", targetPipelineId: null, targetStageId: null,
+        expectedStateVersion: activeWorkflow.stateVersion, rawText: text, candidate: null,
+        impact: {
+          skippedStageIds: [], reusedArtifactKinds: [],
+          invalidatedStageIds: activePipeline
+            ? getWorkflowStagesFrom(activePipeline, activeWorkflow.currentStageId).map((stage) => stage.id)
+            : [],
+          activeJobCount,
+          summary: "确认后将终止当前工作流，并取消尚未开始的排队任务；历史产物继续保留。",
+        },
+        expiresAt: new Date(requestedAt.getTime() + CONTROL_CONFIRMATION_TTL_MS),
+      });
+      const row = await this.repository.findWorkflowControlRequest(controlRequestId);
+      if (!row) throw new Error("Workflow control request could not be reloaded.");
+      const pendingAction = this.repository.toPendingWorkflowControl(row);
+      await this.conversations.appendMessage({
+        conversationId: activeConversationId, messageId: controlRequestId,
+        role: "assistant", content: pendingAction.impact.summary + "\n\n请回复“确认”或“取消”。",
+      });
+      await this.events.append({
+        eventId: `${controlRequestId}:requested`, workflowId: activeWorkflow.id,
+        requestId: activeWorkflow.requestId, type: "workflow.control.requested", data: pendingAction,
+      });
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true, route: "workflow", applied: false,
+        intent: { type: "exit_workflow", reason: text }, conversationId,
+        workflowId: activeWorkflow.id, pendingAction,
+      });
+    }
+
+    const directMatch = DIRECT_ENTRY_PATTERN.exec(text);
+    if (directMatch?.[1]) {
+      const targetStageId = DIRECT_ENTRY_STAGE[directMatch[1] as keyof typeof DIRECT_ENTRY_STAGE];
+      const pipeline = CINEMATIC_PIPELINE_DEFINITION;
+      const target = parseWorkflowDirectEntryTarget(pipeline, targetStageId);
+      const producerStageId = target ? DIRECT_ENTRY_PRODUCER[target.id] : undefined;
+      if (!target || !producerStageId) {
+        throw new BadRequestException({ code: "WORKFLOW_DIRECT_ENTRY_INVALID", message: "The requested direct-entry stage is invalid." });
+      }
+      const resolvedConversationId = conversationId ?? randomUUID();
+      if (!conversationId) {
+        await this.conversations.createWithUserMessage({
+          conversationId: resolvedConversationId, title: createConversationTitle(input.text),
+          messageId: input.messageId, content: input.text,
+        });
+      } else {
+        await this.conversations.appendMessage({
+          conversationId: resolvedConversationId, messageId: input.messageId,
+          role: "user", content: input.text,
+        });
+      }
+      const controlRequestId = randomUUID();
+      const videoModel = input.videoModel ?? (activeWorkflow
+        ? VideoModelSchema.parse(activeWorkflow.videoModel)
+        : "doubao-seedance-2.0");
+      const messages = await this.conversations.listModelMessages(resolvedConversationId);
+      const durationSeconds = activeWorkflow?.durationSeconds ?? await this.modelGateway.inferCinematicDuration({
+        requestId: controlRequestId, conversationId: resolvedConversationId,
+        tenantId: DEMO_TENANT_ID, projectId: DEMO_PROJECT_ID,
+        messages: messages.slice(-50), videoModel,
+      });
+      const artifact = await this.modelGateway.generateCinematicArtifact({
+        requestId: controlRequestId, workflowId: controlRequestId,
+        conversationId: resolvedConversationId, tenantId: DEMO_TENANT_ID,
+        projectId: DEMO_PROJECT_ID, initialPrompt: input.text,
+        stage: producerStageId, durationSeconds,
+        modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(videoModel),
+        approvedArtifacts: [],
+      });
+      const candidate = WorkflowImportedArtifactCandidateSchema.parse({
+        artifact, sourceText: input.text,
+        assumptions: [`将用户输入标准化为 ${producerStageId} 阶段产物。`],
+        warnings: activeWorkflow ? ["确认后当前工作流会终止，并创建一个保留来源关系的新工作流。"] : [],
+        normalizerVersion: "v1",
+      });
+      const targetIndex = getWorkflowStageIndex(pipeline, target.id);
+      const skippedStageIds = pipeline.stages.slice(0, Math.max(0, targetIndex - 1)).map((stage) => stage.id);
+      const activeJobCount = activeWorkflow
+        ? await this.repository.countActiveWorkflowJobs(activeWorkflow.id)
+        : 0;
+      await this.repository.createWorkflowControlRequest({
+        id: controlRequestId, conversationId: resolvedConversationId,
+        sourceWorkflowId: activeWorkflow?.id ?? null, sourceMessageId: input.messageId,
+        kind: "start_from_stage", targetPipelineId: pipeline.id, targetStageId: target.id,
+        expectedStateVersion: activeWorkflow?.stateVersion ?? 0, rawText: input.text, candidate,
+        impact: {
+          skippedStageIds, reusedArtifactKinds: [],
+          invalidatedStageIds: activeWorkflow
+            ? getWorkflowStagesFrom(pipeline, activeWorkflow.currentStageId).map((stage) => stage.id)
+            : [],
+          activeJobCount,
+          summary: `确认后将导入 ${producerStageId} 产物并从 ${target.id} 阶段开始。`,
+        },
+        expiresAt: new Date(Date.now() + CONTROL_CONFIRMATION_TTL_MS),
+      });
+      const row = await this.repository.findWorkflowControlRequest(controlRequestId);
+      if (!row) throw new Error("Workflow control request could not be reloaded.");
+      const pendingAction = this.repository.toPendingWorkflowControl(row);
+      await this.conversations.appendMessage({
+        conversationId: resolvedConversationId, messageId: controlRequestId,
+        role: "assistant", content: pendingAction.impact.summary + "\n\n请回复“确认”或“取消”。",
+      });
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true, route: "workflow", applied: false,
+        intent: { type: "start_from_stage", pipelineId: pipeline.id, stageId: target.id, input: input.text },
+        conversationId: resolvedConversationId, workflowId: activeWorkflow?.id ?? null,
+        pendingAction,
+      });
+    }
+
+    if (SWITCH_PIPELINE_PATTERN.test(text)) {
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true, route: "workflow", applied: false,
+        intent: { type: "clarify", question: "当前仅注册了电影化视频管线，尚无可执行的跨管线转换定义。" },
+        conversationId, workflowId: activeWorkflow?.id ?? null, pendingAction: null,
+      });
+    }
+    if (activeWorkflow?.status === "awaiting_input") {
+      const resolved = await this.resolveUserIntent(activeWorkflow.id, {
+        messageId: input.messageId,
+        text: input.text,
+      });
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true,
+        route: resolved.intent.type === "chat" ? "chat" : "workflow",
+        applied: resolved.applied,
+        intent: resolved.intent,
+        conversationId,
+        workflowId: activeWorkflow.id,
+        pendingAction: null,
+      });
+    }
+    if (activeWorkflow?.conversationId) {
+      const existingDecision = await this.repository.findWorkflowUserDecision(input.messageId);
+      if (existingDecision?.decision.type === "out_of_scope") {
+        const applied = existingDecision.appliedAt !== null || await this.applyResolvedIntent(
+          activeWorkflow.id,
+          existingDecision.id,
+          input.messageId,
+          existingDecision.rawText,
+          existingDecision.decision,
+        );
+        if (existingDecision.appliedAt === null && applied) {
+          await this.repository.markWorkflowUserDecisionApplied(input.messageId);
+        }
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true, route: "workflow", applied,
+          intent: existingDecision.decision,
+          conversationId, workflowId: activeWorkflow.id, pendingAction: null,
+        });
+      }
+      const scope = await this.repository.findWorkflowScope(activeWorkflow.id);
+      const pipeline = findWorkflowPipelineDefinition(activeWorkflow.pipelineId);
+      if (scope && pipeline) {
+        const artifactRow = await this.repository.findLatestCinematicArtifact(activeWorkflow.id);
+        const decision = await this.intentResolver.resolve({
+          requestId: activeWorkflow.requestId,
+          workflowId: activeWorkflow.id,
+          conversationId: activeWorkflow.conversationId,
+          tenantId: scope.tenantId,
+          projectId: scope.projectId,
+          workflowStatus: activeWorkflow.status,
+          currentStage: activeWorkflow.currentStageId,
+          currentVersion: activeWorkflow.currentVersion,
+          currentArtifactSummary: artifactRow
+            ? JSON.stringify(CinematicArtifactSchema.parse(artifactRow.artifact)).slice(0, 4_000)
+            : "No current artifact.",
+          pipeline,
+          text: input.text,
+        });
+        if (decision.intent.type === "out_of_scope") {
+          const decisionId = randomUUID();
+          const saved = await this.repository.saveWorkflowUserDecision({
+            id: decisionId,
+            workflowId: activeWorkflow.id,
+            conversationMessageId: input.messageId,
+            pipelineId: pipeline.id,
+            stageId: activeWorkflow.currentStageId,
+            artifactVersion: activeWorkflow.currentVersion,
+            rawText: input.text,
+            decision,
+          });
+          if (!saved) return this.resolveVideoIntent(input);
+          const applied = await this.applyResolvedIntent(
+            activeWorkflow.id,
+            decisionId,
+            input.messageId,
+            input.text,
+            decision.intent,
+          );
+          if (applied) await this.repository.markWorkflowUserDecisionApplied(input.messageId);
+          return ResolveVideoWorkflowIntentResponseSchema.parse({
+            accepted: true,
+            route: "workflow",
+            applied,
+            intent: decision.intent,
+            conversationId,
+            workflowId: activeWorkflow.id,
+            pendingAction: null,
+          });
+        }
+      }
+    }
+    return ResolveVideoWorkflowIntentResponseSchema.parse({
+      accepted: true, route: "chat", applied: false, intent: { type: "chat" },
+      conversationId, workflowId: activeWorkflow?.id ?? null, pendingAction: null,
+    });
+  }
 
   async resolveUserIntent(
     workflowId: string,
@@ -243,6 +693,29 @@ export class VideoWorkflowService {
         messageId,
         targetStage: intent.stageId,
         text: intent.feedback,
+      });
+      return true;
+    }
+    if (intent.type === "out_of_scope") {
+      const workflow = await this.repository.findWorkflow(workflowId);
+      const pipeline = workflow ? findWorkflowPipelineDefinition(workflow.pipelineId) : null;
+      if (!workflow?.conversationId || !pipeline) {
+        throw new NotFoundException({
+          code: "VIDEO_WORKFLOW_NOT_FOUND",
+          message: "Video workflow not found.",
+        });
+      }
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId,
+        role: "user",
+        content: rawText,
+      });
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId: decisionId,
+        role: "assistant",
+        content: createPipelineScopeGuidance(pipeline, workflow.currentStageId),
       });
       return true;
     }
@@ -689,10 +1162,10 @@ export class VideoWorkflowService {
         intent: "restart_unavailable",
       });
     }
-    if (!["awaiting_input", "failed", "succeeded"].includes(workflow.status)) {
+    if (workflow.status === "cancelled") {
       throw new ConflictException({
         code: "VIDEO_WORKFLOW_RESTART_NOT_ALLOWED",
-        message: "The workflow cannot restart while work is drafting, queued, running, or cancelled.",
+        message: "A cancelled workflow cannot be restarted.",
       });
     }
     if (currentStageIndex < 0 || targetStageIndex > currentStageIndex) {
@@ -839,6 +1312,10 @@ export class VideoWorkflowService {
       role: "user",
       content: "确认重新开始",
     });
+    await Promise.allSettled([
+      claimed.previousRunId ? this.mastraRuntime.cancel(claimed.previousRunId) : Promise.resolve(),
+      this.operations.cancelQueuedWork(workflow.id),
+    ]);
     try {
       const runId = await this.mastraRuntime.restart(
         {

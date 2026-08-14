@@ -18,6 +18,11 @@ import {
   type WorkflowApprovalScope,
   type WorkflowDirectorCycleStatus,
   type WorkflowProductionDecision,
+  PendingWorkflowControlSchema,
+  type PendingWorkflowControl,
+  type WorkflowControlImpact,
+  type WorkflowControlKind,
+  type WorkflowImportedArtifactCandidate,
   WorkflowIntentDecisionSchema,
   type WorkflowIntentDecision,
   WorkflowUserIntentSchema,
@@ -45,6 +50,8 @@ import {
   workflowDirectorCycles,
   workflowProductionDecisions,
   workflowUserDecisions,
+  workflowControlRequests,
+  workflowStageAttempts,
 } from "./schema.js";
 
 type NewWorkflow = {
@@ -87,6 +94,241 @@ export type ClaimedWorkflowInteraction = {
 
 export class VideoWorkflowRepository {
   constructor(private readonly database: Database) {}
+
+  async createWorkflowControlRequest(input: {
+    id: string;
+    conversationId: string | null;
+    sourceWorkflowId: string | null;
+    sourceMessageId: string;
+    kind: WorkflowControlKind;
+    targetPipelineId: WorkflowPipelineId | null;
+    targetStageId: WorkflowStageId | null;
+    expectedStateVersion: number;
+    rawText: string;
+    candidate: WorkflowImportedArtifactCandidate | null;
+    impact: WorkflowControlImpact;
+    expiresAt: Date;
+  }): Promise<boolean> {
+    const result: unknown = await this.database.insert(workflowControlRequests).values({
+      ...input,
+      status: "pending",
+    }).onDuplicateKeyUpdate({ set: { sourceMessageId: input.sourceMessageId } });
+    return readAffectedRows(result) === 1;
+  }
+
+  async findWorkflowControlRequest(controlRequestId: string) {
+    const rows = await this.database.select().from(workflowControlRequests)
+      .where(eq(workflowControlRequests.id, controlRequestId)).limit(1);
+    return rows[0] ?? null;
+  }
+
+  async findWorkflowControlRequestByMessage(sourceMessageId: string) {
+    const rows = await this.database.select().from(workflowControlRequests)
+      .where(eq(workflowControlRequests.sourceMessageId, sourceMessageId)).limit(1);
+    return rows[0] ?? null;
+  }
+
+  async findPendingWorkflowControl(input: {
+    conversationId?: string;
+    workflowId?: string;
+  }) {
+    const now = new Date();
+    await this.database.update(workflowControlRequests).set({
+      status: "expired", completedAt: now,
+    }).where(and(
+      eq(workflowControlRequests.status, "pending"),
+      lt(workflowControlRequests.expiresAt, now),
+    ));
+    const filters = [
+      eq(workflowControlRequests.status, "pending"),
+      gt(workflowControlRequests.expiresAt, now),
+    ];
+    if (input.workflowId) filters.push(eq(workflowControlRequests.sourceWorkflowId, input.workflowId));
+    else if (input.conversationId) filters.push(eq(workflowControlRequests.conversationId, input.conversationId));
+    else return null;
+    const rows = await this.database.select().from(workflowControlRequests)
+      .where(and(...filters)).orderBy(desc(workflowControlRequests.requestedAt)).limit(1);
+    return rows[0] ?? null;
+  }
+
+  toPendingWorkflowControl(
+    row: NonNullable<Awaited<ReturnType<VideoWorkflowRepository["findWorkflowControlRequest"]>>>,
+  ): PendingWorkflowControl {
+    return PendingWorkflowControlSchema.parse({
+      controlRequestId: row.id,
+      kind: row.kind,
+      sourceWorkflowId: row.sourceWorkflowId,
+      targetPipelineId: row.targetPipelineId,
+      targetStageId: row.targetStageId,
+      expectedStateVersion: row.expectedStateVersion,
+      candidate: row.candidate,
+      impact: row.impact,
+      requestedAt: row.requestedAt.toISOString(),
+      expiresAt: row.expiresAt.toISOString(),
+    });
+  }
+
+  async cancelWorkflowControlRequest(controlRequestId: string): Promise<boolean> {
+    const result: unknown = await this.database.update(workflowControlRequests).set({
+      status: "cancelled",
+      completedAt: new Date(),
+    }).where(and(
+      eq(workflowControlRequests.id, controlRequestId),
+      eq(workflowControlRequests.status, "pending"),
+    ));
+    return readAffectedRows(result) === 1;
+  }
+
+  async applyExitWorkflowControl(controlRequestId: string, reason: string | null): Promise<string | null> {
+    return this.database.transaction(async (transaction) => {
+      const rows = await transaction.select().from(workflowControlRequests)
+        .where(eq(workflowControlRequests.id, controlRequestId)).limit(1).for("update");
+      const control = rows[0];
+      if (!control || control.kind !== "exit_workflow" || control.status !== "pending" ||
+          control.expiresAt.getTime() <= Date.now() || !control.sourceWorkflowId) return null;
+      const workflowRows = await transaction.select().from(videoWorkflows)
+        .where(eq(videoWorkflows.id, control.sourceWorkflowId)).limit(1).for("update");
+      const workflow = workflowRows[0];
+      if (!workflow || workflow.stateVersion !== control.expectedStateVersion ||
+          (["succeeded", "failed", "cancelled"] as const).includes(
+            workflow.status as "succeeded" | "failed" | "cancelled",
+          )) return null;
+      const now = new Date();
+      await transaction.update(videoWorkflows).set({
+        status: "cancelled",
+        stateVersion: sql`${videoWorkflows.stateVersion} + 1`,
+        cancellationReason: reason ?? control.rawText,
+        cancelledAt: now,
+        errorMessage: null,
+        failureCode: null,
+        pendingRestartId: null,
+        pendingRestartStage: null,
+        pendingRestartText: null,
+        pendingRestartExpectedVersion: null,
+        pendingRestartRequestedAt: null,
+        pendingRestartExpiresAt: null,
+        updatedAt: now,
+      }).where(eq(videoWorkflows.id, workflow.id));
+      await transaction.update(videoJobs).set({ status: "cancelled", updatedAt: now })
+        .where(and(eq(videoJobs.workflowId, workflow.id), inArray(videoJobs.status, ["queued", "running"])));
+      await transaction.update(cinematicSceneJobs).set({ status: "cancelled", updatedAt: now })
+        .where(and(eq(cinematicSceneJobs.workflowId, workflow.id), inArray(cinematicSceneJobs.status, ["queued", "running"])));
+      await transaction.update(cinematicAssetBatches).set({ status: "cancelled", updatedAt: now })
+        .where(and(eq(cinematicAssetBatches.workflowId, workflow.id), inArray(cinematicAssetBatches.status, ["queued", "running", "awaiting_approval"])));
+      await transaction.update(cinematicAssetJobs).set({ status: "cancelled", updatedAt: now })
+        .where(and(eq(cinematicAssetJobs.workflowId, workflow.id), inArray(cinematicAssetJobs.status, ["queued", "running"])));
+      await transaction.update(workflowApprovals).set({ status: "superseded", activeKey: null, decidedAt: now })
+        .where(and(eq(workflowApprovals.workflowId, workflow.id), eq(workflowApprovals.status, "pending")));
+      await transaction.update(workflowDirectorCycles).set({ status: "superseded", updatedAt: now })
+        .where(and(eq(workflowDirectorCycles.workflowId, workflow.id), inArray(workflowDirectorCycles.status, ["pending", "claimed", "running", "suspended"])));
+      await transaction.update(workflowControlRequests).set({ status: "completed", completedAt: now })
+        .where(eq(workflowControlRequests.id, control.id));
+      return workflow.id;
+    });
+  }
+
+  async applyDirectEntryWorkflowControl(input: {
+    controlRequestId: string;
+    workflowId: string;
+    requestId: string;
+    pipelineId: WorkflowPipelineId;
+    targetStageId: WorkflowStageId;
+    producerStageId: CinematicGenerativeStage;
+    skippedStageIds: readonly WorkflowStageId[];
+    initialPrompt: string;
+    videoModel: VideoModel;
+    durationSeconds: number;
+  }): Promise<boolean> {
+    return this.database.transaction(async (transaction) => {
+      const controlRows = await transaction.select().from(workflowControlRequests)
+        .where(eq(workflowControlRequests.id, input.controlRequestId)).limit(1).for("update");
+      const control = controlRows[0];
+      if (!control || control.kind !== "start_from_stage" || control.status !== "pending" ||
+          control.targetPipelineId !== input.pipelineId || control.targetStageId !== input.targetStageId ||
+          control.expiresAt.getTime() <= Date.now() || !control.conversationId || !control.candidate) return false;
+      await transaction.select({ id: conversations.id }).from(conversations)
+        .where(eq(conversations.id, control.conversationId)).limit(1).for("update");
+      const active = await transaction.select({ id: videoWorkflows.id }).from(videoWorkflows)
+        .where(and(eq(videoWorkflows.conversationId, control.conversationId),
+          notInArray(videoWorkflows.status, ["succeeded", "failed", "cancelled"]))).limit(1);
+      const now = new Date();
+      if (active.length > 0) {
+        if (!control.sourceWorkflowId || active[0]?.id !== control.sourceWorkflowId) return false;
+        const sourceRows = await transaction.select().from(videoWorkflows)
+          .where(eq(videoWorkflows.id, control.sourceWorkflowId)).limit(1).for("update");
+        const source = sourceRows[0];
+        if (!source || source.stateVersion !== control.expectedStateVersion) return false;
+        await transaction.update(videoWorkflows).set({
+          status: "cancelled", successorWorkflowId: input.workflowId,
+          cancellationReason: "Superseded by a confirmed direct-entry workflow.",
+          cancelledAt: now, updatedAt: now,
+          errorMessage: null, failureCode: null,
+          stateVersion: sql`${videoWorkflows.stateVersion} + 1`,
+        }).where(eq(videoWorkflows.id, source.id));
+        await transaction.update(videoJobs).set({ status: "cancelled", updatedAt: now })
+          .where(and(eq(videoJobs.workflowId, source.id), inArray(videoJobs.status, ["queued", "running"])));
+        await transaction.update(cinematicSceneJobs).set({ status: "cancelled", updatedAt: now })
+          .where(and(eq(cinematicSceneJobs.workflowId, source.id), inArray(cinematicSceneJobs.status, ["queued", "running"])));
+        await transaction.update(cinematicAssetBatches).set({ status: "cancelled", updatedAt: now })
+          .where(and(eq(cinematicAssetBatches.workflowId, source.id), inArray(cinematicAssetBatches.status, ["queued", "running", "awaiting_approval"])));
+        await transaction.update(cinematicAssetJobs).set({ status: "cancelled", updatedAt: now })
+          .where(and(eq(cinematicAssetJobs.workflowId, source.id), inArray(cinematicAssetJobs.status, ["queued", "running"])));
+        await transaction.update(workflowApprovals).set({ status: "superseded", activeKey: null, decidedAt: now })
+          .where(and(eq(workflowApprovals.workflowId, source.id), eq(workflowApprovals.status, "pending")));
+        await transaction.update(workflowDirectorCycles).set({ status: "superseded", updatedAt: now })
+          .where(and(eq(workflowDirectorCycles.workflowId, source.id), inArray(workflowDirectorCycles.status, ["pending", "claimed", "running", "suspended"])));
+      }
+      await transaction.insert(videoWorkflows).values({
+        id: input.workflowId,
+        conversationId: control.conversationId,
+        requestId: input.requestId,
+        pipelineId: input.pipelineId,
+        currentStageId: input.targetStageId,
+        cinematicStage: input.targetStageId,
+        currentVersion: 1,
+        stateVersion: 1,
+        initialPrompt: input.initialPrompt,
+        videoModel: input.videoModel,
+        durationSeconds: input.durationSeconds,
+        status: "drafting",
+        pipelineDefinitionVersion: 2,
+        sourceWorkflowId: control.sourceWorkflowId,
+        activeRunContext: ActiveWorkflowRunContextSchema.parse({ kind: "start", baseVersion: 1 }),
+      });
+      const artifactKind = control.candidate.artifact.stage === "research" ? "research_brief"
+        : control.candidate.artifact.stage;
+      await transaction.insert(cinematicArtifactVersions).values({
+        id: randomUUID(), workflowId: input.workflowId, stage: input.producerStageId,
+        version: 1, revisionRequest: null, artifact: control.candidate.artifact,
+      });
+      await transaction.insert(workflowArtifactVersions).values({
+        id: randomUUID(), workflowId: input.workflowId, pipelineId: input.pipelineId,
+        stageId: input.producerStageId, artifactKind, version: 1,
+        artifact: control.candidate.artifact, origin: "imported",
+        sourceMessageId: control.sourceMessageId, controlRequestId: control.id,
+        normalizerVersion: control.candidate.normalizerVersion, confirmedAt: now,
+      });
+      await transaction.insert(workflowStageCheckpoints).values({
+        id: `${input.workflowId}:v1`, workflowId: input.workflowId,
+        pipelineId: input.pipelineId, stageId: input.producerStageId, version: 1,
+      });
+      for (const stageId of input.skippedStageIds) {
+        await transaction.insert(workflowStageAttempts).values({
+          id: randomUUID(), workflowId: input.workflowId, pipelineId: input.pipelineId,
+          stageId, attempt: 1, status: "skipped", completedAt: now,
+        });
+      }
+      await transaction.insert(workflowStageAttempts).values({
+        id: randomUUID(), workflowId: input.workflowId, pipelineId: input.pipelineId,
+        stageId: input.producerStageId, attempt: 1, status: "imported", completedAt: now,
+      }).onDuplicateKeyUpdate({ set: { status: "imported", completedAt: now } });
+      await transaction.update(workflowControlRequests).set({ status: "completed", completedAt: now })
+        .where(eq(workflowControlRequests.id, control.id));
+      await transaction.update(conversations).set({ updatedAt: now })
+        .where(eq(conversations.id, control.conversationId));
+      return true;
+    });
+  }
 
   async createWorkflow(input: NewWorkflow): Promise<boolean> {
     return this.database.transaction(async (transaction) => {
@@ -451,7 +693,14 @@ export class VideoWorkflowRepository {
         eq(videoWorkflows.id, input.workflowId),
         eq(videoWorkflows.pipelineId, input.pipelineId),
         eq(videoWorkflows.currentVersion, input.expectedVersion),
-        inArray(videoWorkflows.status, ["awaiting_input", "failed", "succeeded"]),
+        inArray(videoWorkflows.status, [
+          "drafting",
+          "awaiting_input",
+          "queued",
+          "running",
+          "failed",
+          "succeeded",
+        ]),
       ));
     return readAffectedRows(result) === 1;
   }
@@ -504,8 +753,8 @@ export class VideoWorkflowRepository {
         workflow.pendingRestartExpectedVersion !== workflow.currentVersion ||
         !workflow.pendingRestartExpiresAt ||
         workflow.pendingRestartExpiresAt.getTime() <= input.now.getTime() ||
-        !(["awaiting_input", "failed", "succeeded"] as const).includes(
-          workflow.status as "awaiting_input" | "failed" | "succeeded",
+        !(["drafting", "awaiting_input", "queued", "running", "failed", "succeeded"] as const).includes(
+          workflow.status as "drafting" | "awaiting_input" | "queued" | "running" | "failed" | "succeeded",
         )
       ) return null;
 
@@ -527,11 +776,29 @@ export class VideoWorkflowRepository {
           inArray(workflowStageCheckpoints.stageId, [...input.stagesToSupersede]),
           isNull(workflowStageCheckpoints.supersededAt),
         ));
+      await transaction.update(workflowArtifactVersions)
+        .set({ supersededAt, supersededByRestartId: input.restartRequestId })
+        .where(and(
+          eq(workflowArtifactVersions.workflowId, input.workflowId),
+          eq(workflowArtifactVersions.pipelineId, input.pipelineId),
+          inArray(workflowArtifactVersions.stageId, [...input.stagesToSupersede]),
+          isNull(workflowArtifactVersions.supersededAt),
+        ));
       await transaction.update(videoJobs)
-        .set({ supersededAt, supersededByRestartId: input.restartRequestId, updatedAt: supersededAt })
+        .set({
+          status: "cancelled",
+          supersededAt,
+          supersededByRestartId: input.restartRequestId,
+          updatedAt: supersededAt,
+        })
         .where(and(
           eq(videoJobs.workflowId, input.workflowId),
           isNull(videoJobs.supersededAt),
+        ));
+      await transaction.update(cinematicSceneJobs).set({ status: "cancelled", updatedAt: supersededAt })
+        .where(and(
+          eq(cinematicSceneJobs.workflowId, input.workflowId),
+          inArray(cinematicSceneJobs.status, ["queued", "running"]),
         ));
       if (input.stagesToSupersede.includes("assets")) {
         await transaction.update(cinematicAssetBatches).set({
@@ -554,8 +821,24 @@ export class VideoWorkflowRepository {
           notInArray(cinematicAssetJobs.status, ["succeeded", "failed", "cancelled"]),
         ));
       }
+      await transaction.update(workflowApprovals).set({
+        status: "superseded",
+        activeKey: null,
+        decidedAt: supersededAt,
+      }).where(and(
+        eq(workflowApprovals.workflowId, input.workflowId),
+        eq(workflowApprovals.status, "pending"),
+      ));
+      await transaction.update(workflowDirectorCycles).set({
+        status: "superseded",
+        updatedAt: supersededAt,
+      }).where(and(
+        eq(workflowDirectorCycles.workflowId, input.workflowId),
+        inArray(workflowDirectorCycles.status, ["pending", "claimed", "running", "suspended"]),
+      ));
       await transaction.update(videoWorkflows).set({
         status: "drafting",
+        stateVersion: sql`${videoWorkflows.stateVersion} + 1`,
         currentStageId: input.targetStage,
         activeRunContext: ActiveWorkflowRunContextSchema.parse({
           kind: "restart",
@@ -696,6 +979,30 @@ export class VideoWorkflowRepository {
   async findWorkflow(workflowId: string) {
     const rows = await this.database.select().from(videoWorkflows).where(eq(videoWorkflows.id, workflowId)).limit(1);
     return rows[0] ?? null;
+  }
+
+  async findActiveWorkflowByConversation(conversationId: string) {
+    const rows = await this.database.select().from(videoWorkflows).where(and(
+      eq(videoWorkflows.conversationId, conversationId),
+      notInArray(videoWorkflows.status, ["succeeded", "failed", "cancelled"]),
+    )).orderBy(desc(videoWorkflows.createdAt)).limit(1);
+    return rows[0] ?? null;
+  }
+
+  async countActiveWorkflowJobs(workflowId: string): Promise<number> {
+    const [videoRows, assetRows, sceneRows] = await Promise.all([
+      this.database.select({ value: sql<number>`count(*)` }).from(videoJobs).where(and(
+        eq(videoJobs.workflowId, workflowId), inArray(videoJobs.status, ["queued", "running"]),
+      )),
+      this.database.select({ value: sql<number>`count(*)` }).from(cinematicAssetJobs).where(and(
+        eq(cinematicAssetJobs.workflowId, workflowId), inArray(cinematicAssetJobs.status, ["queued", "running"]),
+      )),
+      this.database.select({ value: sql<number>`count(*)` }).from(cinematicSceneJobs).where(and(
+        eq(cinematicSceneJobs.workflowId, workflowId), inArray(cinematicSceneJobs.status, ["queued", "running"]),
+      )),
+    ]);
+    return Number(videoRows[0]?.value ?? 0) + Number(assetRows[0]?.value ?? 0) +
+      Number(sceneRows[0]?.value ?? 0);
   }
 
   async findWorkflowScope(workflowId: string) {
@@ -1208,10 +1515,14 @@ export class VideoWorkflowRepository {
     errorMessage?: string | null;
   }): Promise<void> {
     const existing = await this.findCinematicAssetJob(id);
-    await this.database.update(cinematicAssetJobs)
+    const result: unknown = await this.database.update(cinematicAssetJobs)
       .set({ ...values, updatedAt: new Date() })
-      .where(eq(cinematicAssetJobs.id, id));
-    if (existing && values.status === "running") {
+      .where(and(
+        eq(cinematicAssetJobs.id, id),
+        notInArray(cinematicAssetJobs.status, ["succeeded", "failed", "cancelled"]),
+        isNull(cinematicAssetJobs.supersededAt),
+      ));
+    if (readAffectedRows(result) === 1 && existing && values.status === "running") {
       await this.database.update(cinematicAssetBatches).set({
         status: "running",
         updatedAt: new Date(),
@@ -1381,7 +1692,11 @@ export class VideoWorkflowRepository {
     providerTaskId?: string;
     errorMessage?: string | null;
   }): Promise<void> {
-    await this.database.update(videoJobs).set({ ...values, updatedAt: new Date() }).where(eq(videoJobs.id, jobId));
+    await this.database.update(videoJobs).set({ ...values, updatedAt: new Date() }).where(and(
+      eq(videoJobs.id, jobId),
+      notInArray(videoJobs.status, ["succeeded", "failed", "cancelled"]),
+      isNull(videoJobs.supersededAt),
+    ));
   }
 
   async updateVideoJobProgress(

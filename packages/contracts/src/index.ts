@@ -10,6 +10,7 @@ export * from "./user-intent.js";
 export * from "./workflow-pipeline.js";
 export * from "./workflow-pipelines.js";
 export * from "./workflow-capability.js";
+export * from "./workflow-control.js";
 export * from "./workflow-director.js";
 
 import { ConversationIdSchema, ConversationMessageIdSchema } from "./conversation.js";

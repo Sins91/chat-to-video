@@ -384,7 +384,8 @@ export class ApimartModelGateway implements ModelGateway {
     const requestContext = createWorkflowIntentAgentRequestContext(request);
     const prompt = [
       "Classify the user's intent for the current video workflow checkpoint.",
-      "A question or discussion is chat. A direct acceptance is approve. Acceptance plus requested changes is approve_with_changes.",
+      "A question or discussion related to the registered video pipeline is chat. A direct acceptance is approve. Acceptance plus requested changes is approve_with_changes.",
+      "Choose out_of_scope when the user asks to execute an action unrelated to every supplied stage and intent topic. Do not choose it for harmless conversation or questions about the video.",
       "Set advanceAfterChange=true only when the user explicitly selects an existing proposal direction and explicitly asks to continue to the next step.",
       "Use revise_current when changing only the current artifact is sufficient. Use restart_from only for the earliest upstream stage whose artifact is invalidated.",
       "Use clarify when the message is genuinely ambiguous. Never choose cancel unless the user clearly asks to stop the workflow.",

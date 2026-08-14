@@ -84,6 +84,16 @@ describe("UserIntentResolverService", () => {
     });
   });
 
+  it("preserves a model-classified out-of-scope action", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn().mockResolvedValue({ type: "out_of_scope" }) };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolve({ ...context, text: "帮我发送一封营销邮件" })).resolves.toMatchObject({
+      source: "model",
+      intent: { type: "out_of_scope" },
+      requiresConfirmation: false,
+    });
+  });
+
   it("falls back to clarification when semantic classification fails", async () => {
     const gateway = { classifyWorkflowIntent: vi.fn().mockRejectedValue(new Error("timeout")) };
     const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);

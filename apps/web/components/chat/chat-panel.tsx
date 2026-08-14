@@ -44,13 +44,36 @@ type ChatSessionCallbacks = {
   onFinish: (sessionId: string, completedMessageIds: string[], isError: boolean) => void;
 };
 
+type PendingActionPresentation = {
+  actionId: string;
+  message: string;
+  sessionId: string;
+};
+
 const CHAT_FALLBACK_MESSAGE_ID_PREFIX = "chat-fallback:";
+const WORKFLOW_CONTROL_INPUT_PATTERN = /(?:^\s*(?:确认|取消|退出|停止|终止)\s*$|(?:直接)?从\s*(?:创意方案|方案|脚本|分镜|场景规划|素材规划|素材)\s*(?:阶段)?(?:开始|做起|继续|生成)|(?:切换|换)(?:到|成).*(?:管线|流程))/u;
+const EXIT_WORKFLOW_INPUT_PATTERN = /^\s*(?:退出|停止|终止)(?:当前)?(?:视频)?(?:生成|工作流|管线|任务)?[。！!]?\s*$/u;
+const SWITCH_PIPELINE_INPUT_PATTERN = /(?:切换|换)(?:到|成).*(?:管线|流程)/u;
+const DIRECT_ENTRY_INPUT_PATTERN = /(?:直接)?从\s*(?:创意方案|方案|脚本|分镜|场景规划|素材规划|素材)\s*(?:阶段)?(?:开始|做起|继续|生成)/u;
+
+const waitForPendingActionPaint = (): Promise<void> => new Promise((resolve) => {
+  let isResolved = false;
+  const finish = (): void => {
+    if (isResolved) return;
+    isResolved = true;
+    window.clearTimeout(fallbackId);
+    resolve();
+  };
+  const fallbackId = window.setTimeout(finish, 100);
+  window.requestAnimationFrame(finish);
+});
 
 export function ChatPanel() {
   const router = useRouter();
   const workflow = useVideoWorkflow();
   const [input, setInput] = useState("");
   const [isQueueDispatching, setIsQueueDispatching] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingActionPresentation | null>(null);
   const [queuedInputs, setQueuedInputs] = useState<QueuedChatInput[]>([]);
   const conversationIdRef = useRef(workflow.conversationId ?? undefined);
   const previousConversationIdRef = useRef(workflow.conversationId);
@@ -230,7 +253,29 @@ export function ChatPanel() {
     await sendMessage({ text });
   }, [sendMessage]);
 
-  const dispatchText = useCallback(async (text: string) => {
+  const describePendingAction = useCallback((text: string): string => {
+    const pipeline = workflow.snapshot
+      ? findWorkflowPipelineDefinition(workflow.snapshot.pipeline) ?? CINEMATIC_PIPELINE_DEFINITION
+      : CINEMATIC_PIPELINE_DEFINITION;
+    const restartCommand = parseWorkflowRestartCommand(text, pipeline);
+    if (pendingRestart) {
+      const confirmation = classifyWorkflowRestartConfirmation(text);
+      if (confirmation === "confirm") return "正在确认重新开始并停止当前执行。";
+      if (confirmation === "cancel") return "正在取消本次重新开始操作。";
+    }
+    if (restartCommand) {
+      const target = pipeline.stages.find((stage) => stage.id === restartCommand.targetStage);
+      return `正在申请从${target?.label ?? restartCommand.targetStage}重新开始。`;
+    }
+    if (EXIT_WORKFLOW_INPUT_PATTERN.test(text)) return "正在准备退出当前工作流。";
+    if (SWITCH_PIPELINE_INPUT_PATTERN.test(text)) return "正在检查目标管线并准备切换。";
+    if (DIRECT_ENTRY_INPUT_PATTERN.test(text)) return "正在整理已有输入并准备从指定阶段开始。";
+    if (isReviewingStoryboard) return "正在理解你的反馈并处理当前阶段。";
+    if (!hasActiveWorkflow && isVideoCreationIntent(text)) return "正在理解你的视频需求并准备工作流。";
+    return "正在理解你的问题并组织回复。";
+  }, [hasActiveWorkflow, isReviewingStoryboard, pendingRestart, workflow.snapshot]);
+
+  const dispatchText = useCallback(async (text: string, sessionId: string) => {
     const pipeline = workflow.snapshot
       ? findWorkflowPipelineDefinition(workflow.snapshot.pipeline) ?? CINEMATIC_PIPELINE_DEFINITION
       : CINEMATIC_PIPELINE_DEFINITION;
@@ -252,35 +297,58 @@ export function ChatPanel() {
       await sendChatMessage(text);
       return;
     }
+    const controlRoute = await workflow.resolveControlIntent(text, crypto.randomUUID());
+    if (controlRoute.route === "workflow") {
+      if (controlRoute.conversationId) {
+        sessionCallbacksRef.current.onConversationId(sessionId, controlRoute.conversationId);
+      } else {
+        const session = sessionsRef.current.get(sessionId);
+        const resolvedPendingId = session?.pendingHistoryId ?? undefined;
+        if (session) session.pendingHistoryId = null;
+        notifyConversationHistoryChanged(resolvedPendingId);
+      }
+      return;
+    }
     if (restartCommand && workflow.snapshot && !isReviewingStoryboard) {
       await workflow.requestRestart(restartCommand.targetStage, restartCommand.text, crypto.randomUUID());
       return;
     }
     if (isReviewingStoryboard) {
-      const routed = await workflow.resolveUserIntent(text, crypto.randomUUID());
-      if (routed === "chat") await sendChatMessage(text);
+      await sendChatMessage(text);
     } else if (!hasActiveWorkflow && isVideoCreationIntent(text)) {
-      await workflow.startWorkflow(text, crypto.randomUUID());
+      const conversationId = await workflow.startWorkflow(text, crypto.randomUUID());
+      if (conversationId) {
+        sessionCallbacksRef.current.onConversationId(sessionId, conversationId);
+      } else {
+        const session = sessionsRef.current.get(sessionId);
+        const resolvedPendingId = session?.pendingHistoryId ?? undefined;
+        if (session) session.pendingHistoryId = null;
+        notifyConversationHistoryChanged(resolvedPendingId);
+      }
     } else {
       await sendChatMessage(text);
     }
-  }, [hasActiveWorkflow, isReviewingStoryboard, pendingRestart, sendChatMessage, workflow.cancelRestart, workflow.confirmRestart, workflow.requestRestart, workflow.resolveUserIntent, workflow.snapshot, workflow.startWorkflow]);
+  }, [hasActiveWorkflow, isReviewingStoryboard, pendingRestart, sendChatMessage, workflow.cancelRestart, workflow.confirmRestart, workflow.requestRestart, workflow.resolveControlIntent, workflow.snapshot, workflow.startWorkflow]);
 
   const runText = useCallback((text: string) => {
     const sessionId = activeSession.id;
+    const actionId = crypto.randomUUID();
     activeSession.isDispatching = true;
     queueDispatchInFlightRef.current = true;
     setIsQueueDispatching(true);
-    void dispatchText(text)
+    setPendingAction({ actionId, message: describePendingAction(text), sessionId });
+    void waitForPendingActionPaint()
+      .then(() => dispatchText(text, sessionId))
       .catch(() => undefined)
       .finally(() => {
         const session = sessionsRef.current.get(sessionId);
         if (session) session.isDispatching = false;
+        setPendingAction((current) => current?.actionId === actionId ? null : current);
         if (activeSessionIdRef.current !== sessionId) return;
         queueDispatchInFlightRef.current = false;
         setIsQueueDispatching(false);
       });
-  }, [activeSession, dispatchText]);
+  }, [activeSession, describePendingAction, dispatchText]);
 
   const sendText = useCallback((text: string) => {
     const trimmed = text.trim();
@@ -289,12 +357,13 @@ export function ChatPanel() {
     if (!activeSession.conversationId && !activeSession.pendingHistoryId) {
       activeSession.pendingHistoryId = notifyPendingConversationHistory(trimmed);
     }
-    if (!isAgentAvailable || queueDispatchInFlightRef.current || queuedInputs.length > 0) {
+    const canInterruptWorkflow = hasActiveWorkflow && WORKFLOW_CONTROL_INPUT_PATTERN.test(trimmed);
+    if ((!isAgentAvailable && !canInterruptWorkflow) || queueDispatchInFlightRef.current || queuedInputs.length > 0) {
       setQueuedInputs((current) => [...current, { id: crypto.randomUUID(), text: trimmed }]);
       return;
     }
     runText(trimmed);
-  }, [activeSession, isAgentAvailable, queuedInputs.length, runText]);
+  }, [activeSession, hasActiveWorkflow, isAgentAvailable, queuedInputs.length, runText]);
 
   useEffect(() => {
     const nextInput = queuedInputs[0];
@@ -357,13 +426,13 @@ export function ChatPanel() {
           isLoadingHistory={workflow.isLoading}
           isWorkflowSubmitting={workflow.isSubmitting}
           messages={messages}
-          onRetryWorkflow={() => void workflow.retryWorkflow()}
           onRecoverWorkflow={() => void workflow.recoverWorkflow()}
           snapshot={workflow.snapshot}
           status={status}
           videoFocusRequest={workflow.chatVideoFocusRequest}
           scrollRestoreRequest={workflow.chatScrollRestoreRequest}
           onViewportControllerChange={workflow.registerChatViewportController}
+          pendingActionMessage={pendingAction?.sessionId === activeSession.id ? pendingAction.message : null}
           workflowErrorMessage={workflowErrorMessage}
           workflowStepProgress={workflow.stepProgress}
         />

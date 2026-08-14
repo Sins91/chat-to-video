@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleAlertIcon, FilmIcon, LoaderCircleIcon, RefreshCwIcon, SparklesIcon } from "lucide-react";
+import { CircleAlertIcon, FilmIcon, LoaderCircleIcon, LogOutIcon, RefreshCwIcon, SparklesIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -55,6 +55,10 @@ export function VideoWorkflowVisualization() {
   }
   const job = snapshot?.videoJob;
   const videoOutputEstimate = getVideoOutputEstimate(snapshot?.durationSeconds);
+
+  if (snapshot?.status === "cancelled") {
+    return <aside className="checkerboard grid h-full min-w-0 place-items-center p-6" aria-labelledby="visualization-title"><div className="flex max-w-sm items-center gap-4 text-zinc-500"><span className="grid size-12 shrink-0 place-items-center rounded-xl border border-white/10 bg-[#111315]"><LogOutIcon className="size-5" /></span><div><h2 className="font-sans text-sm font-medium text-zinc-400" id="visualization-title">工作流已退出</h2><p className="mt-1 text-xs leading-5">当前预览已关闭，可以在左侧新建对话重新开始。</p></div></div></aside>;
+  }
 
   if (previewVideo) {
     return <aside className="flex h-full min-w-0 flex-col bg-[#090a0b]" aria-labelledby="visualization-title">

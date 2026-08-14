@@ -5,6 +5,7 @@ import {
 } from "./cinematic.js";
 import { WorkflowPipelineIdSchema, WorkflowStageIdSchema } from "./workflow-pipeline.js";
 import { WorkflowCapabilityResolutionSchema } from "./workflow-capability.js";
+import { PendingWorkflowControlSchema } from "./workflow-control.js";
 import { CinematicAssetBatchSchema } from "./cinematic-assets.js";
 import {
   VIDEO_MODEL_DURATION_OPTIONS,
@@ -270,6 +271,11 @@ export const VideoWorkflowSnapshotSchema = z
     storyboard: StoryboardVersionSchema.nullable(),
     videoJob: VideoJobSnapshotSchema.nullable(),
     pendingRestart: PendingVideoWorkflowRestartSchema.nullable().default(null),
+    pendingControl: PendingWorkflowControlSchema.nullable().default(null),
+    sourceWorkflowId: VideoWorkflowIdSchema.nullable().default(null),
+    successorWorkflowId: VideoWorkflowIdSchema.nullable().default(null),
+    cancellationReason: z.string().trim().min(1).max(500).nullable().default(null),
+    cancelledAt: z.string().datetime({ offset: true }).nullable().default(null),
     errorMessage: z.string().max(1_000).nullable(),
     lastProgressAt: z.string().datetime({ offset: true }).optional(),
     failureCode: VideoWorkflowFailureCodeSchema.nullable().optional(),
@@ -399,6 +405,29 @@ export const VideoWorkflowEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("workflow.restart.cancelled"), data: z.object({
     restartRequestId: z.string().uuid(),
     targetStage: VideoWorkflowRestartStageSchema,
+  }).strict() }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.control.requested"), data: PendingWorkflowControlSchema }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.control.cancelled"), data: z.object({
+    controlRequestId: z.string().uuid(),
+  }).strict() }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.entry.started"), data: z.object({
+    controlRequestId: z.string().uuid(),
+    targetStageId: WorkflowStageIdSchema,
+    workflowId: VideoWorkflowIdSchema,
+  }).strict() }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.pipeline.switched"), data: z.object({
+    controlRequestId: z.string().uuid(),
+    sourceWorkflowId: VideoWorkflowIdSchema,
+    workflowId: VideoWorkflowIdSchema,
+    targetPipelineId: WorkflowPipelineIdSchema,
+  }).strict() }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.cancellation.requested"), data: z.object({
+    controlRequestId: z.string().uuid(),
+    reason: z.string().trim().min(1).max(500),
+  }).strict() }).strict(),
+  z.object({ ...eventBase, type: z.literal("workflow.cancelled"), data: z.object({
+    controlRequestId: z.string().uuid(),
+    reason: z.string().trim().min(1).max(500),
   }).strict() }).strict(),
   z.object({ ...eventBase, type: z.literal("job.progress"), data: JobProgressEventDataSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("job.completed"), data: z.object({ jobId: VideoJobIdSchema }).strict() }).strict(),

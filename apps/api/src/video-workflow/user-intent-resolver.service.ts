@@ -25,7 +25,6 @@ const addClarificationGuidance = (question: string): string =>
 
 const QUESTION_PATTERN = /[?？]\s*$|(?:为什么|怎么|怎样|如何|什么|哪些|哪里|哪种|多少|是否|是不是|有没有|能否介绍|解释一下)/u;
 const CANCEL_PATTERN = /^(?:算了|不做了|停止|终止|取消)(?:任务|工作流|生成|制作|视频)?[。！!]?$/u;
-const DIRECT_REVISION_PATTERN = /(?:修改|调整|优化|重做|重新生成|删除|移除|增加|添加|替换|换成|改成|改为|缩短|延长|更换|选择|采用)/u;
 const APPROVE_WITH_CHANGES_PATTERN = /^(?:可以|行|同意|通过|没问题).{0,40}(?:但是|但|不过|同时|然后|并且).+/u;
 const DIRECTION_SELECTION_PATTERN = /(?:(?:选择|选用|采用|使用|用|按|按照).{0,80}(?:方案|方向|版本)|(?:第?[一二三123]个?)(?:方案|方向|版本))/u;
 const EXPLICIT_ADVANCE_PATTERN = /(?:直接|继续|然后|随后|并且|并|再)?.{0,20}(?:进行到|进入|推进到|转到|继续到|开始)?(?:下一步|下一个阶段|下一阶段)|(?:继续|推进)(?:制作|生成|创作)?$/u;
@@ -95,7 +94,7 @@ export class UserIntentResolverService {
         resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION, requiresConfirmation: false,
       });
     }
-    if (DIRECT_REVISION_PATTERN.test(text)) {
+    if (DIRECTION_SELECTION_PATTERN.test(text)) {
       return WorkflowIntentDecisionSchema.parse({
         intent: { type: "revise_current", stageId: context.currentStage, feedback: text },
         source: "rule", resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION,

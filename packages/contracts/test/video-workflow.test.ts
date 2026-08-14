@@ -21,6 +21,9 @@ import {
   getPreviousWorkflowStage,
   getWorkflowStagesFrom,
   parseWorkflowRestartTarget,
+  parseWorkflowDirectEntryTarget,
+  PendingWorkflowControlSchema,
+  CINEMATIC_PIPELINE_DEFINITION,
 } from "../src/index.js";
 
 const storyboard = {
@@ -37,12 +40,37 @@ describe("video workflow contracts", () => {
   it("validates structured workflow user intents", () => {
     expect(WorkflowUserIntentSchema.parse({ type: "approve", stageId: "proposal" }))
       .toEqual({ type: "approve", stageId: "proposal" });
+    expect(WorkflowUserIntentSchema.parse({ type: "out_of_scope" }))
+      .toEqual({ type: "out_of_scope" });
     expect(WorkflowUserIntentSchema.safeParse({
       type: "restart_from",
       stageId: "proposal",
       feedback: "",
       invalidates: ["script"],
     }).success).toBe(false);
+  });
+
+  it("derives direct-entry support from the registered pipeline", () => {
+    expect(parseWorkflowDirectEntryTarget(CINEMATIC_PIPELINE_DEFINITION, "script")?.id)
+      .toBe("script");
+    expect(parseWorkflowDirectEntryTarget(CINEMATIC_PIPELINE_DEFINITION, "research"))
+      .toBeNull();
+  });
+
+  it("validates an auditable pending workflow control", () => {
+    const pending = PendingWorkflowControlSchema.parse({
+      controlRequestId: "00000000-0000-4000-8000-000000000011",
+      kind: "exit_workflow",
+      sourceWorkflowId: "00000000-0000-4000-8000-000000000012",
+      targetPipelineId: null,
+      targetStageId: null,
+      expectedStateVersion: 3,
+      candidate: null,
+      impact: { summary: "Cancel queued work and preserve history." },
+      requestedAt: "2026-08-14T00:00:00.000Z",
+      expiresAt: "2026-08-14T00:15:00.000Z",
+    });
+    expect(pending.impact.activeJobCount).toBe(0);
   });
   it("validates persisted active run recovery context", () => {
     expect(ActiveWorkflowRunContextSchema.parse({ kind: "start", baseVersion: 0 }))
