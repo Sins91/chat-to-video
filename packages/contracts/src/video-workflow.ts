@@ -86,6 +86,12 @@ export const VideoWorkflowFailureCodeSchema = z.enum([
   "QUEUE_PROGRESS_STALLED",
   "VIDEO_PROGRESS_STALLED",
   "WORKFLOW_RUN_NOT_RECOVERABLE",
+  "DIRECTOR_OUTPUT_INVALID",
+  "DIRECTOR_POLICY_REJECTED",
+  "DIRECTOR_ACTION_LIMIT_EXCEEDED",
+  "DIRECTOR_CONTEXT_STALE",
+  "DIRECTOR_RUN_NOT_RECOVERABLE",
+  "DIRECTOR_CONTINUATION_STALLED",
 ]);
 
 export const ActiveWorkflowRunContextSchema = z.discriminatedUnion("kind", [
@@ -97,6 +103,12 @@ export const ActiveWorkflowRunContextSchema = z.discriminatedUnion("kind", [
     text: z.string().trim().min(1).max(2_000),
     baseVersion: z.number().int().positive(),
     previousArtifactVersion: z.number().int().positive().nullable(),
+  }).strict(),
+  z.object({
+    kind: z.literal("director"),
+    cycleId: z.string().uuid(),
+    triggerKey: z.string().trim().min(1).max(200),
+    baseVersion: z.number().int().nonnegative(),
   }).strict(),
 ]);
 
@@ -307,6 +319,7 @@ export const VideoWorkflowInteractionSchema = z.discriminatedUnion("type", [
       type: z.literal("message"),
       messageId: RelatedMessageIdSchema,
       text: z.string().trim().min(1).max(2_000),
+      advanceAfterChange: z.boolean().optional(),
     })
     .strict(),
   z
@@ -369,6 +382,9 @@ const eventBase = {
 
 export const VideoWorkflowEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("workflow.snapshot"), data: VideoWorkflowSnapshotSchema }).strict(),
+  z.object({ ...eventBase, type: z.literal("message.completed"), data: z.object({
+    messageId: z.string().trim().min(1).max(100),
+  }).strict() }).strict(),
   z.object({ ...eventBase, type: z.literal("agent.step"), data: AgentStepEventDataSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("storyboard.completed"), data: StoryboardVersionSchema }).strict(),
   z.object({ ...eventBase, type: z.literal("cinematic.artifact.completed"), data: CinematicArtifactVersionSchema }).strict(),

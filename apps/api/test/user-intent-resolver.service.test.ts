@@ -49,6 +49,31 @@ describe("UserIntentResolverService", () => {
     });
   });
 
+  it("auto-advances only an explicit proposal direction selection with a next-step request", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn() };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolve({
+      ...context,
+      currentStage: "proposal",
+      text: "选择第二个方案，直接进入下一步",
+    })).resolves.toMatchObject({
+      source: "rule",
+      intent: {
+        type: "approve_with_changes",
+        stageId: "proposal",
+        advanceAfterChange: true,
+      },
+    });
+    await expect(resolver.resolve({
+      ...context,
+      currentStage: "proposal",
+      text: "选择第二个方案",
+    })).resolves.toMatchObject({
+      intent: { type: "revise_current" },
+    });
+    expect(gateway.classifyWorkflowIntent).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid model-selected future restart stage", async () => {
     const gateway = { classifyWorkflowIntent: vi.fn().mockResolvedValue({
       type: "restart_from", stageId: "assets", feedback: "go forward",

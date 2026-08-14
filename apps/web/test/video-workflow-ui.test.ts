@@ -111,6 +111,9 @@ describe("two-step video workflow UI", () => {
     ]);
     expect(provider).toContain("recoverVideoWorkflow(workflowId)");
     expect(conversation).toContain("恢复任务");
+    expect(conversation).toContain("重新尝试");
+    expect(conversation).toContain("<Confirmation approval=");
+    expect(conversation).toContain("<ConfirmationAction disabled={isWorkflowSubmitting}");
     expect(client).toContain("/recover");
     expect(recoverRoute).toContain("proxyVideoWorkflow");
   });
@@ -208,6 +211,7 @@ describe("two-step video workflow UI", () => {
     ]);
 
     expect(provider).toContain("workflowStepFromEventData");
+    expect(provider).toContain('"message.completed"');
     expect(provider).toContain("legacyWorkflowStep");
     expect(provider).toContain("stepProgress");
     expect(conversation).toContain("WorkflowActivityText");
@@ -220,13 +224,17 @@ describe("two-step video workflow UI", () => {
     expect(conversation).toContain("<Shimmer");
     expect(conversation).toContain("WORKFLOW_PROGRESS_STALL_THRESHOLD_MS = 90_000");
     expect(conversation).toContain("可能阻塞");
-    expect(conversation).toContain("showProgressMeta && activity ? <span");
+    expect(conversation).toContain("showProgressMeta && stalledActivity ? <span");
+    expect(conversation).not.toContain("正常进行");
+    expect(conversation).not.toContain("{progress.stepIndex}/{progress.stepTotal}");
+    expect(conversation).not.toContain("步骤 ${progress.stepIndex}/${progress.stepTotal}");
     expect(conversation).toContain('showProgressMeta={false}');
     expect(conversation).toContain("lastAutoScrolledInputKeyRef");
     expect(conversation).toContain("conversationContextRef.current?.scrollToBottom");
     expect(conversation).toContain("hasReviewableWorkflowAnswer");
     expect(conversation).toContain('workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer');
     expect(conversation).toContain("visibleWorkflowStepProgress ? <WorkflowActivityText");
+    expect(conversation).toContain('snapshot.failureCode === "DIRECTOR_ACTION_LIMIT_EXCEEDED"');
     expect(conversation).toContain("workflowReviewNotice");
     expect(conversation).toContain("当前规划已完成，等待确认或提出修改。");
     expect(conversation).toContain("WorkflowReviewNotice");

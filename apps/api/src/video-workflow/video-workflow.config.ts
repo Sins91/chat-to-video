@@ -16,6 +16,8 @@ const booleanValue = (name: string, fallback: boolean): boolean => {
 
 export const loadDatabaseUrl = (): string => required("DATABASE_URL");
 export const loadRedisUrl = (): string => required("REDIS_URL");
+export const isCinematicCreationEnabled = (): boolean =>
+  booleanValue("CINEMATIC_CREATION_ENABLED", true);
 
 export const loadStorageConfig = (): StorageConfig => ({
   endpoint: required("S3_ENDPOINT"),

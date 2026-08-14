@@ -240,6 +240,12 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
 
   useEffect(() => {
     snapshotRef.current = activeSnapshot;
+    if (!activeSnapshot) return;
+    const snapshotProgress = legacyWorkflowStep(activeSnapshot);
+    setStepView((current) => current?.workflowId === activeSnapshot.workflowId &&
+        current.progress.stepId === snapshotProgress.stepId
+      ? current
+      : null);
   }, [activeSnapshot]);
 
   const workflowId = activeSnapshot?.workflowId;
@@ -283,7 +289,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     let initialSnapshotTimestampMs: number | null = null;
     setStepView((current) => current?.workflowId === workflowId ? current : null);
     const source = new EventSource(`/api/video-workflows/${encodeURIComponent(workflowId)}/events`);
-    const eventTypes = ["workflow.snapshot", "workflow.restart.requested", "workflow.restart.started", "workflow.restart.cancelled", "agent.step", "storyboard.completed", "cinematic.artifact.completed", "cinematic.approval.required", "job.progress", "job.completed", "job.failed"] as const;
+    const eventTypes = ["workflow.snapshot", "message.completed", "workflow.restart.requested", "workflow.restart.started", "workflow.restart.cancelled", "agent.step", "storyboard.completed", "cinematic.artifact.completed", "cinematic.approval.required", "job.progress", "job.completed", "job.failed"] as const;
     const handleEvent = (event: Event): void => {
       if (!(event instanceof MessageEvent) || !isActive) return;
       const parsed = VideoWorkflowEventSchema.safeParse(JSON.parse(String(event.data)) as unknown);

@@ -151,6 +151,7 @@ export const buildVideoWorkflowSnapshot = async (
     lastProgressAt: workflow.lastProgressAt.toISOString(),
     failureCode: workflow.failureCode,
     canRecover: workflow.status === "failed" && (
+      workflow.failureCode === "DIRECTOR_ACTION_LIMIT_EXCEEDED" ||
       (workflow.failureCode === "AGENT_PROGRESS_STALLED" && workflow.runId !== null) ||
       ((workflow.failureCode === "QUEUE_PROGRESS_STALLED" ||
         workflow.failureCode === "VIDEO_PROGRESS_STALLED") && job?.providerTaskId != null)

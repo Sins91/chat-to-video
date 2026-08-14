@@ -28,10 +28,20 @@ export type WorkflowStageDefinition<StageId extends WorkflowStageId = WorkflowSt
     allowsRevision: boolean;
   };
   capabilities: WorkflowStageCapabilities;
+  allowedNextStageIds: readonly StageId[];
+  inputArtifactKinds: readonly string[];
+  outputArtifactKinds: readonly string[];
+  execution: "agent" | "queue" | "system";
+  planningReview: { requiresApproval: boolean; allowsRevision: boolean };
+  directorSkillId?: string;
+  reviewerSkillId?: string;
 };
 
 export type WorkflowPipelineDefinition<StageId extends WorkflowStageId = WorkflowStageId> = {
   id: WorkflowPipelineId;
+  definitionVersion: number;
+  initialStageId: StageId;
+  terminalStageIds: readonly StageId[];
   stages: readonly WorkflowStageDefinition<StageId>[];
 };
 
@@ -39,6 +49,9 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
   definition: WorkflowPipelineDefinition<StageId>,
 ): WorkflowPipelineDefinition<StageId> => {
   WorkflowPipelineIdSchema.parse(definition.id);
+  if (!Number.isInteger(definition.definitionVersion) || definition.definitionVersion < 1) {
+    throw new Error(`Workflow pipeline ${definition.id} has an invalid definition version.`);
+  }
   if (definition.stages.length < 1) throw new Error(`Workflow pipeline ${definition.id} has no stages.`);
   const ids = new Set<string>();
   const stepIds = new Set<string>();
@@ -50,7 +63,7 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
         stage.intentTopics.length < 1 || stage.ownedArtifactKinds.length < 1) {
       throw new Error(`Workflow stage ${stage.id} is missing presentation metadata.`);
     }
-    if (stage.allowsRevision && !stage.requiresApproval) {
+    if (stage.planningReview.allowsRevision && !stage.planningReview.requiresApproval) {
       throw new Error(`Workflow stage ${stage.id} cannot allow revision without approval.`);
     }
     if (stage.executionReview?.allowsRevision && !stage.executionReview.requiresApproval) {
@@ -72,6 +85,33 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
     ids.add(stage.id);
     stepIds.add(stage.stepId);
   }
+  if (!ids.has(definition.initialStageId)) {
+    throw new Error(`Workflow pipeline ${definition.id} has an unknown initial stage.`);
+  }
+  if (definition.terminalStageIds.length < 1 ||
+      definition.terminalStageIds.some((stageId) => !ids.has(stageId))) {
+    throw new Error(`Workflow pipeline ${definition.id} has an invalid terminal stage.`);
+  }
+  for (const stage of definition.stages) {
+    if (stage.allowedNextStageIds.some((stageId) => !ids.has(stageId))) {
+      throw new Error(`Workflow stage ${stage.id} has an unknown outgoing edge.`);
+    }
+  }
+  const reachable = new Set<WorkflowStageId>();
+  const pending: WorkflowStageId[] = [definition.initialStageId];
+  while (pending.length > 0) {
+    const stageId = pending.shift();
+    if (!stageId || reachable.has(stageId)) continue;
+    reachable.add(stageId);
+    const stage = definition.stages.find((candidate) => candidate.id === stageId);
+    if (stage) pending.push(...stage.allowedNextStageIds);
+  }
+  if (definition.stages.some((stage) => !reachable.has(stage.id))) {
+    throw new Error(`Workflow pipeline ${definition.id} contains an unreachable stage.`);
+  }
+  if (!definition.terminalStageIds.some((stageId) => reachable.has(stageId))) {
+    throw new Error(`Workflow pipeline ${definition.id} has no reachable terminal stage.`);
+  }
   return definition;
 };
 
@@ -90,16 +130,29 @@ export const getPreviousWorkflowStage = (
   pipeline: WorkflowPipelineDefinition,
   stageId: string,
 ): WorkflowStageDefinition | null => {
-  const index = getWorkflowStageIndex(pipeline, stageId);
-  return index > 0 ? pipeline.stages[index - 1] ?? null : null;
+  const predecessors = pipeline.stages.filter((stage) =>
+    stage.allowedNextStageIds.includes(stageId)
+  );
+  return predecessors.length === 1 ? predecessors[0] ?? null : null;
 };
 
 export const getWorkflowStagesFrom = (
   pipeline: WorkflowPipelineDefinition,
   stageId: string,
 ): WorkflowStageDefinition[] => {
-  const index = getWorkflowStageIndex(pipeline, stageId);
-  return index < 0 ? [] : pipeline.stages.slice(index);
+  const result: WorkflowStageDefinition[] = [];
+  const seen = new Set<string>();
+  const pending = [stageId];
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (!current || seen.has(current)) continue;
+    seen.add(current);
+    const stage = findWorkflowStage(pipeline, current);
+    if (!stage) continue;
+    result.push(stage);
+    pending.push(...stage.allowedNextStageIds);
+  }
+  return result;
 };
 
 export const parseWorkflowRestartTarget = (

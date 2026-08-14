@@ -3,7 +3,7 @@ import type { UIMessageChunk } from "ai";
 
 import { ChatAgentService, getChatFallbackReply } from "../src/chat-agent.service.js";
 
-const createGateway = () => ({ classifyWorkflowIntent: vi.fn(), inferCinematicDuration: vi.fn(), streamChat: vi.fn(), generateStoryboard: vi.fn(), generateCinematicArtifact: vi.fn() });
+const createGateway = () => ({ decideWorkflowAction: vi.fn(), classifyWorkflowIntent: vi.fn(), inferCinematicDuration: vi.fn(), streamChat: vi.fn(), generateStoryboard: vi.fn(), generateCinematicArtifact: vi.fn() });
 const createConversations = () => ({
   ensureUserMessage: vi.fn().mockResolvedValue("00000000-0000-4000-8000-000000000010"),
   listModelMessages: vi.fn().mockResolvedValue([{ role: "user", content: "hello" }]),

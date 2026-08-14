@@ -1,10 +1,5 @@
 import { Inject, Injectable, Logger, type OnModuleDestroy } from "@nestjs/common";
-import {
-  CINEMATIC_PIPELINE_DEFINITION,
-  findWorkflowStage,
-  type CinematicGenerativeStage,
-  type VideoWorkflowInteraction,
-} from "@chat-to-video/contracts";
+import { type CinematicGenerativeStage, type VideoWorkflowInteraction } from "@chat-to-video/contracts";
 import { Mastra } from "@mastra/core/mastra";
 import { createWorkflowStateReader } from "@mastra/core/workflows";
 import { RedisStore } from "@mastra/redis";
@@ -12,13 +7,16 @@ import { RedisStreamsPubSub } from "@mastra/redis-streams";
 
 import { MASTRA_AGENTS, type MastraAgents } from "../model-gateway/mastra-agents.js";
 import {
-  CinematicWorkflowSuspensionSchema,
-  createCinematicWorkflow,
-  initialCinematicState,
   type CinematicWorkflowInput,
 } from "../workflows/cinematic-production.workflow.js";
+import {
+  CinematicDirectorSuspensionSchema,
+  createCinematicDirectorWorkflow,
+} from "../workflows/cinematic-director-cycle.workflow.js";
 import { loadRedisUrl } from "./video-workflow.config.js";
 import { VideoWorkflowOperations } from "./video-workflow.operations.js";
+import { WorkflowDirectorService } from "./workflow-director.service.js";
+import type { WorkflowDirectorTrigger } from "./workflow-director-trigger.js";
 
 const MASTRA_REDIS_NAMESPACE = "chat-to-video:mastra";
 
@@ -54,7 +52,8 @@ export class MastraRuntimeService implements OnModuleDestroy {
 
   constructor(
     @Inject(MASTRA_AGENTS) agents: MastraAgents,
-    @Inject(VideoWorkflowOperations) operations: VideoWorkflowOperations,
+    @Inject(VideoWorkflowOperations) _operations: VideoWorkflowOperations,
+    @Inject(WorkflowDirectorService) private readonly director: WorkflowDirectorService,
   ) {
     const redisUrl = loadRedisUrl();
     this.storage = new RedisStore({
@@ -68,7 +67,7 @@ export class MastraRuntimeService implements OnModuleDestroy {
       streamIdleTtlMs: 7 * 24 * 60 * 60 * 1_000,
       maxDeliveryAttempts: 5,
     });
-    this.workflow = createCinematicWorkflow(operations);
+    this.workflow = createCinematicDirectorWorkflow(director);
     this.mastra = new Mastra({
       agents: {
         chatDefault: agents.chat,
@@ -76,9 +75,10 @@ export class MastraRuntimeService implements OnModuleDestroy {
         cinematicDirector: agents.cinematic,
         cinematicDurationPlanner: agents.durationPlanner,
         workflowIntentRouter: agents.intentRouter,
+        workflowDirector: agents.workflowDirector,
       },
       workflows: {
-        cinematicProduction: this.workflow,
+        cinematicDirectorCycle: this.workflow,
       },
       storage: this.storage,
       pubsub: this.pubsub,
@@ -96,50 +96,44 @@ export class MastraRuntimeService implements OnModuleDestroy {
     persistRunId: (runId: string) => Promise<void>,
   ): Promise<string> {
     await this.initialize();
+    const cycleId = await this.createCycle(input, "workflow_started");
     const run = await this.workflow.createRun({ pubsub: this.pubsub });
     await persistRunId(run.runId);
-    this.logRun("Starting", input, run.runId, "research", 0);
-    await run.startAsync({ inputData: input, initialState: initialCinematicState(input) });
+    await this.director.markCycleRunning(cycleId, run.runId);
+    await run.startAsync({ inputData: this.directorInput(input, cycleId) });
     return run.runId;
   }
 
   async restart(
     input: CinematicWorkflowInput,
-    baseVersion: number,
+    _baseVersion: number,
     persistRunId: (runId: string) => Promise<void>,
   ): Promise<string> {
     await this.initialize();
+    const cycleId = await this.createCycle(input, "user_interaction");
     const run = await this.workflow.createRun({ pubsub: this.pubsub });
     await persistRunId(run.runId);
+    await this.director.markCycleRunning(cycleId, run.runId);
     this.logRun(
       "Restarting",
       input,
       run.runId,
       input.restart?.targetStage,
-      baseVersion,
+      _baseVersion,
     );
-    await run.startAsync({
-      inputData: input,
-      initialState: initialCinematicState(input, baseVersion),
-    });
+    await run.startAsync({ inputData: this.directorInput(input, cycleId) });
     return run.runId;
   }
 
-  async continueAfterAssetApproval(
+  async startDirectorContinuation(
     input: CinematicWorkflowInput,
+    cycleId: string,
     persistRunId: (runId: string) => Promise<void>,
   ): Promise<string> {
-    if (!input.continuation || input.continuation.kind !== "assets_approved") {
-      throw new Error("Asset approval continuation input is invalid.");
-    }
     await this.initialize();
     const run = await this.workflow.createRun({ pubsub: this.pubsub });
     await persistRunId(run.runId);
-    this.logRun("Restarting", input, run.runId, "edit", input.continuation.baseVersion);
-    await run.startAsync({
-      inputData: input,
-      initialState: initialCinematicState(input, input.continuation.baseVersion),
-    });
+    await run.startAsync({ inputData: this.directorInput(input, cycleId) });
     return run.runId;
   }
 
@@ -147,6 +141,7 @@ export class MastraRuntimeService implements OnModuleDestroy {
     runId: string,
     interaction: VideoWorkflowInteraction,
     expected: ResumeExpectation,
+    trigger: WorkflowDirectorTrigger | null,
   ): Promise<void> {
     await this.initialize();
     const workflowState = await this.workflow.getWorkflowRunById(runId);
@@ -155,16 +150,12 @@ export class MastraRuntimeService implements OnModuleDestroy {
     if (!suspended) {
       throw new MastraRunNotResumableError(runId, "workflow run is not suspended");
     }
-    const suspension = CinematicWorkflowSuspensionSchema.safeParse(suspended.suspendPayload);
-    const expectedStepId = findWorkflowStage(
-      CINEMATIC_PIPELINE_DEFINITION,
-      expected.stage,
-    )?.stepId;
+    const suspension = CinematicDirectorSuspensionSchema.safeParse(suspended.suspendPayload);
     if (!suspension.success ||
         suspension.data.workflowId !== expected.workflowId ||
         suspension.data.stage !== expected.stage ||
-        suspension.data.version !== expected.version ||
-        suspended.stepId !== expectedStepId) {
+        suspension.data.artifactVersion !== expected.version ||
+        suspended.stepId !== "director-cycle") {
       throw new MastraRunNotResumableError(
         runId,
         "suspended step does not match the persisted workflow state",
@@ -178,7 +169,10 @@ export class MastraRuntimeService implements OnModuleDestroy {
       artifactVersion: expected.version,
     });
     const run = await this.workflow.createRun({ runId, pubsub: this.pubsub });
-    await run.resumeAsync({ step: suspended.stepId, resumeData: interaction });
+    await run.resumeAsync({
+      step: suspended.stepId,
+      resumeData: { interaction, trigger },
+    });
   }
 
   async inspectRun(runId: string): Promise<RecoverableRunState> {
@@ -213,6 +207,26 @@ export class MastraRuntimeService implements OnModuleDestroy {
       stepId,
       artifactVersion,
     });
+  }
+
+  private async createCycle(
+    input: CinematicWorkflowInput,
+    triggerType: "workflow_started" | "user_interaction",
+  ): Promise<string> {
+    const discriminator = input.restart?.restartRequestId ??
+      (input.continuation ? `assets-approved-v${input.continuation.baseVersion}` : input.requestId);
+    return this.director.createCycle(input.workflowId, `${triggerType}:${discriminator}`, triggerType);
+  }
+
+  private directorInput(input: CinematicWorkflowInput, cycleId: string) {
+    return {
+      workflowId: input.workflowId,
+      cycleId,
+      requestId: input.requestId,
+      initialPrompt: input.initialPrompt,
+      videoModel: input.videoModel,
+      durationSeconds: input.durationSeconds,
+    };
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -84,6 +84,12 @@ describe("video workflow contracts", () => {
 
   it("keeps approval explicit and validates revision messages", () => {
     expect(VideoWorkflowInteractionSchema.parse({ type: "approve" })).toEqual({ type: "approve" });
+    expect(VideoWorkflowInteractionSchema.parse({
+      type: "message",
+      messageId: "message-selection",
+      text: "选择第二个方案并继续下一步",
+      advanceAfterChange: true,
+    })).toMatchObject({ advanceAfterChange: true });
     expect(VideoWorkflowInteractionSchema.safeParse({ type: "message", messageId: "message-1", text: "" }).success).toBe(false);
   });
 
@@ -125,11 +131,14 @@ describe("video workflow contracts", () => {
   it("derives restart behavior from one pipeline definition", () => {
     const pipeline = defineWorkflowPipeline({
       id: "audio-story",
+      definitionVersion: 1,
+      initialStageId: "brief",
+      terminalStageIds: ["mix"],
       stages: [
-        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
-        { id: "outline", label: "大纲", aliases: ["大纲"], stepId: "outline", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["大纲"], ownedArtifactKinds: ["outline"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
-        { id: "voice", label: "配音", aliases: ["配音"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
-        { id: "mix", label: "混音", aliases: ["混音"], stepId: "mix", producesArtifact: false, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["混音"], ownedArtifactKinds: ["mix"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["outline"], inputArtifactKinds: [], outputArtifactKinds: ["brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "outline", label: "大纲", aliases: ["大纲"], stepId: "outline", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["大纲"], ownedArtifactKinds: ["outline"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["voice"], inputArtifactKinds: ["brief"], outputArtifactKinds: ["outline"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "voice", label: "配音", aliases: ["配音"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["mix"], inputArtifactKinds: ["outline"], outputArtifactKinds: ["voice"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "mix", label: "混音", aliases: ["混音"], stepId: "mix", producesArtifact: false, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["混音"], ownedArtifactKinds: ["mix"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["voice"], outputArtifactKinds: ["mix"], execution: "queue", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] } },
       ],
     });
 
@@ -341,5 +350,17 @@ describe("video workflow contracts", () => {
       accepted: true,
       workflowId: "00000000-0000-4000-8000-000000000001",
     })).toMatchObject({ accepted: true });
+  });
+
+  it("validates persisted workflow assistant completion notifications", () => {
+    expect(VideoWorkflowEventSchema.safeParse({
+      eventId: "event-message-1",
+      sequence: 3,
+      workflowId: "00000000-0000-4000-8000-000000000001",
+      requestId: "00000000-0000-4000-8000-000000000002",
+      timestamp: new Date().toISOString(),
+      type: "message.completed",
+      data: { messageId: "cycle-1:fallback" },
+    }).success).toBe(true);
   });
 });

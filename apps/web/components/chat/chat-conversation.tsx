@@ -42,6 +42,13 @@ import {
 } from "@/components/video-workflow/cinematic-artifact-presentation";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/src/components/ai-elements/conversation";
 import {
+  Confirmation,
+  ConfirmationAction,
+  ConfirmationActions,
+  ConfirmationRequest,
+  ConfirmationTitle,
+} from "@/src/components/ai-elements/confirmation";
+import {
   ChainOfThought,
   ChainOfThoughtContent,
   ChainOfThoughtHeader,
@@ -216,13 +223,8 @@ const WorkflowActivityText = ({
   const silenceMs = Math.max(0, nowMs - lastProgressAtMs);
   const isPossiblyStalled = progress.stepState === "running"
     && silenceMs >= WORKFLOW_PROGRESS_STALL_THRESHOLD_MS;
-  const activity = progress.stepState === "running"
-    ? {
-        label: isPossiblyStalled
-          ? `可能阻塞 · ${formatProgressSilence(silenceMs)}无更新`
-          : "正常进行",
-        state: isPossiblyStalled ? "stalled" : "active",
-      }
+  const stalledActivity = isPossiblyStalled
+    ? `可能阻塞 · ${formatProgressSilence(silenceMs)}无更新`
     : undefined;
   const title = progress.stepState === "running"
     ? <Shimmer as="span">{progress.stepLabel}</Shimmer>
@@ -231,20 +233,17 @@ const WorkflowActivityText = ({
     <ChainOfThought defaultOpen>
       <ChainOfThoughtHeader
         aria-label={showProgressMeta
-          ? `${progress.stepLabel}，步骤 ${progress.stepIndex}/${progress.stepTotal}${activity ? `，${activity.label}` : ""}`
+          ? `${progress.stepLabel}${stalledActivity ? `，${stalledActivity}` : ""}`
           : progress.stepLabel}
       >
         <span className="flex min-w-0 items-center gap-2">
           <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
-          {showProgressMeta && activity ? <span
+          {showProgressMeta && stalledActivity ? <span
             aria-hidden="true"
-            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${activity.state === "stalled" ? "border-warning/35 bg-warning/10 text-warning-foreground" : "border-success/30 bg-success/10 text-success"}`}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-warning/35 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning-foreground"
           >
-            <span className={`size-1.5 rounded-full ${activity.state === "stalled" ? "bg-warning" : "animate-pulse bg-success motion-reduce:animate-none"}`} />
-            {activity.label}
-          </span> : null}
-          {showProgressMeta ? <span className="shrink-0 font-numeric text-xs tabular-nums text-muted-foreground">
-            {progress.stepIndex}/{progress.stepTotal}
+            <span className="size-1.5 rounded-full bg-warning" />
+            {stalledActivity}
           </span> : null}
         </span>
       </ChainOfThoughtHeader>
@@ -397,6 +396,8 @@ export const ChatConversation = memo(function ChatConversation({
     ? snapshot
     : null;
   const hasCompletedVideo = completedVideoSnapshot !== null;
+  const hasDirectorFallback = snapshot?.status === "failed"
+    && snapshot.failureCode === "DIRECTOR_ACTION_LIMIT_EXCEEDED";
   const completedVideoJobId = completedVideoSnapshot?.videoJob?.jobId ?? null;
   const timelineItems = useMemo(() => insertConversationTimelineMarker(entries, completedVideoSnapshot
     ? {
@@ -405,7 +406,7 @@ export const ChatConversation = memo(function ChatConversation({
         type: "workflow_completion",
       }
     : null), [completedVideoSnapshot, entries]);
-  const visibleWorkflowStepProgress = hasCompletedVideo ? null : workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer
+  const visibleWorkflowStepProgress = hasCompletedVideo || hasDirectorFallback ? null : workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer
     ? null
     : workflowStepProgress;
   const workflowReviewNotice = workflowStepProgress?.stepState === "awaiting_input"
@@ -618,6 +619,7 @@ export const ChatConversation = memo(function ChatConversation({
 
       {temporaryProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={temporaryProgress} showProgressMeta={false} /> : visibleWorkflowStepProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={visibleWorkflowStepProgress} /> : null}
       {workflowErrorMessage ? <AssistantSurface processingSeconds={processingSeconds}><div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-danger-muted p-3 text-destructive" role="alert"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><div><p className="text-xs font-medium">视频工作流操作未完成</p><p className="mt-1 whitespace-pre-line text-xs leading-5 text-destructive/80">{workflowErrorMessage}</p></div>{!snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.canRecover ? <Button className="ml-auto shrink-0" disabled={isWorkflowSubmitting} onClick={onRecoverWorkflow} size="sm" type="button" variant="ghost"><RotateCcwIcon />恢复任务</Button> : !snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.videoJob?.status === "failed" && snapshot.videoJob.providerTaskId ? <Button className="ml-auto shrink-0" disabled={isWorkflowSubmitting} onClick={onRetryWorkflow} size="sm" type="button" variant="ghost"><RotateCcwIcon />重试</Button> : null}</div></AssistantSurface> : null}
+      {!workflowErrorMessage && !snapshot?.pendingRestart && snapshot?.status === "failed" && snapshot.canRecover ? <AssistantSurface processingSeconds={processingSeconds}><Confirmation approval={{ id: `recover:${snapshot.workflowId}` }} state="approval-requested"><ConfirmationRequest><ConfirmationTitle>可以从最近的有效阶段继续，不会重复生成已保存的内容。</ConfirmationTitle></ConfirmationRequest><ConfirmationActions><ConfirmationAction disabled={isWorkflowSubmitting} onClick={onRecoverWorkflow} variant="outline"><RotateCcwIcon />重新尝试</ConfirmationAction></ConfirmationActions></Confirmation></AssistantSurface> : null}
       </div>
     </ConversationContent>
     <ConversationScrollButton aria-label="滚动到最新消息" />

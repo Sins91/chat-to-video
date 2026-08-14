@@ -94,7 +94,7 @@ export const WorkflowStepStatusCard = memo(function WorkflowStepStatusCard({
               {stateLabel[progress.stepState]}
             </span>
             <div className="ml-auto flex items-center gap-2 font-numeric text-[10px] tabular-nums text-muted-foreground">
-              <span>预计 {videoOutputEstimate.duration} · {videoOutputEstimate.resolution}</span>
+              <span>时长 {videoOutputEstimate.duration} · {videoOutputEstimate.resolution}</span>
               {!compact ? <span>{progress.stepIndex} / {progress.stepTotal}</span> : null}
             </div>
           </div>

@@ -354,8 +354,6 @@ export class RenderProcessor {
       message,
     );
     if (!isClaimed) return;
-    await this.repository.updateVideoJob(payload.jobId, { status: "failed", errorMessage: message });
-    await this.repository.updateWorkflow(payload.workflowId, { status: "failed", errorMessage: message });
     await this.event({ eventId: `${payload.jobId}:failed`, workflowId: payload.workflowId, requestId: payload.requestId, type: "job.failed", data: { jobId: payload.jobId, message } });
   }
 
@@ -413,7 +411,13 @@ export class RenderProcessor {
         sizeBytes: video.body.byteLength,
       });
       if (!isCompleted) throw new RenderJobInactiveError(payload.jobId);
-      await this.event({ eventId: `${payload.jobId}:completed`, workflowId: payload.workflowId, requestId: payload.requestId, type: "job.completed", data: { jobId: payload.jobId } });
+      await this.event({
+        eventId: `${payload.jobId}:director-pending`,
+        workflowId: payload.workflowId,
+        requestId: payload.requestId,
+        type: "job.progress",
+        data: { jobId: payload.jobId, status: "succeeded", progress: 100 },
+      });
     } catch (error: unknown) {
       const message = renderFailureMessage(activeStage, error);
       const current = await this.repository.findVideoJob(payload.jobId);

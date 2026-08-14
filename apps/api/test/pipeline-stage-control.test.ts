@@ -5,6 +5,9 @@ import { createPipelineStepDefinition } from "../src/workflows/pipeline-stage-co
 
 const AUDIO_PIPELINE = defineWorkflowPipeline({
   id: "audio-trailer",
+  definitionVersion: 1,
+  initialStageId: "outline",
+  terminalStageIds: ["sources"],
   stages: [
     {
       id: "outline",
@@ -18,6 +21,11 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       intentTopics: ["outline"],
       ownedArtifactKinds: ["outline"],
       allowsAutoAdvanceAfterRevision: false,
+      allowedNextStageIds: ["mix"],
+      inputArtifactKinds: [],
+      outputArtifactKinds: ["outline"],
+      execution: "agent",
+      planningReview: { requiresApproval: true, allowsRevision: false },
       capabilities: { required: [], optional: [], conditional: [] },
     },
     {
@@ -32,6 +40,11 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       intentTopics: ["mix"],
       ownedArtifactKinds: ["mix"],
       allowsAutoAdvanceAfterRevision: false,
+      allowedNextStageIds: ["sources"],
+      inputArtifactKinds: ["outline"],
+      outputArtifactKinds: ["mix"],
+      execution: "agent",
+      planningReview: { requiresApproval: false, allowsRevision: false },
       capabilities: { required: [], optional: [], conditional: [] },
     },
     {
@@ -46,6 +59,11 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       intentTopics: ["sources"],
       ownedArtifactKinds: ["sources"],
       allowsAutoAdvanceAfterRevision: false,
+      allowedNextStageIds: [],
+      inputArtifactKinds: ["mix"],
+      outputArtifactKinds: ["sources"],
+      execution: "agent",
+      planningReview: { requiresApproval: true, allowsRevision: true },
       capabilities: { required: [], optional: [], conditional: [] },
     },
   ],

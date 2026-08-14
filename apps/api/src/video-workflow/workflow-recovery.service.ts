@@ -112,6 +112,10 @@ export class WorkflowRecoveryService implements OnApplicationBootstrap, OnModule
     }
   }
 
+  async recoverDirectorActionLimit(workflowId: string): Promise<boolean> {
+    return await this.repository.recoverDirectorActionLimit(workflowId) !== null;
+  }
+
   private async checkStalledWorkflows(): Promise<void> {
     const cutoff = new Date(Date.now() - STALL_TIMEOUT_MS);
     const workflows = await this.repository.listStaleActiveWorkflows(cutoff);

@@ -180,11 +180,11 @@ export class CinematicAssetProcessor {
       });
       if (batchReady) {
         await this.event({
-          eventId: `${payload.batchId}:approval`,
+          eventId: `${payload.batchId}:director-pending`,
           workflowId: payload.workflowId,
           requestId: payload.requestId,
-          type: "cinematic.approval.required",
-          data: { stage: "assets", version: payload.planVersion },
+          type: "agent.step",
+          data: { status: "drafting", message: "素材执行完成，Director 正在审核执行结果。" },
         });
       }
     } catch (error: unknown) {

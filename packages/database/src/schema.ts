@@ -1,7 +1,13 @@
 import type {
   ActiveWorkflowRunContext,
   CinematicArtifact,
+  WorkflowAgentAction,
+  WorkflowAgentActionStatus,
+  WorkflowApprovalScope,
+  WorkflowApprovalStatus,
   WorkflowCapabilityResolution,
+  WorkflowDirectorCycleStatus,
+  WorkflowProductionDecision,
 } from "@chat-to-video/contracts";
 import type { Storyboard, VideoWorkflowEvent, WorkflowUserIntent } from "@chat-to-video/contracts";
 import {
@@ -30,6 +36,8 @@ export const videoWorkflows = mysqlTable("video_workflows", {
   cinematicStage: varchar("cinematic_stage", { length: 32 }).notNull().default("research"),
   currentStageId: varchar("current_stage_id", { length: 64 }).notNull().default("research"),
   currentVersion: int("current_version").notNull().default(0),
+  stateVersion: int("state_version").notNull().default(0),
+  pipelineDefinitionVersion: int("pipeline_definition_version").notNull().default(2),
   pendingRestartId: varchar("pending_restart_id", { length: 36 }),
   pendingRestartStage: varchar("pending_restart_stage", { length: 64 }),
   pendingRestartText: text("pending_restart_text"),
@@ -178,6 +186,117 @@ export const videoWorkflowEvents = mysqlTable("video_workflow_events", {
   index("video_workflow_events_cursor_idx").on(table.workflowId, table.id),
 ]);
 
+export const workflowArtifactVersions = mysqlTable("workflow_artifact_versions", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  pipelineId: varchar("pipeline_id", { length: 64 }).notNull(),
+  stageId: varchar("stage_id", { length: 64 }).notNull(),
+  artifactKind: varchar("artifact_kind", { length: 64 }).notNull(),
+  version: int("version").notNull(),
+  artifact: json("artifact_json").$type<CinematicArtifact>().notNull(),
+  sourceActionId: varchar("source_action_id", { length: 36 }),
+  revisionRequest: text("revision_request"),
+  supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
+  supersededByRestartId: varchar("superseded_by_restart_id", { length: 36 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("workflow_artifact_version_uq").on(table.workflowId, table.version),
+  index("workflow_artifact_active_stage_idx").on(
+    table.workflowId,
+    table.pipelineId,
+    table.stageId,
+    table.supersededAt,
+    table.version,
+  ),
+]);
+
+export const workflowDirectorCycles = mysqlTable("workflow_director_cycles", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  triggerKey: varchar("trigger_key", { length: 200 }).notNull(),
+  triggerType: varchar("trigger_type", { length: 32 }).notNull(),
+  expectedStateVersion: int("expected_state_version").notNull(),
+  stageId: varchar("stage_id", { length: 64 }).notNull(),
+  runId: varchar("run_id", { length: 200 }),
+  status: varchar("status", { length: 16 }).$type<WorkflowDirectorCycleStatus>().notNull(),
+  claimToken: varchar("claim_token", { length: 36 }),
+  claimUntil: timestamp("claim_until", { mode: "date", fsp: 3 }),
+  agentId: varchar("agent_id", { length: 64 }).notNull().default("workflow-director"),
+  modelId: varchar("model_id", { length: 120 }),
+  skillId: varchar("skill_id", { length: 100 }),
+  skillVersion: varchar("skill_version", { length: 64 }),
+  inputSummaryHash: varchar("input_summary_hash", { length: 64 }),
+  errorCode: varchar("error_code", { length: 64 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("workflow_director_cycle_trigger_uq").on(table.workflowId, table.triggerKey),
+  index("workflow_director_cycle_dispatch_idx").on(table.status, table.claimUntil, table.createdAt),
+  index("workflow_director_cycle_workflow_idx").on(table.workflowId, table.createdAt),
+]);
+
+export const workflowAgentActions = mysqlTable("workflow_agent_actions", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  cycleId: varchar("cycle_id", { length: 36 }).notNull(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  proposalSequence: int("proposal_sequence").notNull(),
+  acceptedKey: varchar("accepted_key", { length: 36 }),
+  expectedStateVersion: int("expected_state_version").notNull(),
+  actionType: varchar("action_type", { length: 64 }).notNull(),
+  action: json("action_json").$type<WorkflowAgentAction>().notNull(),
+  rationale: text("rationale").notNull(),
+  confidence: decimal("confidence", { precision: 5, scale: 4, mode: "number" }).notNull(),
+  status: varchar("status", { length: 16 }).$type<WorkflowAgentActionStatus>().notNull(),
+  policyCode: varchar("policy_code", { length: 64 }),
+  policyReason: text("policy_reason"),
+  redactedResult: json("redacted_result").$type<Record<string, unknown>>(),
+  errorCode: varchar("error_code", { length: 64 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("workflow_agent_action_proposal_uq").on(table.cycleId, table.proposalSequence),
+  uniqueIndex("workflow_agent_action_accepted_uq").on(table.acceptedKey),
+  index("workflow_agent_action_workflow_idx").on(table.workflowId, table.createdAt),
+]);
+
+export const workflowProductionDecisions = mysqlTable("workflow_production_decisions", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  actionId: varchar("action_id", { length: 36 }).notNull(),
+  category: varchar("category", { length: 32 }).notNull(),
+  subject: varchar("subject", { length: 120 }).notNull(),
+  decision: json("decision_json").$type<WorkflowProductionDecision>().notNull(),
+  approvalId: varchar("approval_id", { length: 36 }),
+  supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("workflow_production_decision_current_idx").on(
+    table.workflowId,
+    table.category,
+    table.subject,
+    table.supersededAt,
+  ),
+]);
+
+export const workflowApprovals = mysqlTable("workflow_approvals", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  stageId: varchar("stage_id", { length: 64 }).notNull(),
+  scope: varchar("scope", { length: 32 }).$type<WorkflowApprovalScope>().notNull(),
+  targetId: varchar("target_id", { length: 100 }).notNull(),
+  targetVersion: int("target_version"),
+  status: varchar("status", { length: 16 }).$type<WorkflowApprovalStatus>().notNull(),
+  activeKey: varchar("active_key", { length: 255 }),
+  requestActionId: varchar("request_action_id", { length: 36 }).notNull(),
+  summary: text("summary").notNull(),
+  userMessageId: varchar("user_message_id", { length: 100 }),
+  requestedAt: timestamp("requested_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  decidedAt: timestamp("decided_at", { mode: "date", fsp: 3 }),
+}, (table) => [
+  uniqueIndex("workflow_approval_pending_uq").on(table.activeKey),
+  index("workflow_approval_workflow_idx").on(table.workflowId, table.requestedAt),
+]);
+
 export const cinematicAssetBatches = mysqlTable("cinematic_asset_batches", {
   id: varchar("id", { length: 100 }).primaryKey(),
   workflowId: varchar("workflow_id", { length: 36 }).notNull(),
@@ -267,6 +386,11 @@ export type ConversationRow = typeof conversations.$inferSelect;
 export type ConversationMessageRow = typeof conversationMessages.$inferSelect;
 export type StoryboardVersionRow = typeof storyboardVersions.$inferSelect;
 export type CinematicArtifactVersionRow = typeof cinematicArtifactVersions.$inferSelect;
+export type WorkflowArtifactVersionRow = typeof workflowArtifactVersions.$inferSelect;
+export type WorkflowDirectorCycleRow = typeof workflowDirectorCycles.$inferSelect;
+export type WorkflowAgentActionRow = typeof workflowAgentActions.$inferSelect;
+export type WorkflowProductionDecisionRow = typeof workflowProductionDecisions.$inferSelect;
+export type WorkflowApprovalRow = typeof workflowApprovals.$inferSelect;
 export type CinematicAssetBatchRow = typeof cinematicAssetBatches.$inferSelect;
 export type CinematicAssetJobRow = typeof cinematicAssetJobs.$inferSelect;
 export type VideoJobRow = typeof videoJobs.$inferSelect;

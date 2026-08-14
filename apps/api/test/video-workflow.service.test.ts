@@ -25,6 +25,7 @@ const waitingWorkflow = {
   videoModel: "doubao-seedance-2.0",
   status: "awaiting_input",
   currentVersion: 1,
+  stateVersion: 1,
   errorMessage: null,
   createdAt: new Date("2026-08-09T00:00:00.000Z"),
   updatedAt: new Date("2026-08-09T00:00:00.000Z"),
@@ -54,6 +55,7 @@ describe("VideoWorkflowService interactions", () => {
     findWorkflowScope: vi.fn(),
     saveWorkflowUserDecision: vi.fn(),
     markWorkflowUserDecisionApplied: vi.fn(),
+    recoverDirectorActionLimit: vi.fn(),
   };
   const storage = { createDownloadUrl: vi.fn() };
   const conversations = { findActiveConversation: vi.fn(), appendMessage: vi.fn(), findWorkflow: vi.fn(), createWithUserMessage: vi.fn(), listModelMessages: vi.fn() };
@@ -61,7 +63,7 @@ describe("VideoWorkflowService interactions", () => {
   const runtime = { resume: vi.fn(), restart: vi.fn(), start: vi.fn() };
   const events = { append: vi.fn() };
   const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn() };
-  const recovery = { recoverAgentRun: vi.fn() };
+  const recovery = { recoverAgentRun: vi.fn(), recoverDirectorActionLimit: vi.fn() };
   const intentResolver = { resolve: vi.fn() };
   const service = new VideoWorkflowService(
     repository as unknown as VideoWorkflowRepository,
@@ -83,7 +85,16 @@ describe("VideoWorkflowService interactions", () => {
     repository.markWorkflowUserDecisionApplied.mockResolvedValue(undefined);
     repository.findPreviousWorkflow.mockResolvedValue(null);
     conversations.findActiveConversation.mockResolvedValue({ id: waitingWorkflow.conversationId });
-    repository.claimInteraction.mockResolvedValue(true);
+    repository.claimInteraction.mockResolvedValue({
+      stateVersion: 2,
+      approvals: [{
+        id: "00000000-0000-4000-8000-000000000020",
+        scope: "artifact",
+        stageId: "proposal",
+        targetId: `${waitingWorkflow.id}:1`,
+        targetVersion: 1,
+      }],
+    });
     repository.requestRestart.mockResolvedValue(true);
     repository.findLatestActiveStageCheckpoint.mockResolvedValue({ version: 1 });
     repository.cancelRestart.mockResolvedValue(true);
@@ -102,6 +113,7 @@ describe("VideoWorkflowService interactions", () => {
     operations.retryVideo.mockResolvedValue(undefined);
     operations.getRenderQueueAhead.mockResolvedValue(null);
     recovery.recoverAgentRun.mockResolvedValue(true);
+    recovery.recoverDirectorActionLimit.mockResolvedValue(true);
     intentResolver.resolve.mockResolvedValue({
       intent: { type: "approve", stageId: "proposal" },
       source: "rule",
@@ -235,7 +247,7 @@ describe("VideoWorkflowService interactions", () => {
       accepted: true,
       intent: "approve",
     });
-    expect(repository.claimInteraction).toHaveBeenCalledWith(waitingWorkflow.id, 1);
+    expect(repository.claimInteraction).toHaveBeenCalledWith(waitingWorkflow.id, 1, true);
     expect(runtime.resume).toHaveBeenCalledWith(
       "run-1",
       { type: "approve" },
@@ -243,6 +255,17 @@ describe("VideoWorkflowService interactions", () => {
         workflowId: waitingWorkflow.id,
         stage: "proposal",
         version: 1,
+      },
+      {
+        type: "approval_claimed",
+        stateVersion: 2,
+        approvals: [{
+          approvalId: "00000000-0000-4000-8000-000000000020",
+          scope: "artifact",
+          stageId: "proposal",
+          targetId: `${waitingWorkflow.id}:1`,
+          targetVersion: 1,
+        }],
       },
     );
   });
@@ -257,7 +280,19 @@ describe("VideoWorkflowService interactions", () => {
       "run-1",
       { type: "approve" },
       { workflowId: waitingWorkflow.id, stage: "proposal", version: 1 },
+      {
+        type: "approval_claimed",
+        stateVersion: 2,
+        approvals: [{
+          approvalId: "00000000-0000-4000-8000-000000000020",
+          scope: "artifact",
+          stageId: "proposal",
+          targetId: `${waitingWorkflow.id}:1`,
+          targetVersion: 1,
+        }],
+      },
     );
+    expect(repository.claimInteraction).toHaveBeenCalledWith(waitingWorkflow.id, 1, true);
     expect(conversations.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
       messageId: "approval-message-1",
       content: "我看行",
@@ -282,6 +317,42 @@ describe("VideoWorkflowService interactions", () => {
     });
     expect(repository.saveWorkflowUserDecision).toHaveBeenCalledBefore(repository.claimInteraction);
     expect(repository.markWorkflowUserDecisionApplied).toHaveBeenCalledWith("intent-message-1");
+  });
+
+  it("preserves an explicit proposal selection-and-advance instruction through resume", async () => {
+    repository.findWorkflowScope.mockResolvedValue({
+      workflow: waitingWorkflow,
+      tenantId: "demo",
+      projectId: "demo",
+    });
+    repository.findLatestCinematicArtifact.mockResolvedValue(null);
+    intentResolver.resolve.mockResolvedValue({
+      intent: {
+        type: "approve_with_changes",
+        stageId: "proposal",
+        feedback: "选择第二个方案，直接进入下一步",
+        advanceAfterChange: true,
+      },
+      source: "rule",
+      resolverVersion: "v1",
+      requiresConfirmation: false,
+    });
+
+    await expect(service.resolveUserIntent(waitingWorkflow.id, {
+      messageId: "selection-and-advance-1",
+      text: "选择第二个方案，直接进入下一步",
+    })).resolves.toMatchObject({ applied: true });
+    expect(runtime.resume).toHaveBeenCalledWith(
+      "run-1",
+      {
+        type: "message",
+        messageId: "selection-and-advance-1",
+        text: "选择第二个方案，直接进入下一步",
+        advanceAfterChange: true,
+      },
+      { workflowId: waitingWorkflow.id, stage: "proposal", version: 1 },
+      null,
+    );
   });
 
   it("persists an unrecognized reply and clarification without advancing the workflow", async () => {
@@ -527,6 +598,17 @@ describe("VideoWorkflowService interactions", () => {
         stage: "proposal",
         version: 1,
       },
+      {
+        type: "approval_claimed",
+        stateVersion: 2,
+        approvals: [{
+          approvalId: "00000000-0000-4000-8000-000000000020",
+          scope: "artifact",
+          stageId: "proposal",
+          targetId: `${waitingWorkflow.id}:1`,
+          targetVersion: 1,
+        }],
+      },
     );
   });
 
@@ -587,7 +669,7 @@ describe("VideoWorkflowService interactions", () => {
   });
 
   it("rejects a concurrent interaction that lost the database claim", async () => {
-    repository.claimInteraction.mockResolvedValue(false);
+    repository.claimInteraction.mockResolvedValue(null);
     await expect(service.interact(waitingWorkflow.id, { type: "approve" }))
       .rejects.toBeInstanceOf(ConflictException);
     expect(runtime.resume).not.toHaveBeenCalled();
@@ -605,6 +687,22 @@ describe("VideoWorkflowService interactions", () => {
       workflowId: waitingWorkflow.id,
     });
     expect(recovery.recoverAgentRun).toHaveBeenCalledWith(waitingWorkflow.id, true);
+    expect(operations.retryVideo).not.toHaveBeenCalled();
+  });
+
+  it("recovers an exhausted Director run through a new continuation cycle", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      status: "failed",
+      failureCode: "DIRECTOR_ACTION_LIMIT_EXCEEDED",
+    });
+
+    await expect(service.recover(waitingWorkflow.id)).resolves.toEqual({
+      accepted: true,
+      workflowId: waitingWorkflow.id,
+    });
+    expect(recovery.recoverDirectorActionLimit).toHaveBeenCalledWith(waitingWorkflow.id);
+    expect(recovery.recoverAgentRun).not.toHaveBeenCalled();
     expect(operations.retryVideo).not.toHaveBeenCalled();
   });
 

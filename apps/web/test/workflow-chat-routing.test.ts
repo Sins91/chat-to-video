@@ -86,9 +86,12 @@ describe("workflow and chat routing", () => {
   it("parses stages from a newly registered pipeline without parser changes", () => {
     const pipeline = defineWorkflowPipeline({
       id: "audio-story",
+      definitionVersion: 1,
+      initialStageId: "brief",
+      terminalStageIds: ["voice"],
       stages: [
-        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
-        { id: "voice", label: "配音", aliases: ["配音", "voice"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["voice"], inputArtifactKinds: [], outputArtifactKinds: ["brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] } },
+        { id: "voice", label: "配音", aliases: ["配音", "voice"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["brief"], outputArtifactKinds: ["voice"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] } },
       ],
     });
     expect(parseWorkflowRestartCommand("从配音重新开始", pipeline))

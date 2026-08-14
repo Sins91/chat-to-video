@@ -58,6 +58,24 @@ import { VideoWorkflowOperations } from "./video-workflow.operations.js";
 import { buildVideoWorkflowSnapshot } from "./video-workflow-snapshot.js";
 import { videoWorkflowStep } from "./workflow-step.js";
 import { UserIntentResolverService } from "./user-intent-resolver.service.js";
+import { isCinematicCreationEnabled } from "./video-workflow.config.js";
+import { WorkflowDirectorTriggerSchema } from "./workflow-director-trigger.js";
+
+const approvalTrigger = (
+  claim: NonNullable<Awaited<ReturnType<VideoWorkflowRepository["claimInteraction"]>>>,
+) => claim.approvals.length > 0
+  ? WorkflowDirectorTriggerSchema.parse({
+      type: "approval_claimed",
+      stateVersion: claim.stateVersion,
+      approvals: claim.approvals.map((approval) => ({
+        approvalId: approval.id,
+        scope: approval.scope,
+        stageId: approval.stageId,
+        targetId: approval.targetId,
+        targetVersion: approval.targetVersion,
+      })),
+    })
+  : null;
 
 const APPROVAL_PHRASES = new Set([
   "继续",
@@ -205,9 +223,17 @@ export class VideoWorkflowService {
       await this.interact(workflowId, { type: "message", messageId, text: rawText });
       return true;
     }
-    if (intent.type === "revise_current" || intent.type === "approve_with_changes") {
-      // A revision produces a new current-stage version and suspends again; it never auto-approves that result.
+    if (intent.type === "revise_current") {
       await this.interact(workflowId, { type: "message", messageId, text: intent.feedback });
+      return true;
+    }
+    if (intent.type === "approve_with_changes") {
+      await this.interact(workflowId, {
+        type: "message",
+        messageId,
+        text: intent.feedback,
+        advanceAfterChange: intent.advanceAfterChange,
+      });
       return true;
     }
     if (intent.type === "restart_from") {
@@ -246,6 +272,12 @@ export class VideoWorkflowService {
   }
 
   async create(input: CreateVideoWorkflowRequest): Promise<CreateVideoWorkflowResponse> {
+    if (!isCinematicCreationEnabled()) {
+      throw new ServiceUnavailableException({
+        code: "CINEMATIC_CREATION_MAINTENANCE",
+        message: "Cinematic workflow creation is temporarily disabled for a workflow runtime cutover.",
+      });
+    }
     const conversationId = input.conversationId ?? randomUUID();
     let previousMessages: ChatAgentMessage[] = [];
     if (input.conversationId) {
@@ -336,6 +368,63 @@ export class VideoWorkflowService {
     }, workflowId);
   }
 
+  private async assertScopedAuditAccess(
+    workflowId: string,
+    tenantId: string,
+    projectId: string,
+  ): Promise<void> {
+    if (!tenantId.trim() || !projectId.trim() ||
+        !await this.repository.findScopedWorkflow(workflowId, tenantId, projectId)) {
+      throw new NotFoundException({
+        code: "VIDEO_WORKFLOW_NOT_FOUND",
+        message: "Video workflow was not found in the requested scope.",
+      });
+    }
+  }
+
+  async getDirectorCycles(workflowId: string, tenantId: string, projectId: string) {
+    await this.assertScopedAuditAccess(workflowId, tenantId, projectId);
+    const [cycles, actions] = await Promise.all([
+      this.repository.listDirectorCycles(workflowId),
+      this.repository.listDirectorActions(workflowId),
+    ]);
+    return {
+      items: cycles.map((cycle) => ({
+        cycleId: cycle.id,
+        triggerType: cycle.triggerType,
+        stageId: cycle.stageId,
+        status: cycle.status,
+        expectedStateVersion: cycle.expectedStateVersion,
+        createdAt: cycle.createdAt.toISOString(),
+        actions: actions.filter((action) => action.cycleId === cycle.id).map((action) => ({
+          actionId: action.id,
+          type: action.actionType,
+          status: action.status,
+          confidence: action.confidence,
+          policyCode: action.policyCode,
+          policyReason: action.policyReason,
+        })),
+      })),
+      nextCursor: null,
+    };
+  }
+
+  async getProductionDecisions(workflowId: string, tenantId: string, projectId: string) {
+    await this.assertScopedAuditAccess(workflowId, tenantId, projectId);
+    const decisions = await this.repository.listProductionDecisions(workflowId);
+    return {
+      items: decisions.map((row) => ({
+        id: row.id,
+        category: row.category,
+        subject: row.subject,
+        decision: row.decision,
+        isSuperseded: row.supersededAt !== null,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      nextCursor: null,
+    };
+  }
+
   async updateModel(
     workflowId: string,
     videoModel: VideoModel,
@@ -385,6 +474,12 @@ export class VideoWorkflowService {
       }, workflowId);
       return RecoverVideoWorkflowResponseSchema.parse({ accepted: retry.accepted, workflowId });
     }
+    if (workflow.failureCode === "DIRECTOR_ACTION_LIMIT_EXCEEDED") {
+      if (!await this.recovery.recoverDirectorActionLimit(workflowId)) {
+        throw new ConflictException({ code: "VIDEO_WORKFLOW_NOT_RECOVERABLE", message: "The Director workflow could not be recovered." });
+      }
+      return RecoverVideoWorkflowResponseSchema.parse({ accepted: true, workflowId });
+    }
     if (!await this.recovery.recoverAgentRun(workflowId, true)) {
       throw new ConflictException({ code: "VIDEO_WORKFLOW_NOT_RECOVERABLE", message: "The stalled workflow could not be recovered." });
     }
@@ -424,9 +519,10 @@ export class VideoWorkflowService {
             message: "Approve the generated assets, or restart the assets stage with revision instructions.",
           });
         }
-        const claimed = await this.repository.claimCinematicAssetBatchApproval(
+        const claimed = await this.repository.claimInteraction(
           workflowId,
           workflow.currentVersion,
+          true,
         );
         if (!claimed) {
           throw new ConflictException({
@@ -435,17 +531,12 @@ export class VideoWorkflowService {
           });
         }
         try {
-          await this.mastraRuntime.continueAfterAssetApproval({
+          if (!workflow.runId) throw new MastraRunNotResumableError("missing");
+          await this.mastraRuntime.resume(workflow.runId, interaction, {
             workflowId: workflow.id,
-            requestId: workflow.requestId,
-            initialPrompt: workflow.initialPrompt,
-            videoModel: VideoModelSchema.parse(workflow.videoModel),
-            durationSeconds: workflow.durationSeconds,
-            continuation: {
-              kind: "assets_approved",
-              baseVersion: workflow.currentVersion,
-            },
-          }, (runId) => this.repository.setRunId(workflow.id, runId));
+            stage: "assets",
+            version: workflow.currentVersion,
+          }, approvalTrigger(claimed));
         } catch (error: unknown) {
           await this.recordRuntimeFailure(workflow.id, workflow.requestId, error);
           throw new ServiceUnavailableException({
@@ -494,18 +585,22 @@ export class VideoWorkflowService {
         });
       }
     }
-    const isClaimed = await this.repository.claimInteraction(workflowId, workflow.currentVersion);
+    const intent = interaction.type === "approve"
+      ? "approve"
+      : interaction.type === "message"
+        ? messageIntent(interaction.text)
+        : "revise";
+    const isClaimed = await this.repository.claimInteraction(
+      workflowId,
+      workflow.currentVersion,
+      intent === "approve",
+    );
     if (!isClaimed) {
       throw new ConflictException({
         code: "VIDEO_WORKFLOW_NOT_WAITING",
         message: "The workflow review was already claimed or is no longer waiting.",
       });
     }
-    const intent = interaction.type === "approve"
-      ? "approve"
-      : interaction.type === "message"
-        ? messageIntent(interaction.text)
-        : "revise";
     const payload: VideoWorkflowInteraction = intent === "approve" ? { type: "approve" } : interaction;
     if (interaction.type !== "approve") {
       await this.conversations.appendMessage({
@@ -528,6 +623,7 @@ export class VideoWorkflowService {
           stage: CinematicGenerativeStageSchema.parse(workflow.currentStageId),
           version: workflow.currentVersion,
         },
+        intent === "approve" ? approvalTrigger(isClaimed) : null,
       );
     } catch (error: unknown) {
       await this.recordRuntimeFailure(workflow.id, workflow.requestId, error);
