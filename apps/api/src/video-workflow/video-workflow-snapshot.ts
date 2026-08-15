@@ -12,12 +12,23 @@ import type { ObjectStorage } from "@chat-to-video/storage";
 import { NotFoundException } from "@nestjs/common";
 
 import type { VideoWorkflowOperations } from "./video-workflow.operations.js";
+import { buildGeneratedVideoPromptTrace } from "./video-prompt-trace.js";
 
 type SnapshotDependencies = {
   operations: Pick<VideoWorkflowOperations, "getRenderQueueAhead">;
   repository: VideoWorkflowRepository;
   storage: Pick<ObjectStorage, "createDownloadUrl">;
 };
+
+export const canChangeWorkflowVideoModel = (
+  workflow: {
+    status: string;
+    currentStageId: string;
+  },
+  hasPendingControl: boolean,
+): boolean => workflow.status === "awaiting_input" &&
+  workflow.currentStageId === "proposal" &&
+  !hasPendingControl;
 
 export const buildVideoWorkflowSnapshot = async (
   dependencies: SnapshotDependencies,
@@ -34,7 +45,7 @@ export const buildVideoWorkflowSnapshot = async (
   const currentGenerativeStage = CinematicGenerativeStageSchema.safeParse(
     workflow.currentStageId,
   );
-  const [storyboardRow, job, currentArtifactRow, scriptArtifactRow, assetBatchRow, pendingControlRow] = await Promise.all([
+  const [storyboardRow, job, currentArtifactRow, scriptArtifactRow, artifactRows, assetBatchRow, pendingControlRow] = await Promise.all([
     repository.findLatestStoryboard(workflowId),
     repository.findWorkflowVideoJob(workflowId),
     repository.findLatestCinematicArtifact(
@@ -42,6 +53,7 @@ export const buildVideoWorkflowSnapshot = async (
       currentGenerativeStage.success ? currentGenerativeStage.data : undefined,
     ),
     repository.findLatestCinematicArtifact(workflowId, "script"),
+    repository.listCinematicArtifacts(workflowId),
     repository.findLatestCinematicAssetBatch(workflowId),
     repository.findPendingWorkflowControl({ workflowId }),
   ]);
@@ -112,8 +124,18 @@ export const buildVideoWorkflowSnapshot = async (
       : null,
     requestId: workflow.requestId,
     videoModel: workflow.videoModel,
+    canChangeVideoModel: canChangeWorkflowVideoModel(
+      workflow,
+      pendingControlRow !== null,
+    ),
     durationSeconds: workflow.durationSeconds,
     initialPrompt: workflow.initialPrompt,
+    promptTrace: buildGeneratedVideoPromptTrace({
+      initialPrompt: workflow.initialPrompt,
+      maxVersion: job?.storyboardVersion ?? workflow.currentVersion,
+      artifacts: artifactRows,
+      storyboard: storyboardRow,
+    }),
     status: workflow.status,
     currentVersion: workflow.currentVersion,
     storyboard: storyboardRow

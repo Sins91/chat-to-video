@@ -4,6 +4,7 @@ import {
   CinematicStageSchema,
 } from "./cinematic.js";
 import { WorkflowPipelineIdSchema, WorkflowStageIdSchema } from "./workflow-pipeline.js";
+import { GeneratedVideoPromptTraceSchema } from "./generated-video.js";
 import { WorkflowCapabilityResolutionSchema } from "./workflow-capability.js";
 import { PendingWorkflowControlSchema } from "./workflow-control.js";
 import { CinematicAssetBatchSchema } from "./cinematic-assets.js";
@@ -254,8 +255,10 @@ export const VideoWorkflowSnapshotSchema = z
     assetBatch: CinematicAssetBatchSchema.nullable().default(null),
     requestId: z.string().uuid(),
     videoModel: VideoModelSchema,
+    canChangeVideoModel: z.boolean().default(false),
     durationSeconds: CinematicRenderPlanSchema.shape.durationSeconds.default(10),
     initialPrompt: z.string().trim().min(1).max(8_000),
+    promptTrace: GeneratedVideoPromptTraceSchema.default([]),
     status: VideoWorkflowStatusSchema,
     currentVersion: z.number().int().nonnegative(),
     storyboard: StoryboardVersionSchema.nullable(),

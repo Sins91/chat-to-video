@@ -109,28 +109,29 @@ const splitRestartConfirmationMessage = (text: string): { notice?: string; text:
     : { text };
 };
 
-const TextMessage = ({ copyFeedback, id, notice, onCopy, processingSeconds = 0, role, text }: {
+const TextMessage = memo(function TextMessage({ copyFeedback, id, isAnimating = false, notice, onCopy, processingSeconds = 0, role, text }: {
   copyFeedback: CopyFeedback;
   id: string;
+  isAnimating?: boolean;
   notice?: string;
   onCopy: (id: string, text: string) => void;
   processingSeconds?: number;
   role: UIMessage["role"];
   text: string;
-}) => {
+}) {
   const isCopied = copyFeedback?.id === id && copyFeedback.state === "copied";
   const hasCopyFailed = copyFeedback?.id === id && copyFeedback.state === "failed";
   const copyLabel = isCopied ? "已复制" : hasCopyFailed ? "复制失败" : "复制";
   const copyText = notice ? `${text}\n\n${notice}` : text;
   return <Message className={role === "assistant" ? "max-w-full" : undefined} from={role}>
-    <MessageContent className={role === "assistant" ? "w-full" : undefined}>{role === "assistant" ? <><ProcessingTimeHeader seconds={processingSeconds} /><MessageResponse className="cursor-text">{text}</MessageResponse>{notice ? <WorkflowReviewNotice text={notice} /> : null}</> : <span className="cursor-text whitespace-pre-wrap">{text}</span>}</MessageContent>
+    <MessageContent className={role === "assistant" ? "w-full" : undefined}>{role === "assistant" ? <><ProcessingTimeHeader seconds={processingSeconds} /><MessageResponse className="cursor-text" isAnimating={isAnimating}>{text}</MessageResponse>{notice ? <WorkflowReviewNotice text={notice} /> : null}</> : <span className="cursor-text whitespace-pre-wrap">{text}</span>}</MessageContent>
     {text ? <MessageActions className={`opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${role === "user" ? "self-end" : ""} ${copyFeedback?.id === id ? "opacity-100" : ""}`}>
       <MessageAction aria-live="polite" label={copyLabel} onClick={() => onCopy(id, copyText)} tooltip={copyLabel}>
         {isCopied ? <CheckIcon className="size-3.5 text-success" /> : <CopyIcon className="size-3.5" />}
       </MessageAction>
     </MessageActions> : null}
   </Message>;
-};
+});
 
 const AssistantSurface = ({ children, processingSeconds = 0 }: { children: ReactNode; processingSeconds?: number }) =>
   <Message className="max-w-full" from="assistant"><MessageContent className="w-full"><ProcessingTimeHeader seconds={processingSeconds} />{children}</MessageContent></Message>;
@@ -303,6 +304,15 @@ const automaticStageNotice = (
     : undefined;
 };
 
+const cinematicAssetBatchSummaryText = (
+  entry: Extract<ConversationEntry, { type: "cinematic_asset_batch" }>,
+): string => {
+  const superseded = entry.isSuperseded
+    ? "**历史内容：已由重新开始替代**\n\n"
+    : "";
+  return `${superseded}**阶段完成：素材生成**\n\n所有素材均已生成并加载到右侧预览区，共 ${entry.assetCount} 项。`;
+};
+
 const completedVideoSummary = (snapshot: VideoWorkflowSnapshot): string => {
   const model = getVideoModelPresentation(snapshot.videoModel);
   const output = getVideoOutputEstimate(snapshot.durationSeconds);
@@ -312,6 +322,119 @@ const completedVideoSummary = (snapshot: VideoWorkflowSnapshot): string => {
   const sceneSummary = sceneCount === null ? "" : `，共 ${sceneCount} 个镜头`;
   return `**视频生成完成**\n\n本次成片已完成${sceneSummary}，时长 ${output.duration}，分辨率 ${output.resolution}，生成模型 ${model.name}。\n\n成片已同步到右侧预览区，可直接播放并检查最终效果。`;
 };
+
+const PersistedConversationTimeline = memo(function PersistedConversationTimeline({
+  copyFeedback,
+  entries,
+  onCopy,
+  snapshot,
+  workflowReviewNotice,
+}: {
+  copyFeedback: CopyFeedback;
+  entries: ConversationEntry[];
+  onCopy: (id: string, text: string) => void;
+  snapshot: VideoWorkflowSnapshot | null;
+  workflowReviewNotice: string;
+}) {
+  const completedVideoSnapshot = snapshot?.status === "succeeded" && snapshot.videoJob?.status === "succeeded"
+    ? snapshot
+    : null;
+  const completedVideoJobId = completedVideoSnapshot?.videoJob?.jobId ?? null;
+  const reviewableAssetBatch = snapshot?.status === "awaiting_input" &&
+    snapshot.assetBatch?.status === "awaiting_approval" &&
+    snapshot.assetBatch.assets.length > 0 &&
+    snapshot.assetBatch.assets.every((asset) =>
+      asset.status === "succeeded" && asset.reviewUrl !== null
+    )
+    ? snapshot.assetBatch
+    : null;
+  const timelineItems = useMemo(() => insertConversationTimelineMarker(entries, completedVideoSnapshot
+    ? {
+        createdAt: completedVideoSnapshot.updatedAt,
+        id: `workflow-completed:${completedVideoSnapshot.workflowId}:${completedVideoSnapshot.currentVersion}`,
+        type: "workflow_completion",
+      }
+    : null), [completedVideoSnapshot, entries]);
+  const persistedProcessingDurations = useMemo(() => {
+    const durations = new Map<string, number>();
+    let userMessageCreatedAtMs: number | null = null;
+    for (const entry of entries) {
+      const createdAtMs = Date.parse(entry.createdAt);
+      if (entry.type === "text" && entry.role === "user") {
+        userMessageCreatedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : null;
+        continue;
+      }
+      if (entry.type !== "text" || entry.role === "assistant") {
+        const durationSeconds = userMessageCreatedAtMs !== null && Number.isFinite(createdAtMs)
+          ? Math.max(0, Math.floor((createdAtMs - userMessageCreatedAtMs) / 1_000))
+          : 0;
+        durations.set(entry.id, durationSeconds);
+      }
+    }
+    return durations;
+  }, [entries]);
+  const completedVideoProcessingSeconds = useMemo(() => {
+    if (!completedVideoSnapshot) return 0;
+    const completedAtMs = Date.parse(completedVideoSnapshot.updatedAt);
+    if (!Number.isFinite(completedAtMs)) return 0;
+    let latestUserMessageAtMs: number | null = null;
+    for (const entry of entries) {
+      if (entry.type !== "text" || entry.role !== "user") continue;
+      const createdAtMs = Date.parse(entry.createdAt);
+      if (Number.isFinite(createdAtMs) && createdAtMs <= completedAtMs) {
+        latestUserMessageAtMs = createdAtMs;
+      }
+    }
+    return latestUserMessageAtMs === null
+      ? 0
+      : Math.max(0, Math.floor((completedAtMs - latestUserMessageAtMs) / 1_000));
+  }, [completedVideoSnapshot, entries]);
+
+  return <>
+    {timelineItems.map((item) => {
+      if (item.type === "workflow_completion") {
+        if (!completedVideoSnapshot) return null;
+        return <div className="w-full scroll-mt-6" data-chat-video-id={completedVideoJobId ?? undefined} key={item.id}>
+          <TextMessage copyFeedback={copyFeedback} id={item.id} onCopy={onCopy} processingSeconds={completedVideoProcessingSeconds} role="assistant" text={completedVideoSummary(completedVideoSnapshot)} />
+        </div>;
+      }
+      const { entry } = item;
+      if (entry.type === "text") {
+        const message = entry.role === "assistant"
+          ? splitRestartConfirmationMessage(entry.content)
+          : { text: entry.content };
+        return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={message.notice} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role={entry.role} text={message.text} />;
+      }
+      if (entry.type === "cinematic_artifact") {
+        const canReview = reviewableAssetBatch === null &&
+          snapshot?.status === "awaiting_input" &&
+          entry.workflowId === snapshot.workflowId &&
+          snapshot.currentArtifact?.version === entry.artifact.version &&
+          snapshot.currentArtifact.artifact.stage === entry.artifact.artifact.stage;
+        const notice = canReview ? workflowReviewNotice : automaticStageNotice(entry.artifact);
+        return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={notice} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={cinematicSummaryText(entry.artifact, false)} />;
+      }
+      if (entry.type === "cinematic_asset_batch") {
+        const canReview = snapshot?.status === "awaiting_input" &&
+          snapshot.assetBatch?.status === "awaiting_approval" &&
+          snapshot.assetBatch.batchId === entry.batchId;
+        const notice = canReview
+          ? "确认后请回复“确认”；如需调整，请直接说明需要修改或重新生成的素材。"
+          : undefined;
+        return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={notice} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={cinematicAssetBatchSummaryText(entry)} />;
+      }
+      if (entry.type === "archived_video") {
+        return <div className="w-full scroll-mt-6" data-chat-video-id={entry.jobId} key={entry.id}>
+          <ArchivedVideoMessage entry={entry} processingSeconds={persistedProcessingDurations.get(entry.id)} title={entry.videoTitle ?? "视频成片"} />
+        </div>;
+      }
+      const canReview = snapshot?.status === "awaiting_input" &&
+        entry.workflowId === snapshot.workflowId &&
+        snapshot.storyboard?.version === entry.storyboard.version;
+      return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={canReview ? workflowReviewNotice : undefined} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={storyboardSummaryText(entry.storyboard, false)} />;
+    })}
+  </>;
+});
 
 export const ChatConversation = memo(function ChatConversation({
   conversationId,
@@ -369,24 +492,6 @@ export const ChatConversation = memo(function ChatConversation({
   const processingKey = snapshot?.requestId
     ? `workflow:${snapshot.requestId}`
     : `chat:${conversationId ?? "new"}:${lastLiveUserId ?? "pending"}`;
-  const persistedProcessingDurations = useMemo(() => {
-    const durations = new Map<string, number>();
-    let userMessageCreatedAtMs: number | null = null;
-    for (const entry of entries) {
-      const createdAtMs = Date.parse(entry.createdAt);
-      if (entry.type === "text" && entry.role === "user") {
-        userMessageCreatedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : null;
-        continue;
-      }
-      if (entry.type !== "text" || entry.role === "assistant") {
-        const durationSeconds = userMessageCreatedAtMs !== null && Number.isFinite(createdAtMs)
-          ? Math.max(0, Math.floor((createdAtMs - userMessageCreatedAtMs) / 1_000))
-          : 0;
-        durations.set(entry.id, durationSeconds);
-      }
-    }
-    return durations;
-  }, [entries]);
   const reviewableAssetBatch = snapshot?.status === "awaiting_input" &&
     snapshot.assetBatch?.status === "awaiting_approval" &&
     snapshot.assetBatch.assets.length > 0 &&
@@ -410,13 +515,6 @@ export const ChatConversation = memo(function ChatConversation({
     : null;
   const hasCompletedVideo = completedVideoSnapshot !== null;
   const completedVideoJobId = completedVideoSnapshot?.videoJob?.jobId ?? null;
-  const timelineItems = useMemo(() => insertConversationTimelineMarker(entries, completedVideoSnapshot
-    ? {
-        createdAt: completedVideoSnapshot.updatedAt,
-        id: `workflow-completed:${completedVideoSnapshot.workflowId}:${completedVideoSnapshot.currentVersion}`,
-        type: "workflow_completion",
-      }
-    : null), [completedVideoSnapshot, entries]);
   const visibleWorkflowStepProgress = hasCompletedVideo || snapshot?.status === "cancelled" ? null : workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer
     ? null
     : workflowStepProgress;
@@ -587,7 +685,7 @@ export const ChatConversation = memo(function ChatConversation({
     );
   }, []);
 
-  return <Conversation className="min-h-0 cursor-auto bg-background" contextRef={conversationContextRef} initial={hasFocusedVideo ? false : "instant"} key={viewportKey} resize="smooth">
+  return <Conversation className="min-h-0 cursor-auto bg-background" contextRef={conversationContextRef} initial={hasFocusedVideo ? false : "instant"} key={viewportKey} resize={status === "streaming" ? "instant" : "smooth"}>
     <ConversationContent className="mx-auto min-h-full w-full max-w-3xl gap-6 px-4 py-8 sm:px-6">
       <div className="contents" ref={messageListRef}>
       {isLoadingHistory ? <div className="self-center py-12 text-[13px] text-muted-foreground" role="status"><Shimmer>正在恢复历史对话</Shimmer></div> : null}
@@ -598,49 +696,13 @@ export const ChatConversation = memo(function ChatConversation({
         </div>
       </ConversationEmptyState> : null}
 
-      {timelineItems.map((item) => {
-        if (item.type === "workflow_completion") {
-          if (!completedVideoSnapshot) return null;
-          return <div className="w-full scroll-mt-6" data-chat-video-id={completedVideoJobId ?? undefined} key={item.id}>
-            <TextMessage copyFeedback={copyFeedback} id={item.id} onCopy={handleCopy} processingSeconds={processingSeconds} role="assistant" text={completedVideoSummary(completedVideoSnapshot)} />
-          </div>;
-        }
-        const { entry } = item;
-        if (entry.type === "text") {
-          const message = entry.role === "assistant"
-            ? splitRestartConfirmationMessage(entry.content)
-            : { text: entry.content };
-          return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={message.notice} onCopy={handleCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role={entry.role} text={message.text} />;
-        }
-        if (entry.type === "cinematic_artifact") {
-          const canReview = reviewableAssetBatch === null &&
-            snapshot?.status === "awaiting_input" &&
-            entry.workflowId === snapshot.workflowId &&
-            snapshot.currentArtifact?.version === entry.artifact.version &&
-            snapshot.currentArtifact.artifact.stage === entry.artifact.artifact.stage;
-          const notice = canReview ? workflowReviewNotice : automaticStageNotice(entry.artifact);
-          return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={notice} onCopy={handleCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={cinematicSummaryText(entry.artifact, false)} />;
-        }
-        if (entry.type === "archived_video") {
-          return <div className="w-full scroll-mt-6" data-chat-video-id={entry.jobId} key={entry.id}>
-            <ArchivedVideoMessage entry={entry} processingSeconds={persistedProcessingDurations.get(entry.id)} title={entry.videoTitle ?? "视频成片"} />
-          </div>;
-        }
-        const canReview = snapshot?.status === "awaiting_input" &&
-          entry.workflowId === snapshot.workflowId &&
-          snapshot.storyboard?.version === entry.storyboard.version;
-        return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={canReview ? workflowReviewNotice : undefined} onCopy={handleCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={storyboardSummaryText(entry.storyboard, false)} />;
-      })}
-
-      {reviewableAssetBatch ? <TextMessage
+      <PersistedConversationTimeline
         copyFeedback={copyFeedback}
-        id={`asset-review:${reviewableAssetBatch.batchId}`}
-        notice="确认后请回复“确认”；如需调整，请直接说明需要修改或重新生成的素材。"
+        entries={entries}
         onCopy={handleCopy}
-        processingSeconds={processingSeconds}
-        role="assistant"
-        text="**素材已生成，等待确认**\n\n所有素材均已生成并加载到右侧预览区，请逐项检查画面、运动、标题文字和音乐。"
-      /> : null}
+        snapshot={snapshot}
+        workflowReviewNotice={workflowReviewNotice}
+      />
 
       {liveMessages.map((message) => {
         const text = message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
@@ -649,7 +711,8 @@ export const ChatConversation = memo(function ChatConversation({
             ? processingSeconds
             : completedLiveDurations[message.id] ?? processingSeconds
           : undefined;
-        return text ? <TextMessage copyFeedback={copyFeedback} id={message.id} key={message.id} onCopy={handleCopy} processingSeconds={messageProcessingSeconds} role={message.role} text={text} /> : null;
+        const isAnimating = status === "streaming" && message.role === "assistant" && message.id === lastLiveAssistantId;
+        return text ? <TextMessage copyFeedback={copyFeedback} id={message.id} isAnimating={isAnimating} key={message.id} onCopy={handleCopy} processingSeconds={messageProcessingSeconds} role={message.role} text={text} /> : null;
       })}
 
       {temporaryProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={temporaryProgress} progressHistory={[temporaryProgress]} showProgressMeta={false} /> : visibleWorkflowStepProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={visibleWorkflowStepProgress} progressHistory={visibleWorkflowStepProgressHistory} /> : null}

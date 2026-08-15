@@ -12,6 +12,7 @@ const createRepository = () => ({
   findWorkflow: vi.fn(),
   list: vi.fn(),
   listArchivedVideoOutputs: vi.fn(),
+  listCinematicAssetBatches: vi.fn().mockResolvedValue([]),
   listCinematicArtifacts: vi.fn(),
   listMessages: vi.fn(),
   listModelMessages: vi.fn(),
@@ -82,6 +83,7 @@ describe("ConversationService", () => {
       workflowId: archivedWorkflowId,
       jobId: "job-1",
       storyboardVersion: 2,
+      initialPrompt: "生成一支雨夜古镇的电影感短片",
       objectKey: "tenant/demo/project/demo/render/job-1/video.mp4",
       createdAt,
     }]);
@@ -101,7 +103,89 @@ describe("ConversationService", () => {
       type: "archived_video",
       workflowId: archivedWorkflowId,
       jobId: "job-1",
+      initialPrompt: "生成一支雨夜古镇的电影感短片",
       videoTitle: "雨夜古镇来信",
+    }));
+    const archivedEntry = detail.entries.find((entry) => entry.type === "archived_video");
+    if (!archivedEntry || archivedEntry.type !== "archived_video") throw new Error("Archived video entry is missing.");
+    expect(archivedEntry.promptTrace).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "user_input", content: "生成一支雨夜古镇的电影感短片" }),
+      expect.objectContaining({ kind: "stage_output", stageId: "script" }),
+    ]));
+  });
+
+  it("keeps the generated asset answer between its confirmation and the edit answer", async () => {
+    const repository = createRepository();
+    const conversationId = "00000000-0000-4000-8000-000000000010";
+    const workflowId = "00000000-0000-4000-8000-000000000011";
+    const createdAt = new Date("2026-08-12T08:00:00.000Z");
+    repository.findActiveConversation.mockResolvedValue({
+      id: conversationId,
+      title: "产品视频",
+      tenantId: "demo",
+      projectId: "demo",
+      createdAt,
+      updatedAt: new Date("2026-08-12T08:05:00.000Z"),
+    });
+    repository.findWorkflow.mockResolvedValue({ id: workflowId });
+    repository.listMessages.mockResolvedValue([{
+      conversationId,
+      messageId: "confirm-assets",
+      role: "user",
+      content: "确认",
+      createdAt: new Date("2026-08-12T08:03:00.000Z"),
+    }]);
+    repository.listStoryboardVersions.mockResolvedValue([]);
+    repository.listCinematicAssetBatches.mockResolvedValue([{
+      id: "asset-batch-1",
+      workflowId,
+      planVersion: 6,
+      status: "approved",
+      assetCount: 5,
+      supersededAt: null,
+      completedAt: new Date("2026-08-12T08:02:00.000Z"),
+    }]);
+    repository.listCinematicArtifacts.mockResolvedValue([{
+      id: "edit-7",
+      workflowId,
+      version: 7,
+      revisionRequest: null,
+      artifact: {
+        stage: "edit",
+        data: {
+          durationSeconds: 10,
+          rendererFamily: "ffmpeg",
+          timeline: [{ sceneOrder: 1, startSeconds: 0, durationSeconds: 10, transition: "cut", audioGainDb: -6 }],
+          colorGrade: "冷暖平衡",
+          audioMix: "保持音乐连贯",
+          renderPrompt: "按时间线完成剪辑",
+          qualityChecks: ["时长正确", "画面连续", "音频正常"],
+        },
+      },
+      supersededAt: null,
+      createdAt: new Date("2026-08-12T08:04:00.000Z"),
+    }]);
+    repository.listArchivedVideoOutputs.mockResolvedValue([]);
+    const workflows = {
+      getSnapshot: vi.fn().mockResolvedValue(null),
+    };
+    const service = new ConversationService(
+      repository as unknown as ConversationRepository,
+      workflows as unknown as VideoWorkflowService,
+    );
+
+    const detail = await service.get(conversationId);
+
+    expect(detail.entries.map((entry) => entry.type)).toEqual([
+      "cinematic_asset_batch",
+      "text",
+      "cinematic_artifact",
+    ]);
+    expect(detail.entries[0]).toEqual(expect.objectContaining({
+      type: "cinematic_asset_batch",
+      batchId: "asset-batch-1",
+      assetCount: 5,
+      isSuperseded: false,
     }));
   });
 

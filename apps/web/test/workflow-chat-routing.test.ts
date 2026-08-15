@@ -180,10 +180,10 @@ describe("workflow and chat routing", () => {
   });
 
   it("keeps chat available while a background workflow is active", async () => {
-    const panel = await readFile(
-      resolve(webRoot, "components/chat/chat-panel.tsx"),
-      "utf8",
-    );
+    const [panel, provider] = await Promise.all([
+      readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
+    ]);
 
     expect(panel).toContain("workflow.resolveControlIntent(text");
     expect(panel).toContain('if (controlRoute.route === "workflow")');
@@ -197,6 +197,9 @@ describe("workflow and chat routing", () => {
     expect(panel).not.toContain(
       "const isGenerating = isChatGenerating || isWorkflowLocked",
     );
+    expect(provider).toContain("workflowId: string | null;");
+    expect(provider).toContain("getVideoWorkflow(result.workflowId)");
+    expect(provider).toContain("setSnapshot(nextSnapshot)");
   });
 
   it("reconciles optimistic history when a video workflow creates the conversation", async () => {
@@ -278,5 +281,19 @@ describe("workflow and chat routing", () => {
     expect(conversation).toContain("const visibleMessages = messages");
     expect(conversation).not.toContain("const visibleMessages = isLoadingHistory ? [] : messages");
     expect(conversation).not.toContain("聊天响应失败，请稍后重试");
+  });
+
+  it("isolates persisted workflow history from live stream rendering", async () => {
+    const conversation = await readFile(
+      resolve(webRoot, "components/chat/chat-conversation.tsx"),
+      "utf8",
+    );
+
+    expect(conversation).toContain("const PersistedConversationTimeline = memo(");
+    expect(conversation).toContain("const TextMessage = memo(");
+    expect(conversation).toContain("<PersistedConversationTimeline");
+    expect(conversation).toContain('status === "streaming" && message.role === "assistant" && message.id === lastLiveAssistantId');
+    expect(conversation).toContain("isAnimating={isAnimating}");
+    expect(conversation).toContain('resize={status === "streaming" ? "instant" : "smooth"}');
   });
 });

@@ -64,6 +64,8 @@ type NewWorkflow = {
   message?: { messageId: string; content: string };
 };
 
+type NewSuccessorWorkflow = NewWorkflow & { sourceWorkflowId: string };
+
 type NewEvent = Omit<VideoWorkflowEvent, "eventId" | "sequence" | "timestamp"> & {
   eventId?: string;
   timestamp?: string;
@@ -401,6 +403,76 @@ export class VideoWorkflowRepository {
           .where(eq(conversations.id, input.conversationId));
       }
       return true;
+    });
+  }
+
+  async createSuccessorWorkflow(input: NewSuccessorWorkflow): Promise<{
+    created: boolean;
+    requestId: string;
+    workflowId: string;
+  } | null> {
+    return this.database.transaction(async (transaction) => {
+      await transaction.select({ id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.id, input.conversationId))
+        .limit(1)
+        .for("update");
+      const sourceRows = await transaction.select().from(videoWorkflows)
+        .where(and(
+          eq(videoWorkflows.id, input.sourceWorkflowId),
+          eq(videoWorkflows.conversationId, input.conversationId),
+        ))
+        .limit(1)
+        .for("update");
+      const source = sourceRows[0];
+      if (!source || !["succeeded", "failed", "cancelled"].includes(source.status)) return null;
+      if (source.successorWorkflowId) {
+        const existingRows = await transaction.select().from(videoWorkflows)
+          .where(eq(videoWorkflows.id, source.successorWorkflowId)).limit(1);
+        const existing = existingRows[0];
+        return existing
+          ? { created: false, requestId: existing.requestId, workflowId: existing.id }
+          : null;
+      }
+      const active = await transaction.select({ id: videoWorkflows.id })
+        .from(videoWorkflows)
+        .where(and(
+          eq(videoWorkflows.conversationId, input.conversationId),
+          notInArray(videoWorkflows.status, ["succeeded", "failed", "cancelled"]),
+        ))
+        .limit(1);
+      if (active.length > 0) return null;
+      await transaction.insert(videoWorkflows).values({
+        id: input.id,
+        conversationId: input.conversationId,
+        requestId: input.requestId,
+        pipelineId: input.pipelineId,
+        currentStageId: input.currentStageId,
+        initialPrompt: input.initialPrompt,
+        videoModel: input.videoModel,
+        durationSeconds: input.durationSeconds,
+        status: "drafting",
+        pipelineDefinitionVersion: 2,
+        sourceWorkflowId: input.sourceWorkflowId,
+        activeRunContext: ActiveWorkflowRunContextSchema.parse({ kind: "start", baseVersion: 0 }),
+      });
+      await transaction.update(videoWorkflows).set({ successorWorkflowId: input.id })
+        .where(and(
+          eq(videoWorkflows.id, input.sourceWorkflowId),
+          isNull(videoWorkflows.successorWorkflowId),
+        ));
+      if (input.message) {
+        await transaction.insert(conversationMessages).values({
+          conversationId: input.conversationId,
+          messageId: input.message.messageId,
+          role: "user",
+          content: input.message.content,
+        }).onDuplicateKeyUpdate({ set: { messageId: input.message.messageId } });
+        await transaction.update(conversations)
+          .set({ updatedAt: new Date() })
+          .where(eq(conversations.id, input.conversationId));
+      }
+      return { created: true, requestId: input.requestId, workflowId: input.id };
     });
   }
 
@@ -1564,12 +1636,13 @@ export class VideoWorkflowRepository {
     sizeBytes: number;
   }): Promise<boolean> {
     return this.database.transaction(async (transaction) => {
+      const completedAt = new Date();
       const workflowRows = await transaction.select({ stateVersion: videoWorkflows.stateVersion })
         .from(videoWorkflows).where(eq(videoWorkflows.id, input.workflowId)).limit(1).for("update");
       const workflow = workflowRows[0];
       if (!workflow) return false;
       const result: unknown = await transaction.update(videoJobs)
-        .set({ status: "succeeded", progress: 100, errorMessage: null, updatedAt: new Date() })
+        .set({ status: "succeeded", progress: 100, errorMessage: null, updatedAt: completedAt })
         .where(and(
           eq(videoJobs.id, input.jobId),
           eq(videoJobs.workflowId, input.workflowId),
@@ -1590,8 +1663,15 @@ export class VideoWorkflowRepository {
           sizeBytes: input.sizeBytes,
         },
       });
+      await transaction.update(workflowControlRequests).set({
+        status: "cancelled",
+        completedAt,
+      }).where(and(
+        eq(workflowControlRequests.sourceWorkflowId, input.workflowId),
+        eq(workflowControlRequests.status, "pending"),
+      ));
       await transaction.update(videoWorkflows)
-        .set({ status: "succeeded", stateVersion: workflow.stateVersion + 1, errorMessage: null, updatedAt: new Date() })
+        .set({ status: "succeeded", stateVersion: workflow.stateVersion + 1, errorMessage: null, updatedAt: completedAt })
         .where(eq(videoWorkflows.id, input.workflowId));
       return true;
     });

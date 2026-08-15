@@ -386,8 +386,15 @@ export class ApimartModelGateway implements ModelGateway {
     }>;
   }): Promise<WorkflowUserIntent> {
     const requestContext = createWorkflowIntentAgentRequestContext(request);
+    const isTerminal = request.workflowStatus === "succeeded" ||
+      request.workflowStatus === "failed" || request.workflowStatus === "cancelled";
     const prompt = [
-      "Classify the user's intent for the current video workflow checkpoint.",
+      isTerminal
+        ? "Classify the user's intent after a video workflow has ended."
+        : "Classify the user's intent for the current video workflow checkpoint.",
+      isTerminal
+        ? "Choose start_workflow when the user asks for another video, version, variation, or production, including contextual wording such as doing another one in the previous style. Expand brief into a self-contained production request using the supplied prior prompt and artifact summary. Otherwise choose chat."
+        : "The workflow is active. Do not start another workflow until it is completed or cancelled.",
       "A question or discussion related to the registered video pipeline is chat. A direct acceptance is approve. Acceptance plus requested changes is approve_with_changes.",
       "Choose out_of_scope when the user asks to execute an action unrelated to every supplied stage and intent topic. Do not choose it for harmless conversation or questions about the video.",
       "Set advanceAfterChange=true only when the user explicitly selects an existing proposal direction and explicitly asks to continue to the next step.",

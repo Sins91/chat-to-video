@@ -1,5 +1,6 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import {
+  CinematicAssetBatchStatusSchema,
   ConversationDetailSchema,
   ConversationListResponseSchema,
   type ConversationDetail,
@@ -11,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { VideoWorkflowService } from "../video-workflow/video-workflow.service.js";
 import { CONVERSATION_REPOSITORY } from "../video-workflow/video-workflow.tokens.js";
 import { createConversationTitle } from "./conversation-title.js";
+import { buildGeneratedVideoPromptTrace } from "../video-workflow/video-prompt-trace.js";
 
 type Cursor = { createdAt: Date; id: string };
 
@@ -119,10 +121,11 @@ export class ConversationService {
     const conversation = await this.repository.findActiveConversation(conversationId);
     if (!conversation) throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
     const workflow = await this.repository.findWorkflow(conversationId);
-    const [messages, storyboards, cinematicArtifacts, archivedOutputs] = await Promise.all([
+    const [messages, storyboards, cinematicArtifacts, cinematicAssetBatches, archivedOutputs] = await Promise.all([
       this.repository.listMessages(conversationId),
       this.repository.listStoryboardVersions(conversationId),
       this.repository.listCinematicArtifacts(conversationId),
+      this.repository.listCinematicAssetBatches(conversationId),
       this.repository.listArchivedVideoOutputs(conversationId, workflow?.id ?? null),
     ]);
     const findVideoTitle = (workflowId: string, version: number): string | null => {
@@ -151,6 +154,15 @@ export class ConversationService {
         workflowId: row.workflowId,
         jobId: row.jobId,
         storyboardVersion: row.storyboardVersion,
+        initialPrompt: row.initialPrompt,
+        promptTrace: buildGeneratedVideoPromptTrace({
+          initialPrompt: row.initialPrompt,
+          maxVersion: row.storyboardVersion,
+          artifacts: cinematicArtifacts.filter((artifact) => artifact.workflowId === row.workflowId),
+          storyboard: storyboards.filter((storyboard) =>
+            storyboard.workflowId === row.workflowId && storyboard.version <= row.storyboardVersion
+          ).at(-1) ?? null,
+        }),
         videoTitle: findVideoTitle(row.workflowId, row.storyboardVersion),
         playbackUrl: await this.workflows.createArchivedPlaybackUrl(row.objectKey),
         createdAt: row.createdAt.toISOString(),
@@ -189,6 +201,18 @@ export class ConversationService {
           createdAt: row.createdAt.toISOString(),
         },
         createdAt: row.createdAt.toISOString(),
+      })),
+      ...cinematicAssetBatches.map((row) => ({
+        id: row.id,
+        type: "cinematic_asset_batch" as const,
+        workflowId: row.workflowId,
+        batchId: row.id,
+        planVersion: row.planVersion,
+        status: CinematicAssetBatchStatusSchema.parse(row.status),
+        assetCount: row.assetCount,
+        isSuperseded: row.supersededAt !== null,
+        supersededAt: row.supersededAt?.toISOString() ?? null,
+        createdAt: row.completedAt.toISOString(),
       })),
       ...archivedVideoEntries,
     ].sort((left, right) => left.createdAt.localeCompare(right.createdAt));

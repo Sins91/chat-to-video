@@ -26,4 +26,38 @@ describe("conversation contracts", () => {
       updatedAt: "2026-08-10T01:00:00.000Z",
     }).success).toBe(false);
   });
+
+  it("keeps the originating prompt with an archived video", () => {
+    const parsed = ConversationDetailSchema.parse({
+      conversationId: "00000000-0000-4000-8000-000000000010",
+      title: "雨夜短片",
+      entries: [{
+        id: "output-1",
+        type: "archived_video",
+        workflowId: "00000000-0000-4000-8000-000000000011",
+        jobId: "job-1",
+        storyboardVersion: 2,
+        initialPrompt: "生成一支雨夜古镇的电影感短片",
+        promptTrace: [{
+          id: "user-input",
+          kind: "user_input",
+          stageId: null,
+          label: "用户原始输入",
+          content: "生成一支雨夜古镇的电影感短片",
+        }],
+        videoTitle: "雨夜古镇来信",
+        playbackUrl: "https://storage.example/video.mp4",
+        createdAt: "2026-08-10T01:00:00.000Z",
+      }],
+      videoWorkflow: null,
+      createdAt: "2026-08-10T01:00:00.000Z",
+      updatedAt: "2026-08-10T02:00:00.000Z",
+    });
+
+    expect(parsed.entries[0]).toMatchObject({
+      type: "archived_video",
+      initialPrompt: "生成一支雨夜古镇的电影感短片",
+      promptTrace: [expect.objectContaining({ kind: "user_input" })],
+    });
+  });
 });

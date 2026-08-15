@@ -107,8 +107,24 @@ describe("generated video shelf", () => {
     expect(client).toContain("generatedVideosCache");
     expect(client).toContain("generatedVideosRequest");
     expect(client).toContain('resolution: "720p"');
+    expect(client).toContain("promptTrace: entry.promptTrace");
+    expect(client).toContain("promptTrace: workflow.promptTrace");
     expect(client).toContain("storyboard.storyboard.title");
     expect(client).toContain("entry.artifact.version > version");
     expect(client).toContain("title: workflow.videoJob.videoTitle ?? metadata.title");
+  });
+
+  it("shows and copies the originating prompt while reviewing a completed video", async () => {
+    const [preview, provider] = await Promise.all([
+      readFile(resolve(webRoot, "components/video-workflow/video-preview.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
+    ]);
+
+    expect(preview).toContain("PromptTraceReview");
+    expect(preview).toContain("提示词演进");
+    expect(preview).toContain("navigator.clipboard.writeText(item.content)");
+    expect(preview).toContain("promptTrace={previewVideo.promptTrace}");
+    expect(preview).toContain("promptTrace={snapshot.promptTrace}");
+    expect(provider).toContain("promptTrace: video.promptTrace");
   });
 });

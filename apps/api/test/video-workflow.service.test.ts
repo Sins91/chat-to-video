@@ -45,10 +45,12 @@ describe("VideoWorkflowService interactions", () => {
     claimInteraction: vi.fn(),
     claimCinematicAssetBatchApproval: vi.fn(),
     createWorkflow: vi.fn(),
+    createSuccessorWorkflow: vi.fn(),
     findWorkflowVideoJob: vi.fn(),
     findLatestCinematicAssetBatch: vi.fn(),
     findLatestStoryboard: vi.fn(),
     findLatestCinematicArtifact: vi.fn(),
+    listCinematicArtifacts: vi.fn().mockResolvedValue([]),
     findLatestActiveStageCheckpoint: vi.fn(),
     findVideoOutput: vi.fn(),
     findStoryboard: vi.fn(),
@@ -75,7 +77,7 @@ describe("VideoWorkflowService interactions", () => {
   const events = { append: vi.fn() };
   const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn(), cancelQueuedWork: vi.fn() };
   const recovery = { recoverAgentRun: vi.fn() };
-  const intentResolver = { resolve: vi.fn() };
+  const intentResolver = { resolve: vi.fn(), resolveTerminal: vi.fn() };
   const service = new VideoWorkflowService(
     repository as unknown as VideoWorkflowRepository,
     conversations as unknown as ConversationRepository,
@@ -97,6 +99,12 @@ describe("VideoWorkflowService interactions", () => {
     repository.createWorkflowControlRequest.mockResolvedValue(true);
     repository.countActiveWorkflowJobs.mockResolvedValue(0);
     repository.findWorkflowUserDecision.mockResolvedValue(null);
+    repository.findWorkflowScope.mockResolvedValue({
+      workflow: waitingWorkflow,
+      tenantId: "demo",
+      projectId: "demo",
+    });
+    repository.findLatestCinematicArtifact.mockResolvedValue(null);
     repository.saveWorkflowUserDecision.mockResolvedValue(true);
     repository.markWorkflowUserDecisionApplied.mockResolvedValue(undefined);
     repository.findPreviousWorkflow.mockResolvedValue(null);
@@ -121,6 +129,11 @@ describe("VideoWorkflowService interactions", () => {
     repository.updateWorkflow.mockResolvedValue(undefined);
     events.append.mockResolvedValue(undefined);
     repository.createWorkflow.mockResolvedValue(true);
+    repository.createSuccessorWorkflow.mockImplementation((input: { id: string; requestId: string }) => ({
+      created: true,
+      requestId: input.requestId,
+      workflowId: input.id,
+    }));
     repository.updateVideoModel.mockResolvedValue(true);
     repository.claimVideoJobRetry.mockResolvedValue(true);
     conversations.createWithUserMessage.mockResolvedValue(undefined);
@@ -135,6 +148,12 @@ describe("VideoWorkflowService interactions", () => {
     intentResolver.resolve.mockResolvedValue({
       intent: { type: "approve", stageId: "proposal" },
       source: "rule",
+      resolverVersion: "v1",
+      requiresConfirmation: false,
+    });
+    intentResolver.resolveTerminal.mockResolvedValue({
+      intent: { type: "start_workflow", pipelineId: "cinematic", brief: "一支雨夜城市宣传片" },
+      source: "model",
       resolverVersion: "v1",
       requiresConfirmation: false,
     });
@@ -253,6 +272,147 @@ describe("VideoWorkflowService interactions", () => {
       pipelineId: "cinematic",
       initialPrompt: "帮我编写一个产品视频脚本",
     }));
+  });
+
+  it("routes unrelated input to chat after the explicit workflow completed", async () => {
+    repository.findWorkflow.mockResolvedValue({ ...waitingWorkflow, status: "succeeded" });
+    repository.findActiveWorkflowByConversation.mockResolvedValue(null);
+    intentResolver.resolveTerminal.mockResolvedValue({
+      intent: { type: "chat" },
+      source: "rule",
+      resolverVersion: "v1",
+      requiresConfirmation: false,
+    });
+    repository.findPendingWorkflowControl.mockResolvedValue({
+      id: "00000000-0000-4000-8000-000000000099",
+      status: "pending",
+    });
+
+    await expect(service.resolveVideoIntent({
+      workflowId: waitingWorkflow.id,
+      conversationId: waitingWorkflow.conversationId,
+      messageId: "terminal-chat-message",
+      text: "帮我解释一下 TypeScript 的泛型",
+    })).resolves.toMatchObject({
+      route: "chat",
+      applied: false,
+      intent: { type: "chat" },
+      workflowId: null,
+    });
+
+    expect(repository.findPendingWorkflowControl).not.toHaveBeenCalled();
+    expect(repository.createSuccessorWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("starts another workflow for an explicit video request after completion", async () => {
+    repository.findWorkflow.mockResolvedValue({ ...waitingWorkflow, status: "succeeded" });
+    repository.findActiveWorkflowByConversation.mockResolvedValue(null);
+    intentResolver.resolveTerminal.mockResolvedValue({
+      intent: {
+        type: "start_workflow",
+        pipelineId: "cinematic",
+        brief: "再生成一段雨夜城市宣传片",
+      },
+      source: "rule",
+      resolverVersion: "v1",
+      requiresConfirmation: false,
+    });
+
+    await expect(service.resolveVideoIntent({
+      workflowId: waitingWorkflow.id,
+      conversationId: waitingWorkflow.conversationId,
+      messageId: "second-video-message",
+      text: "再生成一段雨夜城市宣传片",
+      videoModel: "MiniMax-Hailuo-2.3",
+    })).resolves.toMatchObject({
+      route: "workflow",
+      applied: true,
+      intent: { type: "start_workflow" },
+      conversationId: waitingWorkflow.conversationId,
+    });
+
+    expect(repository.createSuccessorWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: waitingWorkflow.conversationId,
+      sourceWorkflowId: waitingWorkflow.id,
+      initialPrompt: "再生成一段雨夜城市宣传片",
+      message: { messageId: "second-video-message", content: "再生成一段雨夜城市宣传片" },
+    }));
+  });
+
+  it("starts a successor from a contextual terminal follow-up", async () => {
+    repository.findWorkflow.mockResolvedValue({ ...waitingWorkflow, status: "succeeded" });
+    repository.findActiveWorkflowByConversation.mockResolvedValue(null);
+    intentResolver.resolveTerminal.mockResolvedValue({
+      intent: {
+        type: "start_workflow",
+        pipelineId: "cinematic",
+        brief: "沿用上一支成片的雨夜电影感，再制作一支城市宣传片。",
+      },
+      source: "model",
+      resolverVersion: "v1",
+      requiresConfirmation: false,
+    });
+
+    await expect(service.resolveVideoIntent({
+      workflowId: waitingWorkflow.id,
+      conversationId: waitingWorkflow.conversationId,
+      messageId: "contextual-second-video",
+      text: "按刚才的风格再做一版",
+      videoModel: "MiniMax-Hailuo-2.3",
+    })).resolves.toMatchObject({
+      route: "workflow",
+      intent: { type: "start_workflow" },
+    });
+
+    expect(repository.createSuccessorWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      initialPrompt: "沿用上一支成片的雨夜电影感，再制作一支城市宣传片。",
+      message: {
+        messageId: "contextual-second-video",
+        content: "按刚才的风格再做一版",
+      },
+    }));
+  });
+
+  it("replays a terminal start decision without creating or billing twice", async () => {
+    const successorId = "00000000-0000-4000-8000-000000000077";
+    const terminalWorkflow = {
+      ...waitingWorkflow,
+      status: "succeeded",
+      successorWorkflowId: successorId,
+    };
+    repository.findWorkflow.mockImplementation((workflowId: string) => workflowId === successorId
+      ? { ...waitingWorkflow, id: successorId, status: "drafting", sourceWorkflowId: waitingWorkflow.id }
+      : terminalWorkflow);
+    repository.findActiveWorkflowByConversation.mockResolvedValue(null);
+    repository.findWorkflowUserDecision.mockResolvedValue({
+      workflowId: waitingWorkflow.id,
+      conversationMessageId: "replayed-terminal-start",
+      decision: {
+        type: "start_workflow",
+        pipelineId: "cinematic",
+        brief: "再制作一支雨夜城市宣传片。",
+      },
+      decisionSource: "model",
+      resolverVersion: "v1",
+      requiresConfirmation: 0,
+      appliedAt: new Date(),
+    });
+
+    await expect(service.resolveVideoIntent({
+      workflowId: waitingWorkflow.id,
+      conversationId: waitingWorkflow.conversationId,
+      messageId: "replayed-terminal-start",
+      text: "再来一个",
+    })).resolves.toMatchObject({
+      route: "workflow",
+      applied: true,
+      workflowId: successorId,
+    });
+
+    expect(intentResolver.resolveTerminal).not.toHaveBeenCalled();
+    expect(modelGateway.inferCinematicDuration).not.toHaveBeenCalled();
+    expect(repository.createSuccessorWorkflow).not.toHaveBeenCalled();
+    expect(runtime.start).not.toHaveBeenCalled();
   });
 
   it("creates another workflow in an existing conversation after the previous one is terminal", async () => {

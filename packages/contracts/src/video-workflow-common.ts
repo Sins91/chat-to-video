@@ -8,6 +8,8 @@ export const VideoModelSchema = z.enum([
 ]);
 export type VideoModel = z.infer<typeof VideoModelSchema>;
 
+export const DEFAULT_VIDEO_MODEL: VideoModel = "doubao-seedance-2.0";
+
 export const VIDEO_MODEL_MAX_DURATION_SECONDS = {
   "MiniMax-Hailuo-2.3": 10,
   "doubao-seedance-2.0": 15,

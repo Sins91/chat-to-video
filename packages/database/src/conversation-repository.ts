@@ -3,6 +3,8 @@ import { and, asc, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 
 import type { Database } from "./client.js";
 import {
+  cinematicAssetBatches,
+  cinematicAssetJobs,
   cinematicArtifactVersions,
   conversationMessages,
   conversations,
@@ -122,12 +124,39 @@ export class ConversationRepository {
       .orderBy(asc(cinematicArtifactVersions.createdAt), asc(cinematicArtifactVersions.id));
   }
 
+  async listCinematicAssetBatches(conversationId: string) {
+    return this.database.select({
+      id: cinematicAssetBatches.id,
+      workflowId: cinematicAssetBatches.workflowId,
+      planVersion: cinematicAssetBatches.planVersion,
+      status: cinematicAssetBatches.status,
+      assetCount: sql<number>`count(${cinematicAssetJobs.id})`.mapWith(Number),
+      supersededAt: cinematicAssetBatches.supersededAt,
+      completedAt: sql<Date>`max(${cinematicAssetJobs.updatedAt})`.mapWith(
+        cinematicAssetJobs.updatedAt,
+      ),
+    }).from(cinematicAssetBatches)
+      .innerJoin(videoWorkflows, eq(cinematicAssetBatches.workflowId, videoWorkflows.id))
+      .innerJoin(cinematicAssetJobs, eq(cinematicAssetJobs.batchId, cinematicAssetBatches.id))
+      .where(eq(videoWorkflows.conversationId, conversationId))
+      .groupBy(
+        cinematicAssetBatches.id,
+        cinematicAssetBatches.workflowId,
+        cinematicAssetBatches.planVersion,
+        cinematicAssetBatches.status,
+        cinematicAssetBatches.supersededAt,
+      )
+      .having(sql`count(${cinematicAssetJobs.id}) = sum(case when ${cinematicAssetJobs.status} = 'succeeded' then 1 else 0 end)`)
+      .orderBy(asc(sql`max(${cinematicAssetJobs.updatedAt})`), asc(cinematicAssetBatches.id));
+  }
+
   async listArchivedVideoOutputs(conversationId: string, currentWorkflowId: string | null) {
     return this.database.select({
       id: videoOutputs.id,
       workflowId: videoJobs.workflowId,
       jobId: videoJobs.id,
       storyboardVersion: videoJobs.storyboardVersion,
+      initialPrompt: videoWorkflows.initialPrompt,
       objectKey: videoOutputs.objectKey,
       createdAt: videoOutputs.createdAt,
     }).from(videoOutputs)

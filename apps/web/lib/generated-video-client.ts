@@ -1,4 +1,4 @@
-import type { ConversationDetail } from "@chat-to-video/contracts";
+import type { ConversationDetail, GeneratedVideoPromptTrace } from "@chat-to-video/contracts";
 
 import { getConversation, listConversations } from "@/lib/conversation-client";
 
@@ -8,6 +8,7 @@ export type GeneratedVideoItem = {
   durationSeconds: number | null;
   id: string;
   playbackUrl: string;
+  promptTrace: GeneratedVideoPromptTrace;
   resolution: string;
   themeName: string;
   title: string;
@@ -67,6 +68,7 @@ export const generatedVideosFromConversation = (
         durationSeconds: metadata.durationSeconds,
         id: entry.jobId,
         playbackUrl: entry.playbackUrl,
+        promptTrace: entry.promptTrace,
         resolution: "720p",
         themeName: metadata.themeName,
         title: entry.videoTitle ?? metadata.title,
@@ -89,6 +91,7 @@ export const generatedVideosFromConversation = (
       durationSeconds: workflow.durationSeconds,
       id: workflow.videoJob.jobId,
       playbackUrl: workflow.videoJob.playbackUrl,
+      promptTrace: workflow.promptTrace,
       resolution: "720p",
       themeName: metadata.themeName,
       title: workflow.videoJob.videoTitle ?? metadata.title,

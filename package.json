@@ -20,6 +20,8 @@
     "typecheck": "turbo run typecheck",
     "test": "pnpm run test:scripts && turbo run test",
     "test:scripts": "node --test scripts/*.test.cjs",
+    "test:connectivity:prepaid": "node scripts/video-connectivity-test.cjs prepaid",
+    "test:connectivity:paid": "node scripts/video-connectivity-test.cjs paid",
     "clean": "turbo run clean"
   },
   "devDependencies": {

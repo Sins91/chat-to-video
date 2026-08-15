@@ -49,6 +49,63 @@ describe("UserIntentResolverService", () => {
     });
   });
 
+  it.each([
+    ["proposal", "把现有方案调整为更年轻的风格"],
+    ["script", "重写结尾旁白，让语气更有力量"],
+    ["scene_plan", "第二项删掉，增加产品特写"],
+    ["assets", "替换背景音乐为轻快的电子乐"],
+  ] as const)("resolves an actionable %s revision without a paid model call", async (currentStage, text) => {
+    const gateway = { classifyWorkflowIntent: vi.fn() };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolve({ ...context, currentStage, text })).resolves.toMatchObject({
+      source: "rule",
+      resolverVersion: "v2",
+      intent: { type: "revise_current", stageId: currentStage, feedback: text },
+    });
+    expect(gateway.classifyWorkflowIntent).not.toHaveBeenCalled();
+  });
+
+  it("asks for concrete revision details using the current stage label", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn() };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    const decision = await resolver.resolve({ ...context, text: "修改一下" });
+    expect(decision).toMatchObject({
+      source: "rule",
+      intent: { type: "clarify" },
+    });
+    expect(decision.intent.type === "clarify" && decision.intent.question).toContain("分镜写作");
+    expect(gateway.classifyWorkflowIntent).not.toHaveBeenCalled();
+  });
+
+  it("leaves an explicitly named earlier stage for semantic restart classification", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn().mockResolvedValue({
+      type: "restart_from", stageId: "script", feedback: "修改脚本旁白",
+    }) };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolve({ ...context, text: "修改脚本旁白" })).resolves.toMatchObject({
+      source: "model",
+      intent: { type: "restart_from", stageId: "script" },
+      requiresConfirmation: true,
+    });
+    expect(gateway.classifyWorkflowIntent).toHaveBeenCalledOnce();
+  });
+
+  it("does not create a revision for a stage that disallows changes", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn().mockResolvedValue({
+      type: "revise_current", stageId: "compose", feedback: "调整编码参数",
+    }) };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    const decision = await resolver.resolve({
+      ...context,
+      currentStage: "compose",
+      text: "调整编码参数",
+    });
+    expect(decision).toMatchObject({
+      intent: { type: "clarify" },
+    });
+    expect(decision.intent.type === "clarify" && decision.intent.question).toContain("视频生成");
+  });
+
   it("auto-advances only an explicit proposal direction selection with a next-step request", async () => {
     const gateway = { classifyWorkflowIntent: vi.fn() };
     const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
@@ -98,8 +155,56 @@ describe("UserIntentResolverService", () => {
     const gateway = { classifyWorkflowIntent: vi.fn().mockRejectedValue(new Error("timeout")) };
     const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
     await expect(resolver.resolve({ ...context, text: "这个感觉怪怪的" })).resolves.toMatchObject({
-      intent: { type: "clarify", question: WORKFLOW_INTENT_CLARIFICATION_GUIDANCE },
+      intent: {
+        type: "clarify",
+        question: `当前正在审核“分镜写作”。${WORKFLOW_INTENT_CLARIFICATION_GUIDANCE}`,
+      },
       source: "rule",
+    });
+  });
+
+  it("starts an explicit terminal video request without a model call", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn() };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolveTerminal({
+      ...context,
+      workflowStatus: "succeeded",
+      text: "再生成一段雨夜城市宣传片",
+    })).resolves.toMatchObject({
+      source: "rule",
+      intent: { type: "start_workflow", brief: "再生成一段雨夜城市宣传片" },
+    });
+    expect(gateway.classifyWorkflowIntent).not.toHaveBeenCalled();
+  });
+
+  it("uses a self-contained model brief for a contextual terminal request", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn().mockResolvedValue({
+      type: "start_workflow",
+      pipelineId: "cinematic",
+      brief: "沿用上一支成片的雨夜风格，再制作一支城市宣传片。",
+    }) };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolveTerminal({
+      ...context,
+      workflowStatus: "succeeded",
+      text: "按刚才的风格再做一版",
+    })).resolves.toMatchObject({
+      source: "model",
+      intent: { type: "start_workflow" },
+      requiresConfirmation: false,
+    });
+  });
+
+  it("falls back to chat when terminal semantic classification fails", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn().mockRejectedValue(new Error("timeout")) };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolveTerminal({
+      ...context,
+      workflowStatus: "succeeded",
+      text: "再来一个",
+    })).resolves.toMatchObject({
+      source: "rule",
+      intent: { type: "chat" },
     });
   });
 });

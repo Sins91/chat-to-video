@@ -23,6 +23,11 @@ describe("two-step video workflow UI", () => {
     expect(conversation).toContain("该阶段无需确认，将自动进入下一阶段。");
     expect(conversation).toContain("stageDefinition?.isRestartable === false");
     expect(conversation).toContain("automaticStageNotice(entry.artifact)");
+    expect(conversation).toContain('entry.type === "cinematic_asset_batch"');
+    expect(conversation).toContain("cinematicAssetBatchSummaryText(entry)");
+    expect(conversation).toContain("阶段完成：素材生成");
+    expect(conversation).toContain("entry.assetCount");
+    expect(conversation).toContain("snapshot.assetBatch.batchId === entry.batchId");
     expect(conversation).toContain("/(无需确认|确认|修改|取消)/u");
     expect(conversation).toContain('part === "无需确认" || part === "确认" || part === "修改" || part === "取消" ? "text-warning-foreground"');
     expect(conversation).not.toContain("onApprove");
@@ -208,8 +213,9 @@ describe("two-step video workflow UI", () => {
   });
 
   it("renders the AI Elements model selector and submits the selected model", async () => {
-    const [composer, provider, models] = await Promise.all([
+    const [composer, panel, provider, models] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-composer.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
       readFile(resolve(webRoot, "lib/video-models.ts"), "utf8"),
     ]);
@@ -223,11 +229,15 @@ describe("two-step video workflow UI", () => {
     expect(composer).not.toContain("focus-within:border-foreground");
     expect(composer).not.toContain("focus-within:border-ring");
     expect(composer).not.toContain("focus-within:ring-ring");
-    expect(models).toContain("MiniMax-Hailuo-2.3");
+    expect(models).not.toContain("MiniMax-Hailuo-2.3");
     expect(models).toContain("doubao-seedance-2.0");
     expect(provider).toContain("videoModel,");
     expect(provider).toContain("detail.videoWorkflow.videoModel");
     expect(provider).toContain("updateVideoWorkflowModel");
+    expect(panel).toContain("workflow.snapshot !== null && !workflow.snapshot.canChangeVideoModel");
+    expect(provider).toContain("if (workflowId && !activeSnapshot?.canChangeVideoModel) return;");
+    expect(provider.indexOf("if (workflowId && !activeSnapshot?.canChangeVideoModel) return;"))
+      .toBeLessThan(provider.indexOf("setVideoModel(model);"));
     expect(composer).not.toContain("onPointerUpCapture");
   });
 
@@ -286,8 +296,8 @@ describe("two-step video workflow UI", () => {
     expect(conversation).toContain('workflowStepProgress?.stepState === "awaiting_input" && hasReviewableWorkflowAnswer');
     expect(conversation).toContain("reviewableAssetBatch");
     expect(conversation).toContain("所有素材均已生成并加载到右侧预览区");
-    expect(conversation).toContain('id={`asset-review:${reviewableAssetBatch.batchId}`}');
     expect(conversation).toContain("确认后请回复“确认”");
+    expect(conversation).not.toContain('id={`asset-review:${reviewableAssetBatch.batchId}`}');
     expect(conversation).toContain("visibleWorkflowStepProgress ? <WorkflowActivityText");
     expect(conversation).toContain('snapshot.failureCode === "DIRECTOR_ACTION_LIMIT_EXCEEDED"');
     expect(conversation).toContain("workflowReviewNotice");
@@ -393,7 +403,7 @@ describe("two-step video workflow UI", () => {
 
     expect(panel).toContain("conversationId={activeSession.conversationId}");
     expect(conversation).toContain('initial={hasFocusedVideo ? false : "instant"}');
-    expect(conversation).toContain('resize="smooth"');
+    expect(conversation).toContain('resize={status === "streaming" ? "instant" : "smooth"}');
     expect(conversation).toContain("viewportKey");
     expect(provider).toContain("conversationId: loadedConversationId");
     expect(provider).toContain("const activeEntries = entries");

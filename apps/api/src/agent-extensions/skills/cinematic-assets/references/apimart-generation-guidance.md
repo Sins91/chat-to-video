@@ -4,7 +4,7 @@ Read this reference only when an assets plan uses a currently available APIMart 
 
 ## Video
 
-The current Worker supports `MiniMax-Hailuo-2.3` and the retained `doubao-seedance-2.0` profile. Query model constraints before writing a scene plan; never infer duration, resolution, aspect ratio, or audio behavior from the model name.
+The current Worker uses `doubao-seedance-2.0` for new video generation. `MiniMax-Hailuo-2.3` is retained only to read historical workflows and old queue payloads. Query model constraints before writing a scene plan; never infer duration, resolution, aspect ratio, or audio behavior from the model name.
 
 Build one prompt per continuous shot in this order:
 

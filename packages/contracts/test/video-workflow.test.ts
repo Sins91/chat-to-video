@@ -190,10 +190,48 @@ describe("video workflow contracts", () => {
       workflowId: eventBase.workflowId,
       jobId: "job-1",
       storyboardVersion: 7,
+      initialPrompt: "生成一段雨夜短片",
       videoTitle: "雨夜来信",
       playbackUrl: "https://storage.example/video.mp4?signature=short-lived",
       createdAt: eventBase.timestamp,
     }).success).toBe(true);
+    expect(ConversationEntrySchema.safeParse({
+      id: "asset-batch-1",
+      type: "cinematic_asset_batch",
+      workflowId: eventBase.workflowId,
+      batchId: "asset-batch-1",
+      planVersion: 6,
+      status: "approved",
+      assetCount: 5,
+      isSuperseded: false,
+      supersededAt: null,
+      createdAt: eventBase.timestamp,
+    }).success).toBe(true);
+    expect(ConversationEntrySchema.safeParse({
+      id: "asset-batch-1",
+      type: "cinematic_asset_batch",
+      workflowId: eventBase.workflowId,
+      batchId: "asset-batch-1",
+      planVersion: 6,
+      status: "approved",
+      assetCount: 5,
+      isSuperseded: false,
+      supersededAt: null,
+      objectKey: "tenant/demo/project/demo/derived/asset/private.mp4",
+      createdAt: eventBase.timestamp,
+    }).success).toBe(false);
+    expect(ConversationEntrySchema.safeParse({
+      id: "asset-batch-1",
+      type: "cinematic_asset_batch",
+      workflowId: eventBase.workflowId,
+      batchId: "asset-batch-1",
+      planVersion: 6,
+      status: "approved",
+      assetCount: 0,
+      isSuperseded: false,
+      supersededAt: null,
+      createdAt: "not-a-timestamp",
+    }).success).toBe(false);
   });
 
   it("accepts structured workflow steps and legacy events", () => {

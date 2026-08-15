@@ -1,5 +1,6 @@
 import {
   CinematicArtifactSchema,
+  DEFAULT_VIDEO_MODEL,
   CinematicGenerativeStageSchema,
   CinematicStageSchema,
   CINEMATIC_PIPELINE_DEFINITION,
@@ -42,6 +43,7 @@ import {
   ResolveWorkflowUserIntentResponseSchema,
   type ResolveWorkflowUserIntentResponse,
   ResolveVideoWorkflowIntentResponseSchema,
+  WorkflowIntentDecisionSchema,
   WorkflowImportedArtifactCandidateSchema,
   type ResolveVideoWorkflowIntentRequest,
   type ResolveVideoWorkflowIntentResponse,
@@ -97,11 +99,20 @@ const messageIntent = (message: string): "approve" | "revise" => {
 
 const CONTROL_CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
 const SERVICE_ERROR_REPLY = "当前服务出现错误，建议新建对话重新开始。";
+const TERMINAL_WORKFLOW_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+const isTerminalWorkflowStatus = (status: string): boolean =>
+  TERMINAL_WORKFLOW_STATUSES.has(status);
 const DIRECT_ENTRY_PRODUCER: Record<string, CinematicGenerativeStage> = {
   proposal: "research",
   script: "proposal",
   scene_plan: "script",
   assets: "scene_plan",
+};
+
+type WorkflowCreationContext = {
+  initialPrompt: string;
+  messageContent: string;
+  sourceWorkflowId?: string;
 };
 
 const createPipelineScopeGuidance = (
@@ -149,15 +160,15 @@ export class VideoWorkflowService {
       ? await this.repository.findWorkflow(input.workflowId)
       : null;
     const explicitWorkflow = explicitWorkflowRow &&
-        !(["succeeded", "failed", "cancelled"] as const).includes(
-          explicitWorkflowRow.status as "succeeded" | "failed" | "cancelled",
-        )
+        !isTerminalWorkflowStatus(explicitWorkflowRow.status)
       ? explicitWorkflowRow
       : null;
     const activeWorkflow = explicitWorkflow ?? (input.conversationId
       ? await this.repository.findActiveWorkflowByConversation(input.conversationId)
       : null);
-    const pipeline = findWorkflowPipelineDefinition(activeWorkflow?.pipelineId ?? "cinematic") ??
+    const pipeline = findWorkflowPipelineDefinition(
+      activeWorkflow?.pipelineId ?? explicitWorkflowRow?.pipelineId ?? "cinematic",
+    ) ??
       CINEMATIC_PIPELINE_DEFINITION;
     const command = parseWorkflowControlCommand(text, pipeline);
     const conversationId = activeWorkflow?.conversationId ?? input.conversationId ?? null;
@@ -193,6 +204,17 @@ export class VideoWorkflowService {
           pendingAction: null,
         });
       }
+    }
+
+    if (explicitWorkflowRow && isTerminalWorkflowStatus(explicitWorkflowRow.status) && command === null) {
+      const latestWorkflow = input.conversationId
+        ? await this.conversations.findWorkflow(input.conversationId)
+        : null;
+      const terminalWorkflow = latestWorkflow && isTerminalWorkflowStatus(latestWorkflow.status)
+        ? latestWorkflow
+        : explicitWorkflowRow;
+      const terminalPipeline = findWorkflowPipelineDefinition(terminalWorkflow.pipelineId) ?? pipeline;
+      return this.resolveTerminalWorkflowIntent(input, terminalWorkflow, terminalPipeline);
     }
 
     const pendingRow = input.pendingActionId
@@ -359,7 +381,7 @@ export class VideoWorkflowService {
         conversationId: input.conversationId,
         messageId: input.messageId,
         prompt: text,
-        videoModel: input.videoModel ?? "MiniMax-Hailuo-2.3",
+        videoModel: input.videoModel ?? DEFAULT_VIDEO_MODEL,
       });
       return ResolveVideoWorkflowIntentResponseSchema.parse({
         accepted: true,
@@ -382,6 +404,123 @@ export class VideoWorkflowService {
       intent: { type: "chat" },
       conversationId,
       workflowId: activeWorkflow?.id ?? null,
+      pendingAction: null,
+    });
+  }
+
+  private async resolveTerminalWorkflowIntent(
+    input: ResolveVideoWorkflowIntentRequest,
+    workflow: NonNullable<Awaited<ReturnType<VideoWorkflowRepository["findWorkflow"]>>>,
+    pipeline: WorkflowPipelineDefinition,
+  ): Promise<ResolveVideoWorkflowIntentResponse> {
+    if (!workflow.conversationId) {
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true,
+        route: "chat",
+        applied: false,
+        intent: { type: "chat" },
+        conversationId: input.conversationId ?? null,
+        workflowId: null,
+        pendingAction: null,
+      });
+    }
+    const existing = await this.repository.findWorkflowUserDecision(input.messageId);
+    if (existing) {
+      if (existing.decision.type !== "start_workflow") {
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true,
+          route: "chat",
+          applied: false,
+          intent: { type: "chat" },
+          conversationId: workflow.conversationId,
+          workflowId: null,
+          pendingAction: null,
+        });
+      }
+      const source = await this.repository.findWorkflow(existing.workflowId);
+      const successor = source?.successorWorkflowId
+        ? await this.repository.findWorkflow(source.successorWorkflowId)
+        : null;
+      if (successor) {
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true,
+          route: "workflow",
+          applied: true,
+          intent: existing.decision,
+          conversationId: successor.conversationId,
+          workflowId: successor.id,
+          pendingAction: null,
+        });
+      }
+    }
+    const scope = await this.repository.findWorkflowScope(workflow.id);
+    if (!scope) {
+      throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
+    }
+    const artifactRow = await this.repository.findLatestCinematicArtifact(workflow.id);
+    const artifactSummary = artifactRow
+      ? JSON.stringify(CinematicArtifactSchema.parse(artifactRow.artifact))
+      : "No final artifact is available.";
+    const decision = existing ? WorkflowIntentDecisionSchema.parse({
+      intent: existing.decision,
+      source: existing.decisionSource,
+      resolverVersion: existing.resolverVersion,
+      requiresConfirmation: existing.requiresConfirmation === 1,
+    }) : await this.intentResolver.resolveTerminal({
+      requestId: workflow.requestId,
+      workflowId: workflow.id,
+      conversationId: workflow.conversationId,
+      tenantId: scope.tenantId,
+      projectId: scope.projectId,
+      workflowStatus: workflow.status,
+      currentStage: workflow.currentStageId,
+      currentVersion: workflow.currentVersion,
+      currentArtifactSummary: `Previous request: ${workflow.initialPrompt}\nFinal artifact: ${artifactSummary}`.slice(0, 4_000),
+      pipeline,
+      text: input.text,
+    });
+    if (decision.intent.type !== "start_workflow") {
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true,
+        route: "chat",
+        applied: false,
+        intent: { type: "chat" },
+        conversationId: workflow.conversationId,
+        workflowId: null,
+        pendingAction: null,
+      });
+    }
+    if (!existing) {
+      const saved = await this.repository.saveWorkflowUserDecision({
+        id: randomUUID(),
+        workflowId: workflow.id,
+        conversationMessageId: input.messageId,
+        pipelineId: pipeline.id,
+        stageId: workflow.currentStageId,
+        artifactVersion: workflow.currentVersion,
+        rawText: input.text,
+        decision,
+      });
+      if (!saved) return this.resolveTerminalWorkflowIntent(input, workflow, pipeline);
+    }
+    const created = await this.createWorkflow({
+      conversationId: workflow.conversationId,
+      messageId: input.messageId,
+      prompt: decision.intent.brief,
+      videoModel: input.videoModel ?? DEFAULT_VIDEO_MODEL,
+    }, {
+      initialPrompt: decision.intent.brief,
+      messageContent: input.text,
+      sourceWorkflowId: workflow.id,
+    });
+    await this.repository.markWorkflowUserDecisionApplied(input.messageId);
+    return ResolveVideoWorkflowIntentResponseSchema.parse({
+      accepted: true,
+      route: "workflow",
+      applied: true,
+      intent: decision.intent,
+      conversationId: created.conversationId,
+      workflowId: created.workflowId,
       pendingAction: null,
     });
   }
@@ -848,7 +987,7 @@ export class VideoWorkflowService {
     const requestId = pending.id;
     const videoModel = input.videoModel ?? (source
       ? VideoModelSchema.parse(source.videoModel)
-      : "doubao-seedance-2.0");
+      : DEFAULT_VIDEO_MODEL);
     try {
       const previousMessages = await this.conversations.listModelMessages(claimed.conversationId);
       const durationSeconds = source?.durationSeconds ?? await this.modelGateway.inferCinematicDuration({
@@ -1278,6 +1417,16 @@ export class VideoWorkflowService {
   }
 
   async create(input: CreateVideoWorkflowRequest): Promise<CreateVideoWorkflowResponse> {
+    return this.createWorkflow(input, {
+      initialPrompt: input.prompt,
+      messageContent: input.prompt,
+    });
+  }
+
+  private async createWorkflow(
+    input: CreateVideoWorkflowRequest,
+    context: WorkflowCreationContext,
+  ): Promise<CreateVideoWorkflowResponse> {
     if (!isCinematicCreationEnabled()) {
       throw new ServiceUnavailableException({
         code: "CINEMATIC_CREATION_MAINTENANCE",
@@ -1302,7 +1451,7 @@ export class VideoWorkflowService {
         projectId: DEMO_PROJECT_ID,
         messages: [
           ...previousMessages.slice(-49),
-          { role: "user", content: input.prompt },
+          { role: "user", content: context.initialPrompt },
         ],
         videoModel: input.videoModel,
       });
@@ -1315,26 +1464,46 @@ export class VideoWorkflowService {
     if (!input.conversationId) {
       await this.conversations.createWithUserMessage({
         conversationId,
-        title: createConversationTitle(input.prompt),
+        title: createConversationTitle(context.messageContent),
         messageId: input.messageId,
-        content: input.prompt,
+        content: context.messageContent,
       });
     }
-    const isCreated = await this.repository.createWorkflow({
+    const newWorkflow = {
       id: workflowId,
       conversationId,
       requestId,
       pipelineId: CINEMATIC_PIPELINE_DEFINITION.id,
       currentStageId: CINEMATIC_PIPELINE_DEFINITION.stages[0]?.id ?? "research",
-      initialPrompt: input.prompt,
+      initialPrompt: context.initialPrompt,
       videoModel: input.videoModel,
       durationSeconds,
-      message: input.conversationId ? { messageId: input.messageId, content: input.prompt } : undefined,
-    });
-    if (!isCreated) {
+      message: input.conversationId
+        ? { messageId: input.messageId, content: context.messageContent }
+        : undefined,
+    };
+    const successor = context.sourceWorkflowId
+      ? await this.repository.createSuccessorWorkflow({
+          ...newWorkflow,
+          sourceWorkflowId: context.sourceWorkflowId,
+        })
+      : null;
+    const isCreated = successor
+      ? successor.created
+      : context.sourceWorkflowId
+        ? false
+        : await this.repository.createWorkflow(newWorkflow);
+    if (!isCreated && !successor) {
       throw new ConflictException({
         code: "CONVERSATION_WORKFLOW_ACTIVE",
         message: "This conversation already has an active video workflow.",
+      });
+    }
+    if (successor && !successor.created) {
+      return CreateVideoWorkflowResponseSchema.parse({
+        conversationId,
+        workflowId: successor.workflowId,
+        requestId: successor.requestId,
       });
     }
     try {
@@ -1353,7 +1522,7 @@ export class VideoWorkflowService {
         },
       });
       await this.mastraRuntime.start(
-        { workflowId, requestId, initialPrompt: input.prompt, videoModel: input.videoModel, durationSeconds },
+        { workflowId, requestId, initialPrompt: context.initialPrompt, videoModel: input.videoModel, durationSeconds },
         (runId) => this.repository.setRunId(workflowId, runId),
       );
     } catch (error: unknown) {

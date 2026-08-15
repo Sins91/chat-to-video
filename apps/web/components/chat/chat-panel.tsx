@@ -26,6 +26,7 @@ import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-pro
 import { createChatTransport } from "@/lib/chat-transport";
 import { notifyConversationHistoryChanged, notifyPendingConversationHistory } from "@/lib/conversation-client";
 import { isVideoCreationIntent } from "@/lib/video-intent";
+import { shouldResolveVideoWorkflowInput } from "@/lib/video-workflow-routing";
 
 type ChatSession = {
   chat: Chat<UIMessage>;
@@ -268,6 +269,10 @@ export function ChatPanel() {
 
   const dispatchText = useCallback(async (text: string, sessionId: string) => {
     const messageId = crypto.randomUUID();
+    if (!shouldResolveVideoWorkflowInput({ snapshot: workflow.snapshot, text })) {
+      await sendChatMessage(text);
+      return;
+    }
     const controlRoute = await workflow.resolveControlIntent(text, messageId);
     if (controlRoute.route === "workflow") {
       if (controlRoute.conversationId) {
@@ -281,7 +286,7 @@ export function ChatPanel() {
       return;
     }
     await sendChatMessage(text);
-  }, [sendChatMessage, workflow.resolveControlIntent]);
+  }, [sendChatMessage, workflow.resolveControlIntent, workflow.snapshot]);
 
   const runText = useCallback((text: string) => {
     const sessionId = activeSession.id;
@@ -403,7 +408,7 @@ export function ChatPanel() {
           canStop={isChatGenerating}
           input={input}
           isGenerating={isAgentBusy}
-          isVideoModelLocked={Boolean(pendingControl) || isWorkflowProcessing}
+          isVideoModelLocked={workflow.snapshot !== null && !workflow.snapshot.canChangeVideoModel}
           onCancelQueuedInput={cancelQueuedInput}
           onInputChange={setInput}
           onStop={stopAgent}

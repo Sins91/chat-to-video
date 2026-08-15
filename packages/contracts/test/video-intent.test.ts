@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isVideoWorkflowIntent } from "../src/index.js";
+import { getVideoWorkflowIntentHint, isVideoWorkflowIntent } from "../src/index.js";
 
 describe("isVideoWorkflowIntent", () => {
   it.each([
@@ -19,5 +19,12 @@ describe("isVideoWorkflowIntent", () => {
     "今天天气怎么样？",
   ])("leaves informational, negated, or unrelated chat outside the pipeline: %s", (content) => {
     expect(isVideoWorkflowIntent(content)).toBe(false);
+  });
+
+  it("leaves contextual follow-ups for the terminal API resolver", () => {
+    expect(getVideoWorkflowIntentHint("再来一个")).toBe("ambiguous");
+    expect(getVideoWorkflowIntentHint("按刚才的风格再做一版")).toBe("ambiguous");
+    expect(getVideoWorkflowIntentHint("再生成一段雨夜城市宣传片")).toBe("workflow");
+    expect(getVideoWorkflowIntentHint("视频生成的原理是什么？")).toBe("chat");
   });
 });

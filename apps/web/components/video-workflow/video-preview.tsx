@@ -1,6 +1,7 @@
 "use client";
 
-import { CircleAlertIcon, FilmIcon, LoaderCircleIcon, LogOutIcon, RefreshCwIcon, SparklesIcon } from "lucide-react";
+import type { GeneratedVideoPromptTrace, GeneratedVideoPromptTraceItem } from "@chat-to-video/contracts";
+import { CheckIcon, CircleAlertIcon, CopyIcon, FilmIcon, LoaderCircleIcon, LogOutIcon, RefreshCwIcon, SparklesIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -13,6 +14,7 @@ import { StoryboardArtifactCard } from "./storyboard-artifact-card";
 import { VideoDownloadContextMenu } from "./video-download-context-menu";
 import { useVideoWorkflow } from "./video-workflow-provider";
 import { WorkflowStepStatusCard } from "./workflow-step-status-card";
+import { Task, TaskContent, TaskItem, TaskTrigger } from "@/src/components/ai-elements/task";
 const isQueuedStatus = (status: string): boolean => status === "queued";
 const PREVIEW_LOADING_DELAY_MS = 200;
 
@@ -46,6 +48,85 @@ function DownloadablePreviewVideo({
   </VideoDownloadContextMenu>;
 }
 
+function PromptTraceItem({ item }: { readonly item: GeneratedVideoPromptTraceItem }) {
+  const [copyState, setCopyState] = useState<"copied" | "failed" | "idle">("idle");
+  const copyLabel = copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制提示词";
+
+  const copyPrompt = () => {
+    if (!navigator.clipboard) {
+      setCopyState("failed");
+      return;
+    }
+    void navigator.clipboard.writeText(item.content).then(
+      () => setCopyState("copied"),
+      () => setCopyState("failed"),
+    );
+  };
+
+  return <Task className="border-b border-white/5 last:border-b-0" defaultOpen={item.kind === "video_model_input"}>
+    <TaskTrigger
+      className={item.kind === "video_model_input" ? "text-violet-200" : "text-zinc-400"}
+      status="completed"
+      title={item.label}
+    />
+    <TaskContent className="mb-2 mt-1 border-white/10">
+      <TaskItem className="flex items-start gap-3 py-2">
+        <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words font-sans text-xs leading-5 text-zinc-400">{item.content}</pre>
+        <Button aria-live="polite" className="h-7 shrink-0 px-2 text-xs" onClick={copyPrompt} size="sm" type="button" variant="ghost">
+          {copyState === "copied" ? <CheckIcon className="size-3.5 text-emerald-400" /> : <CopyIcon className="size-3.5" />}
+          {copyLabel}
+        </Button>
+      </TaskItem>
+    </TaskContent>
+  </Task>;
+}
+
+function PromptTraceReview({ trace }: { readonly trace: GeneratedVideoPromptTrace }) {
+  const [copyState, setCopyState] = useState<"copied" | "failed" | "idle">("idle");
+  const copyLabel = copyState === "copied" ? "已复制全部" : copyState === "failed" ? "复制失败" : "复制全部";
+  const copyAll = () => {
+    if (!navigator.clipboard) {
+      setCopyState("failed");
+      return;
+    }
+    const text = trace.map((item) => `${item.label}\n${item.content}`).join("\n\n");
+    void navigator.clipboard.writeText(text).then(
+      () => setCopyState("copied"),
+      () => setCopyState("failed"),
+    );
+  };
+
+  return <Task className="rounded-xl border border-white/10 bg-[#111315]/95 px-4 py-2" defaultOpen={false}>
+    <div className="flex items-center gap-2">
+      <TaskTrigger className="min-w-0 flex-1 text-zinc-300" status="completed" title={`提示词演进 · ${trace.length} 项`} />
+      <Button aria-live="polite" className="h-7 shrink-0 px-2 text-xs" onClick={copyAll} size="sm" type="button" variant="ghost">
+        {copyState === "copied" ? <CheckIcon className="size-3.5 text-emerald-400" /> : <CopyIcon className="size-3.5" />}
+        {copyLabel}
+      </Button>
+    </div>
+    <TaskContent className="max-h-72 overflow-y-auto border-white/10 pr-2">
+      {trace.map((item) => <PromptTraceItem item={item} key={item.id} />)}
+    </TaskContent>
+  </Task>;
+}
+
+function CompletedVideoReview({
+  onError,
+  promptTrace,
+  video,
+}: {
+  readonly onError?: () => void;
+  readonly promptTrace: GeneratedVideoPromptTrace;
+  readonly video: { id: string; playbackUrl: string; title: string };
+}) {
+  return <div className="flex size-full min-h-0 max-w-4xl flex-col items-center justify-center gap-4">
+    <div className="grid min-h-0 w-full flex-1 place-items-center">
+      <DownloadablePreviewVideo onError={onError} video={video} />
+    </div>
+    <div className="w-full shrink-0"><PromptTraceReview trace={promptTrace} /></div>
+  </div>;
+}
+
 
 export function VideoWorkflowVisualization() {
   const { isLoading, previewVideo, refresh, returnToCurrentVideo, snapshot, stepProgress } = useVideoWorkflow();
@@ -63,14 +144,14 @@ export function VideoWorkflowVisualization() {
   if (previewVideo) {
     return <aside className="flex h-full min-w-0 flex-col bg-[#090a0b]" aria-labelledby="visualization-title">
       <header className="flex h-14 shrink-0 items-center border-b border-white/10 px-5"><FilmIcon className="size-4 text-violet-300" /><h2 className="ml-2 font-sans text-sm font-medium text-zinc-200" id="visualization-title">可视化结果</h2><span className="ml-auto text-xs text-zinc-400">视频 · 回看</span><Button className="ml-2 h-7 border-white/10 bg-transparent px-2 text-xs text-zinc-300 hover:bg-white/5 hover:text-white" onClick={() => void returnToCurrentVideo()} size="sm" type="button" variant="outline">返回当前</Button></header>
-      <div className="checkerboard grid min-h-0 flex-1 place-items-center p-6"><DownloadablePreviewVideo key={previewVideo.id} video={previewVideo} /></div>
+      <div className="checkerboard grid min-h-0 flex-1 place-items-center p-6"><CompletedVideoReview key={previewVideo.id} promptTrace={previewVideo.promptTrace} video={previewVideo} /></div>
     </aside>;
   }
 
   if (snapshot?.status === "succeeded" && job?.playbackUrl) {
     return <aside className="flex h-full min-w-0 flex-col bg-[#090a0b]" aria-labelledby="visualization-title">
       <header className="flex h-14 shrink-0 items-center border-b border-white/10 px-5"><FilmIcon className="size-4 text-violet-300" /><h2 className="ml-2 font-sans text-sm font-medium text-zinc-200" id="visualization-title">可视化结果</h2><span className="ml-auto text-xs text-emerald-400">视频 · 已完成</span></header>
-      <div className="checkerboard grid min-h-0 flex-1 place-items-center p-6"><DownloadablePreviewVideo onError={() => void refresh()} video={{ id: job.jobId, playbackUrl: job.playbackUrl, title: job.videoTitle ?? "视频成片" }} /></div>
+      <div className="checkerboard grid min-h-0 flex-1 place-items-center p-6"><CompletedVideoReview onError={() => void refresh()} promptTrace={snapshot.promptTrace} video={{ id: job.jobId, playbackUrl: job.playbackUrl, title: job.videoTitle ?? "视频成片" }} /></div>
     </aside>;
   }
 

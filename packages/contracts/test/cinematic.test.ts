@@ -1,4 +1,5 @@
 import {
+  DEFAULT_VIDEO_MODEL,
   CinematicArtifactSchema,
   CinematicScenePlanSchema,
   RENDER_JOB_TIMEOUT_MS,
@@ -36,6 +37,10 @@ const scenes = [
 ];
 
 describe("cinematic contracts", () => {
+  it("uses Seedance as the default video generation model", () => {
+    expect(DEFAULT_VIDEO_MODEL).toBe("doubao-seedance-2.0");
+  });
+
   it("rounds final scene durations up to model-supported generation tiers", () => {
     expect(roundVideoModelDurationSeconds("MiniMax-Hailuo-2.3", 4)).toBe(6);
     expect(roundVideoModelDurationSeconds("MiniMax-Hailuo-2.3", 7)).toBe(10);

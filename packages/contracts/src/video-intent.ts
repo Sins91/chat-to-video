@@ -6,15 +6,23 @@ const VIDEO_PLANNING_REQUEST = /(?:生成|制作|创建|构思|编写|输出|规
 const SPEC_DRIVEN_VIDEO_WORK = /(?:生成|制作|创建|渲染)[^。！？?]{0,160}(?:(?:时长|片长|持续)\s*(?:约|大约)?\s*\d{1,3}\s*(?:秒|s|seconds?)|\b(?:720p|768p|1080p|2k|4k)\b|运镜|镜头运动|转场|画面比例|横屏|竖屏)/iu;
 const ENGLISH_VIDEO_WORK = /\b(?:generate|create|make|produce|render|plan|write|edit|revise)\b.{0,160}\b(?:video|clip|movie|animation|storyboard|video script)\b|\b(?:video|clip|movie|animation|storyboard|video script)\b.{0,160}\b(?:generate|create|make|produce|render|plan|write|edit|revise)\b/iu;
 
-/** Shared coarse routing guard. The API remains the authoritative workflow boundary. */
-export const isVideoWorkflowIntent = (content: string): boolean => {
+export type VideoWorkflowIntentHint = "workflow" | "chat" | "ambiguous";
+
+/** Rule-only routing hint. Ambiguous terminal follow-ups must be resolved by the API. */
+export const getVideoWorkflowIntentHint = (content: string): VideoWorkflowIntentHint => {
   const normalized = content.normalize("NFKC").trim();
   if (!normalized || NEGATED_VIDEO_WORK.test(normalized) || INFORMATION_REQUEST.test(normalized)) {
-    return false;
+    return "chat";
   }
   return VIDEO_OUTPUT_REQUEST.test(normalized)
     || VIDEO_RESULT_REQUEST.test(normalized)
     || VIDEO_PLANNING_REQUEST.test(normalized)
     || SPEC_DRIVEN_VIDEO_WORK.test(normalized)
-    || ENGLISH_VIDEO_WORK.test(normalized);
+    || ENGLISH_VIDEO_WORK.test(normalized)
+    ? "workflow"
+    : "ambiguous";
 };
+
+/** Shared coarse routing guard. The API remains the authoritative workflow boundary. */
+export const isVideoWorkflowIntent = (content: string): boolean =>
+  getVideoWorkflowIntentHint(content) === "workflow";

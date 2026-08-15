@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { CinematicArtifactVersionSchema } from "./cinematic.js";
+import {
+  CinematicAssetBatchStatusSchema,
+  CinematicAssetIdSchema,
+} from "./cinematic-assets.js";
 
 import {
   StoryboardVersionSchema,
   VideoWorkflowSnapshotSchema,
   VideoWorkflowStatusSchema,
 } from "./video-workflow.js";
+import { GeneratedVideoPromptTraceSchema } from "./generated-video.js";
 
 export const ConversationIdSchema = z.string().uuid();
 export const ConversationMessageIdSchema = z.string().trim().min(1).max(100);
@@ -34,12 +39,27 @@ export const ConversationCinematicArtifactEntrySchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
 }).strict();
 
+export const ConversationCinematicAssetBatchEntrySchema = z.object({
+  id: CinematicAssetIdSchema,
+  type: z.literal("cinematic_asset_batch"),
+  workflowId: z.string().uuid(),
+  batchId: CinematicAssetIdSchema,
+  planVersion: z.number().int().positive(),
+  status: CinematicAssetBatchStatusSchema,
+  assetCount: z.number().int().min(1).max(121),
+  isSuperseded: z.boolean(),
+  supersededAt: z.string().datetime({ offset: true }).nullable(),
+  createdAt: z.string().datetime({ offset: true }),
+}).strict();
+
 export const ConversationArchivedVideoEntrySchema = z.object({
   id: z.string().min(1).max(100),
   type: z.literal("archived_video"),
   workflowId: z.string().uuid(),
   jobId: z.string().min(1).max(100),
   storyboardVersion: z.number().int().positive(),
+  initialPrompt: z.string().trim().min(1).max(8_000),
+  promptTrace: GeneratedVideoPromptTraceSchema.default([]),
   videoTitle: z.string().trim().min(1).max(120).nullable().default(null),
   playbackUrl: z.string().url(),
   createdAt: z.string().datetime({ offset: true }),
@@ -49,6 +69,7 @@ export const ConversationEntrySchema = z.discriminatedUnion("type", [
   ConversationTextEntrySchema,
   ConversationStoryboardEntrySchema,
   ConversationCinematicArtifactEntrySchema,
+  ConversationCinematicAssetBatchEntrySchema,
   ConversationArchivedVideoEntrySchema,
 ]);
 
