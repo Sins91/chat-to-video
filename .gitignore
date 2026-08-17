@@ -22,6 +22,9 @@ temp/
 workdir/
 artifacts/
 
+# Local generated reports
+/openmontage-cinematic-skills-tools.xlsx
+
 # Local agent instructions and tooling
 /AGENTS.md
 /CLAUDE.md

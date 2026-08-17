@@ -1,145 +1,217 @@
+<div align="center">
+
 # Chat-to-Video
 
-基于 Next.js、NestJS、Mastra、AI SDK、BullMQ、Drizzle、FFmpeg 和 MinIO 的对话式视频生成平台。
+### 从一句自然语言，到可审核、可恢复、可追溯的电影化视频生产流水线
 
-## 工程结构
+*From conversation to a reviewable, resumable, and traceable cinematic production pipeline.*
+
+<p>
+  <img alt="Status: Engineering Preview" src="https://img.shields.io/badge/status-engineering_preview-8b5cf6?style=flat-square">
+  <img alt="TypeScript 6.0.3" src="https://img.shields.io/badge/TypeScript-6.0.3-3178c6?style=flat-square&amp;logo=typescript&amp;logoColor=white">
+  <img alt="Node.js 26.7+" src="https://img.shields.io/badge/Node.js-26.7%2B-5fa04e?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white">
+  <img alt="pnpm 11.20" src="https://img.shields.io/badge/pnpm-11.20-f69220?style=flat-square&amp;logo=pnpm&amp;logoColor=white">
+  <img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-0f172a?style=flat-square">
+</p>
+
+Chat-to-Video is a TypeScript monorepo for turning natural-language conversations into cinematic videos. It combines deterministic Mastra workflows, human approval checkpoints, BullMQ-based media jobs, resumable SSE progress, and FFmpeg composition behind a modular NestJS API.
+
+</div>
+
+> [!IMPORTANT]
+> 本项目处于 **Engineering Preview** 阶段，适合架构验证和本地体验，尚未面向生产环境开放。模型调用会产生第三方服务费用，请在运行生成任务前确认账户额度。
+
+## 项目概览
+
+Chat-to-Video 将聊天、创作决策与异步媒体生产整合为一条确定性的工作流。用户可以从一句创意开始，在创意方案、脚本、分镜和素材等阶段逐步审核或修改，系统再通过独立 Worker 生成素材、合成视频，并将进度持续推送回浏览器。
+
+它不是在 HTTP 请求中直接运行媒体计算的演示脚本，而是一套面向长耗时 AI 视频任务设计的工程骨架：在线 API、工作流状态、队列执行、对象存储与浏览器体验彼此隔离，并通过共享 Schema 保持边界一致。
+
+## 核心能力
+
+| 能力 | 当前实现 |
+| --- | --- |
+| 对话式创作入口 | 普通问答与视频生产意图由服务端统一裁决，Web 不维护第二套工作流事实 |
+| 确定性电影管线 | Mastra 按统一管线定义推进阶段，Agent 只生成经 Zod 校验的结构化产物 |
+| Human-in-the-loop | 创意方案、脚本、分镜与素材规划支持确认和修改；素材生成完成后提供二次审批 |
+| 暂停、恢复与重启 | 审批点可暂停和恢复，可从可重启阶段创建新分支并保留 checkpoint 历史 |
+| 异步媒体执行 | BullMQ 按资源特征隔离 Agent、图片、渲染和清理任务，Worker 独立于在线 API |
+| 可恢复进度流 | SSE 传输 Agent 文本和任务进度，重连后先恢复快照，再补发增量事件 |
+| 媒体与对象存储 | FFmpeg、FFprobe 与 Sharp 负责安全的媒体处理，MinIO/S3 保存素材和成片 |
+| 全栈类型边界 | Web、API 与 Worker 复用 `@chat-to-video/contracts` 中的 Zod Schema 和推导类型 |
+
+## 从对话到成片
 
 ```text
-apps/
-  web/       Next.js 前端
-  api/       NestJS 在线 API
-  worker/    BullMQ 异步媒体与 Agent Worker
-packages/
-  contracts/ 跨应用 Zod 协议与 DTO
-  database/  Drizzle Schema、查询和迁移
-  storage/   S3/MinIO 存储适配
-  media/     FFmpeg、FFprobe、Sharp 媒体能力
-  config/    共享工程配置
-infra/
-  docker/    本地基础设施编排
-  ffmpeg/    FFmpeg 镜像和预设
-tests/
-  e2e/       跨服务端到端测试
-docs/        架构与项目文档
+自然语言输入
+   ↓
+创作研究 → 创意方案（审核）→ 脚本（审核）→ 分镜写作（审核）
+   ↓
+素材规划（审核）→ 异步素材生成 → 素材结果（再次审核）
+   ↓
+剪辑方案 → FFmpeg 合成 → MinIO/S3 成片 → SSE 完成事件
 ```
 
-Mastra Agent 与可暂停工作流只位于 `apps/api` 内部；媒体任务仍由独立 BullMQ Worker 执行。
+- **审核优先**：付费素材生成和最终合成只在对应审批完成后发生。
+- **状态可追溯**：MySQL 保存业务事实、版本和审计记录；Redis 承担队列、短期进度与工作流快照。
+- **失败可恢复**：重复请求先复用已持久化产物和既有任务，避免重复调用模型或重复入队。
+- **分支不覆盖历史**：阶段重启会创建新的运行分支，旧产物和已完成视频继续以只读历史保留。
 
-## 包管理器
+## 系统架构
 
-本项目只允许使用 pnpm，不支持 npm 或 yarn。根目录与所有 workspace 均配置了安装前校验；使用其他包管理器安装会直接失败。
+```mermaid
+flowchart LR
+    USER["用户"] --> WEB["Next.js Web"]
+    WEB <-->|"REST / SSE"| API["NestJS API"]
 
-```powershell
+    API --> AGENT["Mastra + AI SDK<br/>Zod 结构化输出"]
+    AGENT --> GATEWAY["ModelGateway<br/>APIMart / DeepSeek"]
+
+    API --> MYSQL["MySQL<br/>业务事实"]
+    API --> REDIS["Redis<br/>快照与事件"]
+    API --> QUEUE["BullMQ<br/>异步任务"]
+    API --> OBJECTS["MinIO / S3<br/>媒体对象"]
+
+    QUEUE --> WORKER["独立 Worker"]
+    WORKER --> MEDIA["FFmpeg / FFprobe / Sharp"]
+    WORKER --> MYSQL
+    WORKER --> REDIS
+    WORKER <--> OBJECTS
+```
+
+核心部署形态是“模块化单体 NestJS API + 独立 BullMQ Worker + Next.js Web”。耗时媒体计算不会进入 Web 或 API 请求进程；MySQL 是业务事实来源，Redis 和 MinIO/S3 分别承担短期运行状态与媒体二进制。
+
+## 快速开始
+
+### 使用 Docker Compose（推荐）
+
+需要准备：
+
+- Docker 与 Docker Compose
+- 可用的 `APIMART_API_KEY`
+
+在仓库根目录创建本地环境文件：
+
+```bash
+cp .env.example .env.local
+# PowerShell: Copy-Item .env.example .env.local
+```
+
+编辑 `.env.local`，至少填写：
+
+```dotenv
+APIMART_API_KEY=your-api-key
+```
+
+构建并启动 MySQL、Redis、MinIO、数据库迁移、API、Worker 与 Web：
+
+```bash
+docker compose --env-file .env.local up --build
+```
+
+| 服务 | 地址 |
+| --- | --- |
+| Web 创作中心 | <http://localhost:4000/studio/agent> |
+| API 健康检查 | <http://localhost:4101/health> |
+| MinIO Console | <http://localhost:9001> |
+| MySQL | `localhost:4002` |
+| Redis | `localhost:4003` |
+
+停止服务但保留命名卷数据：
+
+```bash
+docker compose down
+```
+
+## 本地开发
+
+运行时要求与根配置保持一致：
+
+- Node.js `>=26.7.0 <27`
+- pnpm `>=11.20.0 <12`
+- FFmpeg 与 FFprobe 可执行文件
+- MySQL、Redis 和 MinIO
+
+只使用 pnpm 安装依赖：
+
+```bash
 corepack enable
 pnpm install
 ```
 
-国内网络环境可使用带镜像自动选择和官方源兜底的安装命令：
+可先通过 Compose 启动本地基础设施，再应用数据库迁移：
 
-```powershell
-pnpm deps:install:cn
-```
-
-镜像优先级、参数传递方式和限制见 [`docs/国内镜像源.md`](docs/国内镜像源.md)。
-
-## SDK 版本匹配文档
-
-AI SDK 的 API 变化频繁。使用以下命令搜索当前锁定版本随包发布的文档，避免依赖过期示例：
-
-```powershell
-pnpm sdk:docs:ai -- "ToolLoopAgent"
-```
-
-搜索结果会显示实际安装版本以及匹配文档的文件、行号和内容。
-
-## LLM 纯文本聊天 Agent
-
-API 通过内部 `ModelGateway`、Mastra Agent 和 `@ai-sdk/openai-compatible` 调用 OpenAI 兼容的文本模型。当前 `LLM_PROVIDER` 默认是 `apimart`，聊天、分镜和创作 Agent 使用 `APIMART_CHAT_MODEL`；DeepSeek 直连入口及其环境变量继续保留，仅在显式设置 `LLM_PROVIDER=deepseek` 时启用。APIMart 的账户余额和视频生成链路不受该开关影响。纯文本聊天不调用 BullMQ 或 Worker，也不保存会话。Web 仅保留创作中心，根路径会跳转到 `/studio`；`/studio/agent` 子页面通过 `/api/chat` BFF 消费该接口。页面只保留对话输入：普通内容进入聊天 Agent，只有“生成/制作视频”“把内容做成短片”等明确执行意图才创建视频工作流；咨询、脚本、文案、创意和分镜讨论继续作为普通聊天。
-
-如需验证聊天 Agent，复制 `.env.example` 为根目录 `.env.local`，填写 `APIMART_API_KEY`，并按账号实际可用模型调整 `APIMART_CHAT_MODEL`。聊天总超时由 `APIMART_TIMEOUT_MS` 或 `DEEPSEEK_TIMEOUT_MS` 控制，默认值为 `600000` 毫秒（10 分钟）；分镜超时继续由独立变量控制。只有需要启用保留的 DeepSeek 直连入口时，才设置 `LLM_PROVIDER=deepseek` 并填写 `DEEPSEEK_API_KEY`。API 在开发和生产启动时默认读取该文件；由操作系统或部署平台注入的环境变量优先。可使用以下命令同时启动 API 和 Web：
-
-对话页右上角通过 NestJS API 查询 APIMart 账户级余额；Web 只能读取经过共享 Schema 校验的余额快照，不会接触 `APIMART_API_KEY`。余额查询使用同一服务端密钥，无需新增环境变量。
-
-```powershell
-Copy-Item .env.example .env.local # 首次运行时执行，然后填写 APIMART_API_KEY
-pnpm dev:chat
-```
-
-该命令会先构建 API 所依赖的 `contracts`、`database` 和 `storage` 共享包，再并行运行 API 与 Web，避免开发进程加载过期的 `dist`；共享依赖构建失败时不会启动 watcher。按一次 `Ctrl+C` 即可停止。启动脚本优先使用进程环境变量，再读取仓库根目录 `.env.local`，最后才使用代码默认值；Web 显式使用 `WEB_PORT`，API 使用 `API_PORT`。按示例配置时浏览器访问 <http://localhost:4000/studio/agent>。`POST /chat-agent/messages` 的成功响应是 AI SDK UI Message SSE。
-
-需要临时切换配置时，通过 `ENV_FILE` 指定仓库根目录下的其他 `.env` 文件；文件名必须以 `.env` 开头，指定的文件不存在时启动会直接失败：
-
-```powershell
-$env:ENV_FILE = ".env.test"
-pnpm dev:chat
-Remove-Item Env:ENV_FILE
-```
-
-单独执行各 workspace 的 `pnpm --filter <workspace> start` 时，会先运行该 workspace 的完整 `build`（包括所需共享包），再启动生产服务。Web 的 `dev` 或 `start` 仍使用 `WEB_PORT`。除 `/studio/agent` 外的创作中心页面使用本地 mock 数据；聊天 Agent 需要可访问的 API，未配置 `API_BASE_URL` 时默认连接 `http://localhost:4101`。
-
-这是 APIMart 纯文本流式兼容性的最小验证，不代表工具调用、结构化输出、限流、重试、计费或生产部署已经完成验证。
-
-## Docker Compose
-
-在仓库根目录构建并启动 MySQL、Redis、MinIO、API、Worker 与 Web：
-
-```powershell
-docker compose --env-file .env.local up --build
-```
-
-Docker Compose 的 `--build` 会先完成 API、Worker、Web 及其共享包的镜像构建，再启动容器。
-
-启动完成后可访问：
-
-- Web：<http://localhost:4000>
-- API 健康检查：<http://localhost:4101/health>
-- MySQL：`localhost:4002`
-- Redis：`localhost:4003`
-
-Web、API、MySQL 和 Redis 的容器监听端口、宿主机映射端口、服务间连接地址及健康检查统一读取传给 Compose 的 `WEB_PORT`、`API_PORT`、`MYSQL_PORT` 和 `REDIS_PORT`。修改端口后不需要同步修改 Compose 内的其他地址。MySQL 与 Redis 数据分别保存在 Compose 命名卷 `mysql_data` 和 `redis_data` 中。停止并移除容器：
-
-```powershell
-docker compose down
-```
-
-## 电影化视频生产工作流
-
-`/studio/agent` 在对话内容明确表达视频生成意图后进入可恢复的电影化生产流程：用户输入框不单独展示时长控件；用户可在对话中明确指定 4–300 秒成片总时长，未指定时由 API 内部的无工具时长决策 Agent 根据最近对话上下文判断；`cinematic-director` 依次生成创作研究、创意方案、脚本、场景和素材规划，并把超出 Seedance 单次 15 秒上限的内容拆成连续镜头。在分镜审核点，用户还可逐镜头设置最终成片秒数；不符合供应商档位的时长会向上圆整到 Seedance 支持的 4–15 秒整数档，页面同时展示成片时长与模型生成档位并要求再次确认，Worker 生成后按成片时长裁切。用户在各审核点确认或提出修改后，API 才会生成剪辑决策并把视频任务写入 `render-jobs`。独立 Worker 沿用逐场景生成、对象存储缓存和 FFmpeg 拼接方案完成长视频。Web 通过 SSE 恢复进度并在右栏播放结果；对话区底部根据持久化步骤事件展示完整进度条和当前中文提示，覆盖需求理解、各创作审核阶段、逐镜头生成、合成与保存，旧事件则从工作流快照回退恢复。普通聊天仅在等待首个流式响应时显示临时“理解需求”提示，不写入聊天历史。每个渲染周期从视频任务入队起最多运行 12 小时；API 同时写入独立的 `cleanup-jobs` 延迟看门狗，到期后原子标记任务和工作流失败、发布 `job.failed`，并清理已生成的场景片段及最终对象。
-
-首次运行前复制 `.env.example` 为 `.env.local` 并填写 `APIMART_API_KEY`。使用 Docker Compose 启动时，`database-migrate` 一次性服务会在 MySQL 健康后应用尚未执行的 Drizzle 迁移；只有迁移成功后 API 和 Worker 才会启动。
-
-不使用 Docker Compose 时，需显式执行数据库迁移：
-
-```powershell
+```bash
+docker compose --env-file .env.local up -d mysql redis minio minio-init
 pnpm --filter @chat-to-video/database db:migrate
 ```
 
-如需为历史侧栏添加简要演示数据，可在迁移完成后执行以下幂等种子命令。它会为“今天、昨天、过去 7 天、更早”各写入一条简单的一问一答，不创建视频工作流；重复执行会更新同一组固定记录：
+分别启动 Web/API 和异步 Worker：
 
-```powershell
-pnpm db:seed:history
+```bash
+# Terminal 1: Next.js + NestJS
+pnpm dev:chat
+
+# Terminal 2: BullMQ Worker
+pnpm --filter @chat-to-video/worker dev
 ```
 
-## 对话历史
+国内网络环境可使用带镜像自动选择与官方源兜底的安装命令：
 
-`/studio/agent` 使用 URL 中的 `conversationId` 恢复会话。普通聊天消息、视频创作提示和历次分镜均持久化到 MySQL；同一会话可以依次创建多个视频工作流，详情和 SSE 跟随最近一次工作流，但在已有工作流仍处于分镜、排队或生成状态时不会并发创建。历史栏删除为软删除，不会取消仍在执行的任务，也不会删除 MinIO 中的媒体产物。首次消息会自动创建会话，空白“新对话”不会提前写入数据库。
+```bash
+pnpm deps:install:cn
+```
 
-新增环境部署必须应用 `packages/database/migrations` 中的全部增量迁移；`0003_conversation_video_workflows.sql` 会将会话与视频工作流从一对一调整为一对多。当前 Demo 仍由 API 固定使用 `tenant/demo/project/demo`，客户端不能指定租户或项目。
+### 常用命令
 
-Docker Compose 已包含 MySQL、数据库迁移、Redis、MinIO、API、Worker 和 Web。详细协议、状态机、配置和 Demo 安全边界见 [`docs/两步式视频工作流.md`](docs/两步式视频工作流.md)。
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm build` | 构建全部 workspace |
+| `pnpm lint` | 执行 ESLint 检查 |
+| `pnpm typecheck` | 执行 TypeScript 类型检查 |
+| `pnpm test` | 运行脚本测试与各 workspace 测试 |
+| `pnpm db:seed:history` | 幂等写入对话历史演示数据 |
+| `pnpm sdk:docs:ai -- "ToolLoopAgent"` | 搜索当前锁定 AI SDK 版本附带的文档 |
 
-## Cinematic Agent 扩展
+## Monorepo 结构
 
-API 内的 `chat-default` 与 `cinematic-director` 已接入首批 Mastra Skills 和四个白名单只读 Tools：`get_agent_capabilities`、`get_video_model_constraints`、`get_cinematic_context`、`estimate_cinematic_cost`。两个 Agent 均先加载适配自 OpenMontage 的 `cinematic-governance` 全局治理 Skill；`cinematic-director` 再按当前 `scene_plan` 等阶段加载对应 Skill 与 reviewer。媒体计算和付费视频生成仍只通过现有 `cinematic-production` 工作流、BullMQ 与 `render-jobs` 执行；治理边界详见 [`docs/cinematic-agent-governance.md`](./docs/cinematic-agent-governance.md)。
+```text
+apps/
+├── web/          Next.js 创作中心与浏览器交互
+├── api/          NestJS API、Agent、Mastra 工作流与 SSE
+└── worker/       BullMQ 任务、模型媒体生成与 FFmpeg 合成
 
-Cinematic 素材阶段现已采用双审批：第一次确认素材规划后，API 按能力注册表将 Seedream 图片、Sharp 标题卡、视频镜头和 FlowMusic 音乐分别交给 `image-jobs`、`render-jobs` 与 `agent-jobs`；Worker 将对象键、适配器和任务状态持久化到 MySQL。全部素材完成后进入第二次人工审批，批准后创建新的 Mastra continuation run 生成剪辑方案并入队最终合成。最终 FFmpeg 合成只消费已批准对象键，并对音乐执行循环、增益与淡入淡出处理。
+packages/
+├── contracts/    跨边界 Zod Schema、DTO、队列与 SSE 协议
+├── database/     Drizzle Schema、迁移与数据访问
+├── storage/      S3/MinIO 接口与对象键约束
+├── media/        FFmpeg、FFprobe、Sharp 安全封装
+├── tools/        可复用工具定义与适配能力
+└── config/       共享工程配置
 
-APIMart 真实 Tool Calling 冒烟门禁尚未在本次变更中执行；验证 Chat Completions、工具循环、结构化输出、流式转换、取消/超时/限流/usage 语义前，不得以默认开启状态部署。
+infra/            Docker 镜像与基础设施配置
+scripts/          安装、启动、文档查询与连通性脚本
+docs/             架构决策、实施方案与验证报告
+```
 
-服务端通过 `LLM_TOOL_CALLING_ENABLED=true|false` 控制 Skills/Tools 可见性。Agent 每次请求最多执行 8 步，Tool 串行调用；请求作用域来自服务端 `RequestContext`，执行结果写入审计表并复用现有 `agent.step` SSE。关闭开关时 Agent 不获得这些 Skills/Tools；网关不支持 Tool Calling 时返回明确错误，不静默降级。
+## Engineering Preview
 
-来源、改编范围和 AGPLv3 处理见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。实现计划见 [首批迁移计划](./docs/cinematic-agent-extension-first-batch.md)，候选能力见 [后续路线](./docs/cinematic-agent-extension-roadmap.md)。
+当前仓库已经具备端到端工程闭环，但以下边界尚未达到生产可用标准：
+
+- 租户与项目命名空间仍固定为 `tenant/demo/project/demo`，客户端不能指定真实租户或项目。
+- APIMart 是受内部 `ModelGateway` 隔离的默认模型网关；工具调用、结构化输出、限流、重试、错误码和用量语义仍需在真实账户上完成完整门禁验证。
+- APIMart 视频与素材生成会消耗真实额度，不建议在缺少配额、成本和审计策略时开放给非受信用户。
+- 身份认证、资源级授权、生产密钥管理、可观测性和灾备尚未形成完整生产方案。
+- `package.json` 当前版本为 `0.0.0`，暂无稳定 API、迁移兼容性或发布节奏承诺。
+
+## 延伸阅读
+
+- [技术架构选型](./docs/架构选型.md) — 系统边界、技术选择与演进路线
+- [依赖安装顺序](./docs/依赖安装顺序.md) — workspace 依赖、固定版本与基础设施顺序
+- [国内镜像源](./docs/国内镜像源.md) — pnpm 镜像选择、回退机制与使用限制
+- [用户意图识别落地](./docs/用户意图识别落地.md) — 审核点自然语言裁决与状态机边界
+- [第三方声明](./THIRD_PARTY_NOTICES.md) — OpenMontage 改编范围与第三方归属
 
 ## License
 
-本项目采用 [GNU Affero General Public License v3.0](./LICENSE)。第三方归属见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+本项目采用 [GNU Affero General Public License v3.0](./LICENSE)。使用、修改或部署前，请同时阅读 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
