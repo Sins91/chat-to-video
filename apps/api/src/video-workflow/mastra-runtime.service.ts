@@ -129,13 +129,13 @@ export class MastraRuntimeService implements OnModuleDestroy {
     input: CinematicWorkflowInput,
     persistRunId: (runId: string) => Promise<void>,
   ): Promise<string> {
-    if (!input.continuation || input.continuation.kind !== "assets_approved") {
-      throw new Error("Asset approval continuation input is invalid.");
+    if (!input.continuation || input.continuation.kind !== "stage_execution_approved") {
+      throw new Error("Stage execution approval continuation input is invalid.");
     }
     await this.initialize();
     const run = await this.workflow.createRun({ pubsub: this.pubsub });
     await persistRunId(run.runId);
-    this.logRun("Restarting", input, run.runId, "edit", input.continuation.baseVersion);
+    this.logRun("Restarting", input, run.runId, input.continuation.stageId === "consistency_reference" ? "assets" : "edit", input.continuation.baseVersion);
     await run.startAsync({
       inputData: input,
       initialState: initialCinematicState(input, input.continuation.baseVersion),

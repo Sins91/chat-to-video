@@ -153,15 +153,9 @@ services:
       context: .
       dockerfile: infra/docker/Dockerfile
       target: worker-runtime
+    env_file:
+      - .env.local
     environment:
-      APIMART_API_KEY: "${APIMART_API_KEY:-}"
-      APIMART_BASE_URL: "${APIMART_BASE_URL:-https://api.apimart.ai/v1}"
-      APIMART_VIDEO_MODEL: "${APIMART_VIDEO_MODEL:-doubao-seedance-2.0}"
-      APIMART_VIDEO_DURATION_SECONDS: "${APIMART_VIDEO_DURATION_SECONDS:-10}"
-      APIMART_VIDEO_GENERATE_AUDIO: "${APIMART_VIDEO_GENERATE_AUDIO:-true}"
-      APIMART_VIDEO_POLL_INTERVAL_MS: "${APIMART_VIDEO_POLL_INTERVAL_MS:-5000}"
-      APIMART_VIDEO_RESULT_HOSTS: "${APIMART_VIDEO_RESULT_HOSTS:-apimart.ai,getapib.org}"
-      APIMART_VIDEO_TASK_TIMEOUT_MS: "${APIMART_VIDEO_TASK_TIMEOUT_MS:-900000}"
       DATABASE_URL: "mysql://${MYSQL_USER:-chat_to_video}:${MYSQL_PASSWORD:-chat_to_video}@mysql:${MYSQL_PORT:-4002}/${MYSQL_DATABASE:-chat_to_video}"
       FFMPEG_PATH: "${FFMPEG_PATH:-/usr/bin/ffmpeg}"
       NODE_ENV: production

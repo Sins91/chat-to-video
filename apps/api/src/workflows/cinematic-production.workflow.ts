@@ -36,7 +36,8 @@ export const CinematicWorkflowInputSchema = z.object({
     previousArtifactVersion: z.number().int().positive().nullable(),
   }).strict().optional(),
   continuation: z.object({
-    kind: z.literal("assets_approved"),
+    kind: z.literal("stage_execution_approved"),
+    stageId: z.enum(["consistency_reference", "assets"]),
     baseVersion: z.number().int().positive(),
   }).strict().optional(),
 }).strict().superRefine((input, context) => {
@@ -61,7 +62,7 @@ const CinematicWorkflowStateSchema = z.object({
     stage: CinematicGenerativeStageSchema,
     version: z.number().int().positive(),
   }).strict().nullable(),
-  handoff: z.enum(["none", "assets_queued"]),
+  handoff: z.enum(["none", "consistency_reference_queued", "consistency_reference_blocked", "assets_queued"]),
 }).strict();
 
 export const CinematicWorkflowSuspensionSchema = z.object({
@@ -83,6 +84,7 @@ export type CinematicWorkflowDomainAdapter = Pick<VideoWorkflowOperations,
   | "activateCinematicArtifact"
   | "applySceneDurations"
   | "preflightStageExecution"
+  | "enqueueConsistencyReferenceBatch"
   | "enqueueCinematicAssetBatch"
   | "enqueueCinematicVideoVersion"
   | "fail"
@@ -95,7 +97,7 @@ export const initialCinematicState = (
   workflowId: input.workflowId,
   version,
   startStage: input.restart?.targetStage ?? null,
-  ...(input.continuation ? { startStage: "edit" as const } : {}),
+  ...(input.continuation ? { startStage: input.continuation.stageId === "consistency_reference" ? "assets" as const : "edit" as const } : {}),
   currentArtifact: null,
   handoff: "none",
 });
@@ -122,7 +124,30 @@ const assertReviewInteraction = (
   throw new Error(`Interaction ${interaction.type} is not valid while reviewing ${stage}.`);
 };
 
+type ReviewStage = "proposal" | "script" | "scene_plan" | "consistency_reference" | "assets";
+type ExecutionReviewResult = { handoff: CinematicWorkflowState["handoff"]; shouldSuspend: boolean };
+
 export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapter) => {
+  const executionReviewHandlers: Partial<Record<
+    ReviewStage,
+    (input: CinematicWorkflowCursor) => Promise<ExecutionReviewResult>
+  >> = {
+    consistency_reference: async (input) => {
+      const result = await operations.enqueueConsistencyReferenceBatch(input);
+      return {
+        handoff: result === "queued" ? "consistency_reference_queued" : "none",
+        shouldSuspend: result === "blocked",
+      };
+    },
+    assets: async (input) => {
+      if (!await operations.preflightStageExecution({ ...input, stage: "assets" })) {
+        return { handoff: "none", shouldSuspend: true };
+      }
+      await operations.enqueueCinematicAssetBatch(input);
+      return { handoff: "assets_queued", shouldSuspend: false };
+    },
+  };
+
   const researchDefinition = createPipelineStepDefinition(CINEMATIC_PIPELINE_DEFINITION, "research");
   const researchStep = createStep({
     id: researchDefinition.stepId,
@@ -161,7 +186,7 @@ export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapt
     },
   });
 
-  const createReviewStep = (stage: "proposal" | "script" | "scene_plan" | "assets") => {
+  const createReviewStep = (stage: ReviewStage) => {
     const definition = createPipelineStepDefinition(CINEMATIC_PIPELINE_DEFINITION, stage);
     return createStep({
       id: definition.stepId,
@@ -174,6 +199,7 @@ export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapt
       execute: async (context) => {
         const { inputData, resumeData, suspendData, state } = context;
         try {
+          if (state.handoff === "consistency_reference_queued") return inputData;
           if (!definition.shouldExecuteFrom(state.startStage)) return inputData;
           if (resumeData) {
             const interactionKind = assertReviewInteraction(resumeData, stage);
@@ -183,34 +209,25 @@ export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapt
               throw new Error(`Suspended workflow state does not match ${stage}.`);
             }
             if (interactionKind === "approve") {
-              if (definition.executionReview && !await operations.preflightStageExecution({
-                ...inputData,
-                stage,
-                version: suspension.version,
-              })) {
+              const executionReview = executionReviewHandlers[stage];
+              if (definition.executionReview && !executionReview) {
+                throw new Error(`Workflow stage ${stage} has no execution-review handler.`);
+              }
+              const result = executionReview
+                ? await executionReview(workflowCursor(inputData, suspension.version))
+                : { handoff: "none" as const, shouldSuspend: false };
+              if (result.shouldSuspend) {
                 return context.suspend({
                   workflowId: inputData.workflowId,
                   stage,
                   version: suspension.version,
                 });
               }
-              if (definition.executionReview) {
-                await operations.enqueueCinematicAssetBatch({
-                  ...inputData,
-                  version: suspension.version,
-                });
-                await context.setState({
-                  ...state,
-                  version: suspension.version,
-                  currentArtifact: { stage, version: suspension.version },
-                  handoff: "assets_queued",
-                });
-                return workflowCursor(inputData, suspension.version);
-              }
               await context.setState({
                 ...state,
                 version: suspension.version,
                 currentArtifact: { stage, version: suspension.version },
+                handoff: result.handoff,
               });
               return workflowCursor(inputData, suspension.version);
             }
@@ -276,6 +293,7 @@ export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapt
   const proposalStep = createReviewStep("proposal");
   const scriptStep = createReviewStep("script");
   const scenePlanStep = createReviewStep("scene_plan");
+  const consistencyReferenceStep = createReviewStep("consistency_reference");
   const assetsStep = createReviewStep("assets");
   const editDefinition = createPipelineStepDefinition(CINEMATIC_PIPELINE_DEFINITION, "edit");
   const editStep = createStep({
@@ -287,7 +305,7 @@ export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapt
     execute: async (context) => {
       const { inputData, state } = context;
       try {
-        if (state.handoff === "assets_queued") return inputData;
+        if (state.handoff !== "none") return inputData;
         const version = inputData.version + 1;
         const artifact = CinematicArtifactSchema.parse(
           await operations.generateCinematicArtifact({ ...inputData, stage: "edit", version }),
@@ -321,7 +339,7 @@ export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapt
     retries: 0,
     execute: async ({ inputData, state }) => {
       try {
-        if (state.handoff === "assets_queued") {
+        if (state.handoff !== "none") {
           return { workflowId: inputData.workflowId, status: "queued" as const };
         }
         await operations.enqueueCinematicVideoVersion({ ...inputData, version: inputData.version });
@@ -344,6 +362,7 @@ export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapt
     .then(proposalStep)
     .then(scriptStep)
     .then(scenePlanStep)
+    .then(consistencyReferenceStep)
     .then(assetsStep)
     .then(editStep)
     .then(videoGenerationStep)

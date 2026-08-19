@@ -16,6 +16,19 @@ describe("generated video shelf", () => {
     expect(workspace).toContain("relative h-full min-h-0");
     expect(workspace).toContain('id="agent-preview"');
     expect(shelf).toContain("overflow-x-auto");
+    expect(shelf).toContain("cursor-grabbing select-none");
+    expect(shelf).toContain("onPointerDown={startHorizontalDrag}");
+    expect(shelf).toContain("event.currentTarget.scrollLeft = dragState.startScrollLeft - distanceX");
+    expect(shelf).toContain("onClickCapture={suppressClickAfterDrag}");
+    expect(shelf).toContain("onWheel={scrollHorizontallyWithWheel}");
+    expect(shelf).toContain("currentTargetScrollLeft + delta");
+    expect(shelf).toContain("const WHEEL_SCROLL_SPEED_FACTOR = 0.6");
+    expect(shelf).toContain("delta * WHEEL_SCROLL_SPEED_FACTOR");
+    expect(shelf).toContain("const WHEEL_SCROLL_EASING_FACTOR = 0.18");
+    expect(shelf).toContain("window.requestAnimationFrame(animateWheelScroll)");
+    expect(shelf).toContain("scrollContainer.scrollLeft += distance * WHEEL_SCROLL_EASING_FACTOR");
+    expect(shelf).toContain("useEffect(() => stopWheelScrollAnimation");
+    expect(shelf).toContain("if (nextTargetScrollLeft === currentTargetScrollLeft");
     expect(shelf).toContain("flex min-w-max gap-1.5");
     expect(shelf).toContain('isExpanded ? "h-[130px]" : "h-5"');
     expect(shelf).toContain("transition-[height,box-shadow] duration-300");
@@ -36,6 +49,8 @@ describe("generated video shelf", () => {
     expect(shelf).toContain("video.durationSeconds");
     expect(shelf).toContain("video.resolution");
     expect(shelf).toContain("absolute inset-x-0 bottom-0");
+    expect(shelf).toContain("bottom-0 z-50 overflow-hidden");
+    expect(shelf).not.toContain("bottom-0 z-20 overflow-hidden");
     expect(shelf).toContain("contrast-[1.08]");
     expect(shelf).toContain("saturate-[0.82]");
     expect(shelf).not.toContain("font-serif font-semibold");
@@ -125,6 +140,18 @@ describe("generated video shelf", () => {
     expect(preview).toContain("navigator.clipboard.writeText(item.content)");
     expect(preview).toContain("promptTrace={previewVideo.promptTrace}");
     expect(preview).toContain("promptTrace={snapshot.promptTrace}");
+    expect(preview).toContain("const MIN_PROMPT_TRACE_HEIGHT_PX = 160");
+    expect(preview).toContain('className="absolute inset-x-0 bottom-0 z-30"');
+    expect(preview).toContain("minHeight: MIN_PROMPT_TRACE_HEIGHT_PX");
+    expect(preview).toContain("dragStart.heightPx + dragStart.pointerY - event.clientY");
+    expect(preview).toContain("cursor-ns-resize touch-none");
+    expect(preview).toContain('aria-label="调整提示词演进高度"');
+    expect(preview).toContain("onPointerDown={startResize}");
+    expect(preview).toContain("onKeyDown={resizeWithKeyboard}");
+    expect(preview).not.toContain("ResizablePanelGroup");
+    expect(preview.indexOf("<DownloadablePreviewVideo onError={onError} video={video} />")).toBeLessThan(
+      preview.indexOf("<PromptTraceReview trace={promptTrace} />"),
+    );
     expect(provider).toContain("promptTrace: video.promptTrace");
   });
 });

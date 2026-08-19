@@ -36,6 +36,9 @@ describe("worker capability registry", () => {
       (capability) => capability.capabilityId === "image.generate",
     )).toMatchObject({ status: "available", adapterId: "apimart.seedream-5-pro" });
     expect(snapshot.resolutions.find(
+      (capability) => capability.capabilityId === "image.generate.reference",
+    )).toMatchObject({ status: "unconfigured", adapterId: null });
+    expect(snapshot.resolutions.find(
       (capability) => capability.capabilityId === "music.generate",
     )).toMatchObject({ status: "available", adapterId: "apimart.flowmusic" });
     expect(snapshot.resolutions.find(

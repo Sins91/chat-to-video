@@ -6,8 +6,10 @@ export const WORKFLOW_CAPABILITY_SNAPSHOT_TTL_SECONDS = 90;
 
 export const WorkflowCapabilityIdSchema = z.enum([
   "image.generate",
+  "image.generate.reference",
   "image.render.title-card",
   "video.generate",
+  "video.generate.reference",
   "music.generate",
   "audio.mix",
   "video.compose.ffmpeg",
@@ -20,6 +22,7 @@ export const WorkflowCapabilityConditionIdSchema = z.enum([
   "title_card_planned",
   "music_generation_selected",
   "audio_asset_planned",
+  "consistency_reference_required",
 ]);
 
 export const WorkflowCapabilityStatusSchema = z.enum([
@@ -62,6 +65,7 @@ export const WorkflowCapabilityFactsSchema = z.object({
   hasTitleCard: z.boolean(),
   generatesMusic: z.boolean(),
   hasAudioAsset: z.boolean(),
+  requiresConsistencyReference: z.boolean().default(false),
 }).strict();
 
 export const WorkflowCapabilitySnapshotSchema = z.object({
@@ -97,6 +101,7 @@ const conditionMatches = (
     case "title_card_planned": return facts.hasTitleCard;
     case "music_generation_selected": return facts.generatesMusic;
     case "audio_asset_planned": return facts.hasAudioAsset;
+    case "consistency_reference_required": return facts.requiresConsistencyReference;
   }
 };
 

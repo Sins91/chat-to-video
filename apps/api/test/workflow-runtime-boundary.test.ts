@@ -22,4 +22,30 @@ describe("video workflow runtime boundary", () => {
     expect(agents).not.toContain("workflowDirector:");
     expect(gateway).not.toContain("decideWorkflowAction");
   });
+
+  it("binds execution approval and queue handoff to the exact stage version", async () => {
+    const [operations, repository, service] = await Promise.all([
+      readFile(resolve(apiRoot, "src/video-workflow/video-workflow.operations.ts"), "utf8"),
+      readFile(resolve(apiRoot, "../../packages/database/src/video-workflow-repository.ts"), "utf8"),
+      readFile(resolve(apiRoot, "src/video-workflow/video-workflow.service.ts"), "utf8"),
+    ]);
+
+    expect(operations).toContain("this.repository.findCinematicAssetBatch(");
+    expect(operations).toContain("referenceRow.version");
+    expect(service).toContain("workflow.currentVersion");
+    expect(repository).toContain("async findCinematicAssetBatch(");
+    const referenceBatch = operations.slice(
+      operations.indexOf("async enqueueConsistencyReferenceBatch"),
+      operations.indexOf("async enqueueCinematicAssetBatch"),
+    );
+    expect(referenceBatch).toContain('candidate.capabilityId === "image.generate"');
+    expect(referenceBatch).not.toContain('candidate.capabilityId === "image.generate.reference"');
+    expect(referenceBatch).toContain("referenceBindings: []");
+
+    expect(referenceBatch).toContain("getCinematicConsistencyReferencePriority(left.kind)");
+    expect(referenceBatch).toContain("getCinematicConsistencyReferencePriority(right.kind)");
+    expect(referenceBatch).toContain("priority: getCinematicConsistencyReferencePriority(group.kind)");
+    expect(repository).toContain("eq(cinematicAssetBatches.planVersion, planVersion)");
+    expect(repository).toContain("desc(cinematicAssetBatches.planVersion)");
+  });
 });

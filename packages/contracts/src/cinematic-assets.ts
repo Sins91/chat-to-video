@@ -1,8 +1,14 @@
 import { z } from "zod";
 
-import { CinematicClipDurationSecondsSchema, CinematicDurationSecondsSchema } from "./cinematic.js";
+import {
+  CinematicClipDurationSecondsSchema,
+  CinematicConsistencyReferenceGroupKindSchema,
+  CinematicDurationSecondsSchema,
+  getCinematicConsistencyReferencePriority,
+} from "./cinematic.js";
 import {
   VideoJobStatusSchema,
+  VideoOutputResolutionSchema,
   VideoModelSchema,
   VideoWorkflowIdSchema,
 } from "./video-workflow-common.js";
@@ -23,12 +29,32 @@ const DerivedObjectKeySchema = z.string()
   .regex(/^tenant\/demo\/project\/demo\/derived\/[a-zA-Z0-9-]+\/[a-zA-Z0-9._-]+$/u)
   .refine((objectKey) => !objectKey.includes(".."), "Object key cannot contain parent path segments.");
 
+export const CinematicReferenceBindingSchema = z.object({
+  groupId: CinematicAssetIdSchema,
+  assetId: CinematicAssetIdSchema,
+  objectKey: DerivedObjectKeySchema,
+  purpose: CinematicConsistencyReferenceGroupKindSchema,
+  approvalStatus: z.literal("approved"),
+}).strict();
+
+export const CinematicReferenceBindingsSchema = z.array(CinematicReferenceBindingSchema).max(3)
+  .superRefine((bindings, context) => {
+    const priorities = bindings.map((binding) =>
+      getCinematicConsistencyReferencePriority(binding.purpose));
+    if (priorities.some((priority, index) => index > 0 && priority < (priorities[index - 1] ?? priority))) context.addIssue({ code: "custom", message: "Reference bindings must follow character, product, environment, style priority." });
+    if (new Set(bindings.map((binding) => binding.groupId)).size !== bindings.length) context.addIssue({ code: "custom", message: "Reference bindings cannot repeat a continuity group." });
+  });
 const CinematicAssetJobBaseSchema = z.object({
   workflowId: VideoWorkflowIdSchema,
   requestId: z.string().uuid(),
   batchId: CinematicAssetIdSchema,
   assetId: CinematicAssetIdSchema,
   planVersion: z.number().int().positive(),
+  stageId: z.enum(["consistency_reference", "assets"]),
+  referenceGroupId: CinematicAssetIdSchema.nullable().default(null),
+  referenceBindings: CinematicReferenceBindingsSchema.default([]),
+  promptHash: z.string().trim().regex(/^[a-f0-9]{64}$/u),
+  reusedFromAssetId: CinematicAssetIdSchema.nullable().default(null),
   sceneOrder: z.number().int().min(1).max(60).nullable(),
   prompt: z.string().trim().min(1).max(1_000),
   objectKey: DerivedObjectKeySchema,
@@ -44,6 +70,7 @@ export const CinematicAssetJobPayloadSchema = z.discriminatedUnion("kind", [
   CinematicAssetJobBaseSchema.extend({
     kind: z.literal("image"),
     aspectRatio: z.enum(["16:9", "9:16", "1:1"]),
+    outputResolution: VideoOutputResolutionSchema.default("720p"),
   }).strict(),
   CinematicAssetJobBaseSchema.extend({
     kind: z.literal("title_card"),
@@ -60,6 +87,9 @@ export const CinematicExecutedAssetSchema = z.object({
   assetId: CinematicAssetIdSchema,
   sceneOrder: z.number().int().min(1).max(60).nullable(),
   kind: CinematicAssetKindSchema,
+  referenceGroupId: CinematicAssetIdSchema.nullable().default(null),
+  referenceBindings: CinematicReferenceBindingsSchema.default([]),
+  reusedFromAssetId: CinematicAssetIdSchema.nullable().default(null),
   status: VideoJobStatusSchema,
   progress: z.number().int().min(0).max(100).default(0),
   capabilityResolution: WorkflowCapabilityResolutionSchema,
@@ -76,6 +106,7 @@ export const CinematicAssetReviewItemSchema = CinematicExecutedAssetSchema.omit(
 }).strict();
 
 export const CinematicAssetBatchSchema = z.object({
+  stageId: z.enum(["consistency_reference", "assets"]),
   batchId: CinematicAssetIdSchema,
   workflowId: VideoWorkflowIdSchema,
   planVersion: z.number().int().positive(),
@@ -91,3 +122,4 @@ export type CinematicAssetJobPayload = z.infer<typeof CinematicAssetJobPayloadSc
 export type CinematicExecutedAsset = z.infer<typeof CinematicExecutedAssetSchema>;
 export type CinematicAssetReviewItem = z.infer<typeof CinematicAssetReviewItemSchema>;
 export type CinematicAssetBatch = z.infer<typeof CinematicAssetBatchSchema>;
+export type CinematicReferenceBinding = z.infer<typeof CinematicReferenceBindingSchema>;

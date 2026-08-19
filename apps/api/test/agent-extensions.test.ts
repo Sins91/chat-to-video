@@ -177,10 +177,19 @@ describe("agent extension boundaries", () => {
     })).toEqual({
       status: "estimated",
       amountUsd: 1.0357,
-      pricingSource: "https://api.apimart.ai/api/pricing/model",
-      pricingVersion: "2026-08-14",
+      pricingSource: "https://api.apimart.ai/api/pricing/model?model=doubao-seedream-5-0-pro",
+      pricingVersion: "2026-08-18",
       reason: null,
     });
+  });
+
+  it("includes Seedream reference-input charges after the first free image", () => {
+    expect(estimateCinematicCost({
+      model: "doubao-seedance-2.0",
+      durationsSeconds: [5],
+      generatedImageCount: 2,
+      generatedImageReferenceCounts: [1, 3],
+    }).amountUsd).toBe(1.0399);
   });
 
   it("still reports unavailable when a model has no reviewed pricing entry", () => {
@@ -248,7 +257,7 @@ describe("agent extension boundaries", () => {
 
     expect(priced.stage).toBe("assets");
     if (priced.stage !== "assets") throw new Error("Expected a priced asset manifest.");
-    expect(priced.data.assets.map((asset) => asset.estimatedCostUsd)).toEqual([0.366, 0.0732]);
-    expect(priced.data.totalEstimatedCostUsd).toBe(0.5142);
+    expect(priced.data.assets.map((asset) => asset.estimatedCostUsd)).toEqual([0.366, 0.0366]);
+    expect(priced.data.totalEstimatedCostUsd).toBe(0.4776);
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { LoaderCircleIcon, PlayIcon, RefreshCwIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-provider";
@@ -10,6 +10,17 @@ import { getCachedGeneratedVideos, listGeneratedVideos, type GeneratedVideoItem 
 import { cn } from "@/lib/utils";
 
 const FILM_PERFORATIONS = Array.from({ length: 10 }, (_, index) => index);
+const HORIZONTAL_DRAG_THRESHOLD_PX = 4;
+const WHEEL_SCROLL_SPEED_FACTOR = 0.6;
+const WHEEL_SCROLL_EASING_FACTOR = 0.18;
+const WHEEL_SCROLL_SETTLE_DISTANCE_PX = 0.5;
+
+type HorizontalDragState = {
+  readonly pointerId: number;
+  readonly startScrollLeft: number;
+  readonly startX: number;
+  hasDragged: boolean;
+};
 
 const FilmPerforations = ({ position }: { readonly position: "bottom" | "top" }) => <span
   aria-hidden="true"
@@ -66,9 +77,14 @@ export function GeneratedVideoShelf() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [switchingConversationId, setSwitchingConversationId] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const loadSequenceRef = useRef(0);
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isContextMenuOpenRef = useRef(false);
+  const dragStateRef = useRef<HorizontalDragState | null>(null);
+  const shouldSuppressClickRef = useRef(false);
+  const wheelAnimationFrameRef = useRef<number | null>(null);
+  const wheelTargetScrollLeftRef = useRef<number | null>(null);
 
   const clearCollapseTimer = useCallback(() => {
     if (collapseTimerRef.current === null) return;
@@ -95,7 +111,97 @@ export function GeneratedVideoShelf() {
     else scheduleShelfCollapse();
   }, [expandShelf, scheduleShelfCollapse]);
 
+  const stopWheelScrollAnimation = useCallback(() => {
+    if (wheelAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(wheelAnimationFrameRef.current);
+    }
+    wheelAnimationFrameRef.current = null;
+    wheelTargetScrollLeftRef.current = null;
+  }, []);
+
+  const startHorizontalDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    stopWheelScrollAnimation();
+    dragStateRef.current = {
+      hasDragged: false,
+      pointerId: event.pointerId,
+      startScrollLeft: event.currentTarget.scrollLeft,
+      startX: event.clientX,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [stopWheelScrollAnimation]);
+
+  const moveHorizontalDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current;
+    if (dragState === null || dragState.pointerId !== event.pointerId) return;
+    const distanceX = event.clientX - dragState.startX;
+    if (!dragState.hasDragged && Math.abs(distanceX) < HORIZONTAL_DRAG_THRESHOLD_PX) return;
+    if (!dragState.hasDragged) {
+      dragState.hasDragged = true;
+      setIsDragging(true);
+    }
+    event.currentTarget.scrollLeft = dragState.startScrollLeft - distanceX;
+    event.preventDefault();
+  }, []);
+
+  const finishHorizontalDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current;
+    if (dragState === null || dragState.pointerId !== event.pointerId) return;
+    const shouldSuppressClick = event.type === "pointerup" && dragState.hasDragged;
+    shouldSuppressClickRef.current = shouldSuppressClick;
+    if (shouldSuppressClick) {
+      window.setTimeout(() => {
+        shouldSuppressClickRef.current = false;
+      }, 0);
+    }
+    dragStateRef.current = null;
+    setIsDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  const suppressClickAfterDrag = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!shouldSuppressClickRef.current) return;
+    shouldSuppressClickRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  const scrollHorizontallyWithWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (delta === 0) return;
+    const scrollContainer = event.currentTarget;
+    const maximumScrollLeft = scrollContainer.scrollWidth - scrollContainer.clientWidth;
+    const currentTargetScrollLeft = wheelTargetScrollLeftRef.current ?? scrollContainer.scrollLeft;
+    const nextTargetScrollLeft = Math.min(maximumScrollLeft, Math.max(0, currentTargetScrollLeft + delta * WHEEL_SCROLL_SPEED_FACTOR));
+    if (nextTargetScrollLeft === currentTargetScrollLeft && scrollContainer.scrollLeft === nextTargetScrollLeft) return;
+    wheelTargetScrollLeftRef.current = nextTargetScrollLeft;
+
+    if (wheelAnimationFrameRef.current === null) {
+      const animateWheelScroll = () => {
+        const targetScrollLeft = wheelTargetScrollLeftRef.current;
+        if (targetScrollLeft === null) {
+          wheelAnimationFrameRef.current = null;
+          return;
+        }
+        const distance = targetScrollLeft - scrollContainer.scrollLeft;
+        if (Math.abs(distance) <= WHEEL_SCROLL_SETTLE_DISTANCE_PX) {
+          scrollContainer.scrollLeft = targetScrollLeft;
+          wheelAnimationFrameRef.current = null;
+          wheelTargetScrollLeftRef.current = null;
+          return;
+        }
+        scrollContainer.scrollLeft += distance * WHEEL_SCROLL_EASING_FACTOR;
+        wheelAnimationFrameRef.current = window.requestAnimationFrame(animateWheelScroll);
+      };
+      wheelAnimationFrameRef.current = window.requestAnimationFrame(animateWheelScroll);
+    }
+    event.preventDefault();
+  }, []);
+
   useEffect(() => clearCollapseTimer, [clearCollapseTimer]);
+  useEffect(() => stopWheelScrollAnimation, [stopWheelScrollAnimation]);
 
   const load = useCallback(async () => {
     const loadSequence = loadSequenceRef.current + 1;
@@ -134,7 +240,7 @@ export function GeneratedVideoShelf() {
   return <section
     aria-label="已生成视频胶片"
     className={cn(
-      "absolute inset-x-0 bottom-0 z-20 overflow-hidden border-t border-stone-700/40 bg-[radial-gradient(circle_at_50%_0%,rgb(68_56_45/0.22),transparent_48%),linear-gradient(180deg,#151310_0%,#070707_100%)] transition-[height,box-shadow] duration-300 ease-out",
+      "absolute inset-x-0 bottom-0 z-50 overflow-hidden border-t border-stone-700/40 bg-[radial-gradient(circle_at_50%_0%,rgb(68_56_45/0.22),transparent_48%),linear-gradient(180deg,#151310_0%,#070707_100%)] transition-[height,box-shadow] duration-300 ease-out",
       isExpanded ? "h-[130px]" : "h-5",
       isExpanded
         ? "shadow-[inset_0_1px_0_rgb(255_255_255/0.025),0_-10px_30px_rgb(0_0_0/0.32)]"
@@ -148,7 +254,18 @@ export function GeneratedVideoShelf() {
     onPointerLeave={scheduleShelfCollapse}
   >
     <span aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1 z-10 h-0.5 w-10 -translate-x-1/2 rounded-full bg-stone-400/45 shadow-[0_1px_4px_rgb(0_0_0/0.8)]" />
-    <div className="overflow-x-auto px-3 py-2 [scrollbar-color:rgb(87_83_78/0.65)_transparent]">
+    <div
+      className={cn(
+        "overflow-x-auto px-3 py-2 [scrollbar-color:rgb(87_83_78/0.65)_transparent]",
+        isDragging ? "cursor-grabbing select-none" : "cursor-grab",
+      )}
+      onClickCapture={suppressClickAfterDrag}
+      onPointerCancel={finishHorizontalDrag}
+      onPointerDown={startHorizontalDrag}
+      onPointerMove={moveHorizontalDrag}
+      onPointerUp={finishHorizontalDrag}
+      onWheel={scrollHorizontallyWithWheel}
+    >
       <div className="flex min-w-max gap-1.5">
         {videos.map((video) => <GeneratedVideoCard
           isSwitching={video.conversationId === switchingConversationId}

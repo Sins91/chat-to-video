@@ -69,6 +69,24 @@ export const renderTitleCard = async (input: {
   return new Uint8Array(output);
 };
 
+export const resizeImageToVideoFrame = async (input: {
+  body: Uint8Array;
+  width: number;
+  height: number;
+}): Promise<Uint8Array> => {
+  if (input.body.byteLength === 0 || input.body.byteLength > 100 * 1024 * 1024) {
+    throw new Error("Image resize received an invalid input size.");
+  }
+  if (!Number.isInteger(input.width) || !Number.isInteger(input.height) ||
+      input.width < 1 || input.height < 1 || input.width > 4_096 || input.height > 4_096) {
+    throw new Error("Image resize received invalid target dimensions.");
+  }
+  const output = await sharp(input.body)
+    .resize(input.width, input.height, { fit: "cover", position: "centre" })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  return new Uint8Array(output);
+};
 const runFfmpeg = (
   executablePath: string,
   args: readonly string[],

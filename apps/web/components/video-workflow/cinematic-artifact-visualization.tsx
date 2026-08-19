@@ -243,6 +243,17 @@ const ScenePlanView = ({ data }: { readonly data: ArtifactData<"scene_plan"> }) 
   </div>
 );
 
+const ConsistencyReferenceView = ({ data }: { readonly data: ArtifactData<"consistency_reference"> }) => (
+  <div className="space-y-3">
+    <InfoPanel title={data.status === "required" ? "需要一致性参考图" : "无需一致性参考图"}>{data.reason}</InfoPanel>
+    {data.groups.map((group) => (
+      <CollapsiblePlanningBlock key={group.id} meta={`镜头 ${group.sceneOrders.join("、")} · ${currency.format(group.estimatedCostUsd)}`} summary={group.canonicalDescription} title={group.label}>
+        <p className="text-xs leading-5 text-zinc-500">{group.kind} · {group.aspectRatio}</p>
+        <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-zinc-500">{group.prompt}</p>
+      </CollapsiblePlanningBlock>
+    ))}
+  </div>
+);
 const AssetsView = ({ data }: { readonly data: ArtifactData<"assets"> }) => {
   const riskTone = data.slideshowRisk >= 7 ? "bg-red-400" : data.slideshowRisk >= 4 ? "bg-amber-300" : "bg-emerald-400";
   return (
@@ -326,6 +337,7 @@ export function CinematicArtifactVisualization({ areSectionsExpanded, artifact }
   else if (artifact.stage === "proposal") content = <ProposalView data={artifact.data} />;
   else if (artifact.stage === "script") content = <ScriptView data={artifact.data} />;
   else if (artifact.stage === "scene_plan") content = <ScenePlanView data={artifact.data} />;
+  else if (artifact.stage === "consistency_reference") content = <ConsistencyReferenceView data={artifact.data} />;
   else if (artifact.stage === "assets") content = <AssetsView data={artifact.data} />;
   else content = <EditView data={artifact.data} />;
 

@@ -44,6 +44,13 @@ describe("two-step video workflow UI", () => {
     expect(preview).toContain("CinematicArtifactCard");
     expect(preview).toContain("StoryboardArtifactCard");
     expect(preview).toContain('aria-label="结构化创作工作区"');
+    expect(preview).toContain("WorkflowPreviewShell");
+    expect(preview).toContain("getWorkflowPreviewHistoryNodes");
+    expect(preview).toContain("selectedHistoryNode");
+    expect(preview).toContain("CURRENT_WORKFLOW_NODE_VALUE");
+    expect(preview).toContain("onValueChange={(value)");
+    expect(preview).toContain("selectedNodeLabel");
+    expect(preview).toContain("<SelectValue>{selectedNodeLabel}</SelectValue>");
     expect(preview.indexOf("{stepProgress ? <WorkflowStepStatusCard")).toBeLessThan(preview.indexOf("{snapshot.currentArtifact ?"));
     expect(preview).not.toContain("submitSceneDurations");
     expect(artifactCard).not.toContain("SceneDurationEditor");
@@ -319,7 +326,7 @@ describe("two-step video workflow UI", () => {
     expect(card).toContain("progress.stepTotal");
     expect(card).toContain("progress.stepLabel");
     expect(card).toContain("currentStepLabel");
-    expect(card).toContain("DEFAULT_WORKFLOW_STEP_LABELS[progress.stepIndex - 1]");
+    expect(card).toContain("pipelineId ? findWorkflowPipelineDefinition(pipelineId) : null");
     expect(card).toContain("progress.message");
     expect(card).toContain("videoOutputEstimate.duration");
     expect(card).toContain("videoOutputEstimate.resolution");
@@ -340,12 +347,38 @@ describe("two-step video workflow UI", () => {
     expect(card).not.toContain("displayedStepIndex");
     expect(card).not.toContain("completedSteps");
     expect(card).not.toContain("StateIcon");
-    expect(card).toContain("DEFAULT_WORKFLOW_STEP_LABELS");
+    expect(card).toContain("pipeline.stages.map((stage) => stage.stepLabel ?? stage.label)");
+    expect(card).not.toContain("DEFAULT_WORKFLOW_STEP_LABELS");
     expect(card).toContain("<TooltipContent>{stepLabel}</TooltipContent>");
     expect(card).toContain("tabIndex={0}");
     expect(card).toContain("before:-inset-x-0.5 before:-inset-y-3");
     expect(tooltip).toContain("border-border bg-popover");
     expect(tooltip).toContain("text-popover-foreground shadow-md");
+  });
+
+  it("keeps image generation progress on the current pipeline stage", async () => {
+    const provider = await readFile(
+      resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"),
+      "utf8",
+    );
+
+    expect(provider).toContain("const stage = snapshot.currentStage;");
+    expect(provider).not.toContain('const stage = snapshot.status === "queued"');
+  });
+
+  it("derives preview progress labels from the shared pipeline definition", async () => {
+    const [preview, card] = await Promise.all([
+      readFile(resolve(webRoot, "components/video-workflow/video-preview.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/workflow-step-status-card.tsx"), "utf8"),
+    ]);
+
+    expect(card).toContain("pipelineId ? findWorkflowPipelineDefinition(pipelineId) : null");
+    expect(card).toContain(
+      "pipeline.stages.map((stage) => stage.stepLabel ?? stage.label)",
+    );
+    expect(card).not.toContain("DEFAULT_WORKFLOW_STEP_LABELS");
+    expect(preview).toContain("pipelineId={snapshot.pipeline}");
+    expect(preview).toContain("pipelineId={snapshot?.pipeline}");
   });
 
   it("treats a user-requested workflow exit as terminal and switches the preview", async () => {
@@ -449,7 +482,7 @@ describe("two-step video workflow UI", () => {
     expect(provider).not.toContain("void refresh().then(() => notifyConversationHistoryChanged())");
     expect(provider).toContain("preserveTransientUi: true");
     expect(preview).toContain("snapshot.durationSeconds");
-    expect(preview).toContain("getVideoOutputEstimate(snapshot?.durationSeconds)");
+    expect(preview).toContain("snapshot?.initialPrompt");
     expect(preview).toContain("预计成片 {videoOutputEstimate.duration} · {videoOutputEstimate.resolution}");
     expect(preview).not.toContain("VideoOutputEstimateDetails");
     expect(preview).toContain("generationMessage");

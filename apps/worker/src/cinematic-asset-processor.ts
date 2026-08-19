@@ -3,13 +3,14 @@ import {
   CinematicAssetJobPayloadSchema,
   findMissingWorkflowCapabilities,
   findWorkflowStage,
+  getVideoFrameDimensions,
   type CinematicAssetJobPayload,
   type VideoWorkflowEvent,
   type WorkflowStepProgress,
   type WorkflowStepState,
 } from "@chat-to-video/contracts";
 import { createDatabase, VideoWorkflowRepository } from "@chat-to-video/database";
-import { renderTitleCard } from "@chat-to-video/media";
+import { renderTitleCard, resizeImageToVideoFrame } from "@chat-to-video/media";
 import { ObjectStorage } from "@chat-to-video/storage";
 import { UnrecoverableError, type Job } from "bullmq";
 import { Redis } from "ioredis";
@@ -20,11 +21,12 @@ import { PermanentVideoError, SeedanceClient } from "./seedance-client.js";
 import { resolveWorkerCapabilities, workerCapabilityId } from "./workflow-capability.registry.js";
 
 const assetGenerationStep = (
+  stageId: "consistency_reference" | "assets",
   stepState: WorkflowStepState,
   message: string,
 ): WorkflowStepProgress => {
-  const stage = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "assets");
-  if (!stage) throw new Error("Cinematic assets stage is not registered.");
+  const stage = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, stageId);
+  if (!stage) throw new Error(`Cinematic ${stageId} stage is not registered.`);
   return {
     stepId: stage.stepId,
     stepLabel: stage.stepLabel ?? stage.label,
@@ -37,9 +39,10 @@ const assetGenerationStep = (
   };
 };
 
-const assetReviewStep = (message: string): WorkflowStepProgress =>
-  assetGenerationStep("awaiting_input", message);
-
+const assetReviewStep = (
+  stageId: "consistency_reference" | "assets",
+  message: string,
+): WorkflowStepProgress => assetGenerationStep(stageId, "awaiting_input", message);
 type AssetProgressReporter = (
   progress: number,
   message: string,
@@ -67,6 +70,7 @@ export class CinematicAssetProcessor {
   private readonly repository: VideoWorkflowRepository;
   private readonly storage: ObjectStorage;
   private readonly publisher: Redis;
+  private readonly referenceUploadUrls = new Map<string, Promise<string>>();
 
   constructor(private readonly config: WorkerConfig) {
     this.repository = new VideoWorkflowRepository(createDatabase(config.databaseUrl));
@@ -122,7 +126,7 @@ export class CinematicAssetProcessor {
         jobId: payload.assetId,
         status: "running",
         progress: boundedProgress,
-        ...assetGenerationStep("running", message),
+        ...assetGenerationStep(payload.stageId, "running", message),
       },
     });
   }
@@ -151,6 +155,44 @@ export class CinematicAssetProcessor {
     return { body, contentType };
   }
 
+  private async referenceUrls(payload: CinematicAssetJobPayload): Promise<string[]> {
+    const urls: string[] = [];
+    for (const binding of payload.referenceBindings) {
+      const referenceJob = await this.repository.findCinematicAssetJob(binding.assetId);
+      if (!referenceJob || referenceJob.status !== "succeeded" || referenceJob.supersededAt !== null ||
+          referenceJob.objectKey !== binding.objectKey || referenceJob.referenceGroupId !== binding.groupId) {
+        throw new PermanentVideoError(`Approved reference ${binding.groupId} is missing, replaced, or invalid.`);
+      }
+      urls.push(await this.uploadReference(binding.objectKey, binding.groupId));
+    }
+    return urls;
+  }
+
+  private async uploadReference(objectKey: string, groupId: string): Promise<string> {
+    const cached = this.referenceUploadUrls.get(objectKey);
+    if (cached) return cached;
+    const upload = (async () => {
+      try {
+        const body = await this.storage.getObject(objectKey);
+        const filename = objectKey.split("/").at(-1) ?? `${groupId}.png`;
+        const client = new ApimartMediaClient(this.config.apimart);
+        return await client.uploadImage({ body, filename });
+      } catch (error: unknown) {
+        const message = `Approved reference object ${groupId} could not be uploaded.`;
+        if (error instanceof PermanentVideoError) throw new PermanentVideoError(message, { cause: error });
+        throw new Error(message, { cause: error });
+      }
+    })();
+    this.referenceUploadUrls.set(objectKey, upload);
+    try {
+      return await upload;
+    } catch (error: unknown) {
+      if (this.referenceUploadUrls.get(objectKey) === upload) {
+        this.referenceUploadUrls.delete(objectKey);
+      }
+      throw error;
+    }
+  }
   private async generate(
     payload: CinematicAssetJobPayload,
     existingProviderTaskId?: string | null,
@@ -171,6 +213,9 @@ export class CinematicAssetProcessor {
       };
     }
     if (payload.kind === "video") {
+      if (payload.referenceBindings.length > 0 && payload.videoModel !== "doubao-seedance-2.0") {
+        throw new PermanentVideoError("Selected video model does not support approved reference-image input.");
+      }
       const client = new SeedanceClient(
         selectApimartVideoConfig(this.config.apimart, payload.videoModel),
       );
@@ -180,6 +225,7 @@ export class CinematicAssetProcessor {
       const providerTaskId = existingProviderTaskId ?? await client.submit(
         payload.prompt,
         payload.durationSeconds,
+        await this.referenceUrls(payload),
       );
       if (!existingProviderTaskId) {
         await this.repository.updateCinematicAssetJob(payload.assetId, { providerTaskId });
@@ -203,7 +249,7 @@ export class CinematicAssetProcessor {
       if (!existingProviderTaskId) {
         await reportProgress?.(5, `正在提交镜头 ${payload.sceneOrder ?? "—"} 的图片生成任务。`, "submit");
       }
-      const providerTaskId = existingProviderTaskId ?? await client.submitImage(payload);
+      const providerTaskId = existingProviderTaskId ?? await client.submitImage({ ...payload, imageUrls: await this.referenceUrls(payload) });
       if (!existingProviderTaskId) {
         await this.repository.updateCinematicAssetJob(payload.assetId, { providerTaskId });
       }
@@ -213,6 +259,14 @@ export class CinematicAssetProcessor {
       });
       await reportProgress?.(90, `镜头 ${payload.sceneOrder ?? "—"} 图片已生成，正在下载。`, "download");
       const image = await client.download(client.imageUrl(task), "image/");
+      if (payload.stageId === "consistency_reference") {
+        const dimensions = getVideoFrameDimensions(payload.outputResolution, payload.aspectRatio);
+        return {
+          body: await resizeImageToVideoFrame({ body: image.body, ...dimensions }),
+          contentType: "image/png",
+          providerTaskId,
+        };
+      }
       return {
         ...image,
         providerTaskId,
@@ -304,7 +358,7 @@ export class CinematicAssetProcessor {
           type: "agent.step",
           data: {
             status: "awaiting_input",
-            ...assetReviewStep("正在准备素材预览。"),
+            ...assetReviewStep(payload.stageId, payload.stageId === "consistency_reference" ? "一致性参考图等待确认。" : "正在准备素材预览。"),
           },
         });
       }

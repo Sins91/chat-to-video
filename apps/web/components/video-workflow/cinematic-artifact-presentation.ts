@@ -18,6 +18,7 @@ export const getCinematicArtifactSummary = (version: CinematicArtifactVersion): 
   }
   if (artifact.stage === "script") return `${artifact.data.title} · ${artifact.data.beats.length} 个叙事节拍`;
   if (artifact.stage === "scene_plan") return `${artifact.data.scenes.length} 个场景 · ${artifact.data.aspectRatio}`;
+  if (artifact.stage === "consistency_reference") return artifact.data.status === "required" ? `${artifact.data.groups.length} 个连续性分组` : `无需参考图 · ${artifact.data.reason}`;
   if (artifact.stage === "assets") {
     return `${artifact.data.assets.length} 项素材 · 预计 $${artifact.data.totalEstimatedCostUsd.toFixed(2)}`;
   }
@@ -26,6 +27,6 @@ export const getCinematicArtifactSummary = (version: CinematicArtifactVersion): 
 
 export const getCinematicArtifactDuration = (version: CinematicArtifactVersion): number | null => {
   const artifact = version.artifact;
-  if (artifact.stage === "research" || artifact.stage === "assets") return null;
+  if (artifact.stage === "research" || artifact.stage === "consistency_reference" || artifact.stage === "assets") return null;
   return artifact.data.durationSeconds;
 };

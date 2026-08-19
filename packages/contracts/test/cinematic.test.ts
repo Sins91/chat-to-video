@@ -1,4 +1,5 @@
 import {
+  CINEMATIC_PIPELINE_DEFINITION,
   DEFAULT_VIDEO_MODEL,
   CinematicArtifactSchema,
   CinematicScenePlanSchema,
@@ -37,6 +38,16 @@ const scenes = [
 ];
 
 describe("cinematic contracts", () => {
+  it("uses ordinary image generation for consistency-reference anchors", () => {
+    const stage = CINEMATIC_PIPELINE_DEFINITION.stages.find(
+      (candidate) => candidate.id === "consistency_reference",
+    );
+
+    expect(stage?.capabilities.conditional).toEqual([
+      { capability: "image.generate", when: "consistency_reference_required" },
+    ]);
+  });
+
   it("uses Seedance as the default video generation model", () => {
     expect(DEFAULT_VIDEO_MODEL).toBe("doubao-seedance-2.0");
   });

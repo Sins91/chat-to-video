@@ -27,6 +27,12 @@ describe("cinematic JSON Schema prompts", () => {
     expect(prompt).not.toContain('"mood_brief"');
   });
 
+  it("asks consistency-reference planning to put character groups first", () => {
+    const prompt = promptFor("consistency_reference");
+
+    expect(prompt).toContain("Place every character group before product, environment, and style groups");
+  });
+
   it.each([
     ["proposal", "recommendedDirectionId"],
     ["script", "beats"],

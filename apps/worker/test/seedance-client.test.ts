@@ -131,6 +131,20 @@ describe("SeedanceClient", () => {
     });
   });
 
+  it("submits approved reference images to Seedance 2.0", async () => {
+    const fetchMock = submissionFetch("task-reference");
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new SeedanceClient(seedanceConfig).submit(
+      "Keep the approved courier identity.",
+      10,
+      ["https://signed.example/character.png", "https://signed.example/environment.png"],
+    );
+    expect(submittedBody(fetchMock)).toMatchObject({
+      model: "doubao-seedance-2.0",
+      image_urls: ["https://signed.example/character.png", "https://signed.example/environment.png"],
+    });
+  });
   it("selects the requested job profile independently of the environment default", () => {
     expect(selectApimartVideoConfig(hailuoConfig, "doubao-seedance-2.0")).toMatchObject({
       model: "doubao-seedance-2.0",

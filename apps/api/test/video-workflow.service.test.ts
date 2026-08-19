@@ -48,6 +48,7 @@ describe("VideoWorkflowService interactions", () => {
     createSuccessorWorkflow: vi.fn(),
     findWorkflowVideoJob: vi.fn(),
     findLatestCinematicAssetBatch: vi.fn(),
+    findCinematicAssetBatch: vi.fn(),
     findLatestStoryboard: vi.fn(),
     findLatestCinematicArtifact: vi.fn(),
     listCinematicArtifacts: vi.fn().mockResolvedValue([]),
@@ -109,6 +110,7 @@ describe("VideoWorkflowService interactions", () => {
     repository.markWorkflowUserDecisionApplied.mockResolvedValue(undefined);
     repository.findPreviousWorkflow.mockResolvedValue(null);
     repository.findLatestCinematicAssetBatch.mockResolvedValue(null);
+    repository.findCinematicAssetBatch.mockResolvedValue(null);
     conversations.findActiveConversation.mockResolvedValue({ id: waitingWorkflow.conversationId });
     repository.claimInteraction.mockResolvedValue({
       stateVersion: 2,
@@ -743,7 +745,7 @@ describe("VideoWorkflowService interactions", () => {
       currentStageId: "assets",
       currentVersion: 6,
     });
-    repository.findLatestCinematicAssetBatch.mockResolvedValue({
+    repository.findCinematicAssetBatch.mockResolvedValue({
       id: "asset-batch-1",
       workflowId: waitingWorkflow.id,
       planVersion: 6,
@@ -756,9 +758,11 @@ describe("VideoWorkflowService interactions", () => {
       text: "确认",
     })).resolves.toEqual({ accepted: true, intent: "approve" });
 
+    expect(repository.findCinematicAssetBatch).toHaveBeenCalledWith(waitingWorkflow.id, "assets", 6);
     expect(repository.claimCinematicAssetBatchApproval).toHaveBeenCalledWith(
       waitingWorkflow.id,
       6,
+      "assets",
     );
     expect(conversations.appendMessage).toHaveBeenCalledWith({
       conversationId: waitingWorkflow.conversationId,
@@ -769,7 +773,50 @@ describe("VideoWorkflowService interactions", () => {
     expect(runtime.continueAfterAssetApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         workflowId: waitingWorkflow.id,
-        continuation: { kind: "assets_approved", baseVersion: 6 },
+        continuation: {
+          kind: "stage_execution_approved",
+          stageId: "assets",
+          baseVersion: 6,
+        },
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("approves the exact consistency-reference batch before starting assets planning", async () => {
+    repository.findWorkflow.mockResolvedValue({
+      ...waitingWorkflow,
+      currentStageId: "consistency_reference",
+      currentVersion: 5,
+    });
+    repository.findCinematicAssetBatch.mockResolvedValue({
+      id: "reference-batch-5",
+      workflowId: waitingWorkflow.id,
+      planVersion: 5,
+      stageId: "consistency_reference",
+      status: "awaiting_approval",
+    });
+
+    await expect(service.interact(waitingWorkflow.id, { type: "approve" }))
+      .resolves.toEqual({ accepted: true, intent: "approve" });
+
+    expect(repository.findCinematicAssetBatch).toHaveBeenCalledWith(
+      waitingWorkflow.id,
+      "consistency_reference",
+      5,
+    );
+    expect(repository.claimCinematicAssetBatchApproval).toHaveBeenCalledWith(
+      waitingWorkflow.id,
+      5,
+      "consistency_reference",
+    );
+    expect(runtime.continueAfterAssetApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuation: {
+          kind: "stage_execution_approved",
+          stageId: "consistency_reference",
+          baseVersion: 5,
+        },
       }),
       expect.any(Function),
     );

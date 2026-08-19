@@ -1,6 +1,7 @@
 import type {
   ActiveWorkflowRunContext,
   CinematicArtifact,
+  CinematicReferenceBinding,
   WorkflowAgentAction,
   WorkflowAgentActionStatus,
   WorkflowApprovalScope,
@@ -41,7 +42,7 @@ export const videoWorkflows = mysqlTable("video_workflows", {
   currentStageId: varchar("current_stage_id", { length: 64 }).notNull().default("research"),
   currentVersion: int("current_version").notNull().default(0),
   stateVersion: int("state_version").notNull().default(0),
-  pipelineDefinitionVersion: int("pipeline_definition_version").notNull().default(2),
+  pipelineDefinitionVersion: int("pipeline_definition_version").notNull().default(3),
   sourceWorkflowId: varchar("source_workflow_id", { length: 36 }),
   successorWorkflowId: varchar("successor_workflow_id", { length: 36 }),
   cancellationReason: text("cancellation_reason"),
@@ -310,6 +311,7 @@ export const cinematicAssetBatches = mysqlTable("cinematic_asset_batches", {
   id: varchar("id", { length: 100 }).primaryKey(),
   workflowId: varchar("workflow_id", { length: 36 }).notNull(),
   planVersion: int("plan_version").notNull(),
+  stageId: varchar("stage_id", { length: 64 }).notNull().default("assets"),
   status: varchar("status", { length: 32 }).notNull(),
   errorMessage: text("error_message"),
   supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
@@ -317,7 +319,7 @@ export const cinematicAssetBatches = mysqlTable("cinematic_asset_batches", {
   createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
 }, (table) => [
-  uniqueIndex("cinematic_asset_batch_workflow_version_uq").on(table.workflowId, table.planVersion),
+  uniqueIndex("cinematic_asset_batch_workflow_stage_version_uq").on(table.workflowId, table.stageId, table.planVersion),
   index("cinematic_asset_batch_workflow_status_idx").on(table.workflowId, table.status),
 ]);
 
@@ -326,6 +328,10 @@ export const cinematicAssetJobs = mysqlTable("cinematic_asset_jobs", {
   batchId: varchar("batch_id", { length: 100 }).notNull(),
   workflowId: varchar("workflow_id", { length: 36 }).notNull(),
   sceneOrder: int("scene_order"),
+  referenceGroupId: varchar("reference_group_id", { length: 100 }),
+  referenceBindings: json("reference_bindings_json").$type<CinematicReferenceBinding[]>().notNull(),
+  promptHash: varchar("prompt_hash", { length: 64 }).notNull(),
+  reusedFromAssetId: varchar("reused_from_asset_id", { length: 100 }),
   kind: varchar("kind", { length: 32 }).notNull(),
   status: varchar("status", { length: 32 }).notNull(),
   progress: int("progress").notNull().default(0),

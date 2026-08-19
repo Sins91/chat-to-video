@@ -47,6 +47,7 @@ type ApimartVideoCommonConfig = {
   resultHosts: readonly string[];
   taskTimeoutMs: number;
   seedanceGenerateAudio: boolean;
+  referenceInputsVerified?: boolean;
 };
 
 export type ApimartVideoConfig = ApimartVideoCommonConfig & (
@@ -89,6 +90,7 @@ export const loadWorkerConfig = (): WorkerConfig => {
     resultHosts: hostnameList("APIMART_VIDEO_RESULT_HOSTS"),
     taskTimeoutMs: integer("APIMART_VIDEO_TASK_TIMEOUT_MS", 900_000, 60_000, 1_800_000),
     seedanceGenerateAudio: booleanValue("APIMART_VIDEO_GENERATE_AUDIO", true),
+    referenceInputsVerified: booleanValue("APIMART_REFERENCE_INPUTS_VERIFIED", false),
   };
   const apimart: ApimartVideoConfig = model === "MiniMax-Hailuo-2.3"
     ? {
@@ -134,6 +136,7 @@ export const selectApimartVideoConfig = (
     resultHosts: config.resultHosts,
     taskTimeoutMs: config.taskTimeoutMs,
     seedanceGenerateAudio: config.seedanceGenerateAudio,
+    referenceInputsVerified: config.referenceInputsVerified,
   };
   return model === "MiniMax-Hailuo-2.3"
     ? {

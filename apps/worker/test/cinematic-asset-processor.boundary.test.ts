@@ -9,12 +9,15 @@ describe("Cinematic asset review boundary", () => {
       "utf8",
     );
 
-    expect(source).toContain('findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "assets")');
-    expect(source).toContain('stepState: "awaiting_input"');
-    expect(source).toContain('...assetReviewStep("正在准备素材预览。")');
+    expect(source).toContain('findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, stageId)');
+    expect(source).toContain('assetGenerationStep(stageId, "awaiting_input", message)');
+    expect(source).toContain('...assetReviewStep(payload.stageId');
     expect(source).toContain('type: "job.progress"');
-    expect(source).toContain('...assetGenerationStep("running", message)');
+    expect(source).toContain('...assetGenerationStep(payload.stageId, "running", message)');
     expect(source).toContain("reportProgress");
+    expect(source).toContain("this.storage.getObject(objectKey)");
+    expect(source).toContain("client.uploadImage");
+    expect(source).not.toContain("createDownloadUrl(binding.objectKey");
     expect(source).not.toContain("素材已生成完成，请确认后继续进入剪辑阶段。");
   });
 });

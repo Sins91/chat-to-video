@@ -10,6 +10,49 @@ export type VideoModel = z.infer<typeof VideoModelSchema>;
 
 export const DEFAULT_VIDEO_MODEL: VideoModel = "doubao-seedance-2.0";
 
+export const VideoOutputResolutionSchema = z.enum([
+  "480p",
+  "720p",
+  "768p",
+  "1080p",
+  "2k",
+  "4k",
+]);
+export type VideoOutputResolution = z.infer<typeof VideoOutputResolutionSchema>;
+
+export const DEFAULT_VIDEO_OUTPUT_RESOLUTION: VideoOutputResolution = "720p";
+
+const VIDEO_OUTPUT_RESOLUTION_PATTERN = /(?:^|[^\d])((?:480|720|768|1080)p|[24]k)(?![\d])/giu;
+
+export const getRequestedVideoOutputResolution = (
+  prompt?: string | null,
+): VideoOutputResolution => {
+  const matches = [...(prompt?.normalize("NFKC").matchAll(VIDEO_OUTPUT_RESOLUTION_PATTERN) ?? [])];
+  const requested = matches.at(-1)?.[1]?.toLowerCase();
+  const parsed = VideoOutputResolutionSchema.safeParse(requested);
+  return parsed.success ? parsed.data : DEFAULT_VIDEO_OUTPUT_RESOLUTION;
+};
+
+const LANDSCAPE_VIDEO_DIMENSIONS = {
+  "480p": { width: 854, height: 480 },
+  "720p": { width: 1280, height: 720 },
+  "768p": { width: 1366, height: 768 },
+  "1080p": { width: 1920, height: 1080 },
+  "2k": { width: 2560, height: 1440 },
+  "4k": { width: 3840, height: 2160 },
+} as const satisfies Record<VideoOutputResolution, { width: number; height: number }>;
+
+export const getVideoFrameDimensions = (
+  resolution: VideoOutputResolution,
+  aspectRatio: "16:9" | "9:16" | "1:1",
+): { width: number; height: number } => {
+  const landscape = LANDSCAPE_VIDEO_DIMENSIONS[resolution];
+  if (aspectRatio === "16:9") return landscape;
+  if (aspectRatio === "9:16") {
+    return { width: landscape.height, height: landscape.width };
+  }
+  return { width: landscape.height, height: landscape.height };
+};
 export const VIDEO_MODEL_MAX_DURATION_SECONDS = {
   "MiniMax-Hailuo-2.3": 10,
   "doubao-seedance-2.0": 15,

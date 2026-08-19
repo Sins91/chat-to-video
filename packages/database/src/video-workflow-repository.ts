@@ -1,5 +1,6 @@
 import {
   ActiveWorkflowRunContextSchema,
+  CINEMATIC_PIPELINE_DEFINITION,
   type ActiveWorkflowRunContext,
   type CinematicArtifact,
   type CinematicAssetBatchStatus,
@@ -320,7 +321,7 @@ export class VideoWorkflowRepository {
         videoModel: input.videoModel,
         durationSeconds: input.durationSeconds,
         status: "drafting",
-        pipelineDefinitionVersion: 2,
+        pipelineDefinitionVersion: CINEMATIC_PIPELINE_DEFINITION.definitionVersion,
         sourceWorkflowId: control.sourceWorkflowId,
         activeRunContext: ActiveWorkflowRunContextSchema.parse({ kind: "start", baseVersion: 1 }),
       });
@@ -388,7 +389,7 @@ export class VideoWorkflowRepository {
         videoModel: input.videoModel,
         durationSeconds: input.durationSeconds,
         status: "drafting",
-        pipelineDefinitionVersion: 2,
+        pipelineDefinitionVersion: CINEMATIC_PIPELINE_DEFINITION.definitionVersion,
         activeRunContext: ActiveWorkflowRunContextSchema.parse({ kind: "start", baseVersion: 0 }),
       });
       if (input.message) {
@@ -452,7 +453,7 @@ export class VideoWorkflowRepository {
         videoModel: input.videoModel,
         durationSeconds: input.durationSeconds,
         status: "drafting",
-        pipelineDefinitionVersion: 2,
+        pipelineDefinitionVersion: CINEMATIC_PIPELINE_DEFINITION.definitionVersion,
         sourceWorkflowId: input.sourceWorkflowId,
         activeRunContext: ActiveWorkflowRunContextSchema.parse({ kind: "start", baseVersion: 0 }),
       });
@@ -700,6 +701,16 @@ export class VideoWorkflowRepository {
           inArray(cinematicSceneJobs.status, ["queued", "running"]),
         ));
       if (input.stagesToSupersede.includes("assets")) {
+        const batchStages = input.stagesToSupersede.includes("consistency_reference")
+          ? ["consistency_reference", "assets"]
+          : ["assets"];
+        const affectedBatches = await transaction.select({ id: cinematicAssetBatches.id })
+          .from(cinematicAssetBatches)
+          .where(and(
+            eq(cinematicAssetBatches.workflowId, workflow.id),
+            inArray(cinematicAssetBatches.stageId, batchStages),
+            isNull(cinematicAssetBatches.supersededAt),
+          ));
         await transaction.update(cinematicAssetBatches).set({
           status: "cancelled",
           supersededAt,
@@ -707,20 +718,22 @@ export class VideoWorkflowRepository {
           updatedAt: supersededAt,
         }).where(and(
           eq(cinematicAssetBatches.workflowId, workflow.id),
+          inArray(cinematicAssetBatches.stageId, batchStages),
           isNull(cinematicAssetBatches.supersededAt),
         ));
-        await transaction.update(cinematicAssetJobs).set({
-          status: "cancelled",
-          supersededAt,
-          supersededByRestartId: control.id,
-          updatedAt: supersededAt,
-        }).where(and(
-          eq(cinematicAssetJobs.workflowId, workflow.id),
-          isNull(cinematicAssetJobs.supersededAt),
-          notInArray(cinematicAssetJobs.status, ["succeeded", "failed", "cancelled"]),
-        ));
-      }
-      await transaction.update(workflowApprovals).set({
+        if (affectedBatches.length > 0) {
+          await transaction.update(cinematicAssetJobs).set({
+            status: "cancelled",
+            supersededAt,
+            supersededByRestartId: control.id,
+            updatedAt: supersededAt,
+          }).where(and(
+            inArray(cinematicAssetJobs.batchId, affectedBatches.map((batch) => batch.id)),
+            isNull(cinematicAssetJobs.supersededAt),
+            notInArray(cinematicAssetJobs.status, ["succeeded", "failed", "cancelled"]),
+          ));
+        }
+      }      await transaction.update(workflowApprovals).set({
         status: "superseded",
         activeKey: null,
         decidedAt: supersededAt,
@@ -1298,49 +1311,108 @@ export class VideoWorkflowRepository {
     return rows[0] ?? null;
   }
 
+  async findReusableCinematicReferenceJob(
+    workflowId: string,
+    referenceGroupId: string,
+    promptHash: string,
+  ) {
+    const rows = await this.database.select().from(cinematicAssetJobs).where(and(
+      eq(cinematicAssetJobs.workflowId, workflowId),
+      eq(cinematicAssetJobs.referenceGroupId, referenceGroupId),
+      eq(cinematicAssetJobs.promptHash, promptHash),
+      eq(cinematicAssetJobs.status, "succeeded"),
+    )).orderBy(desc(cinematicAssetJobs.createdAt)).limit(1);
+    return rows[0] ?? null;
+  }
+
   async createCinematicAssetBatch(input: {
     batchId: string;
     workflowId: string;
     planVersion: number;
+    stageId: "consistency_reference" | "assets";
     jobs: readonly CinematicAssetJobPayload[];
   }): Promise<void> {
     if (input.jobs.length < 1) throw new Error("Cinematic asset batch requires jobs.");
     await this.database.transaction(async (transaction) => {
+      const allReused = input.jobs.every((job) => job.reusedFromAssetId !== null);
       await transaction.insert(cinematicAssetBatches).values({
         id: input.batchId,
         workflowId: input.workflowId,
         planVersion: input.planVersion,
-        status: "queued",
+        stageId: input.stageId,
+        status: allReused ? "awaiting_approval" : "queued",
       }).onDuplicateKeyUpdate({ set: { updatedAt: new Date() } });
       for (const job of input.jobs) {
+        let reused: typeof cinematicAssetJobs.$inferSelect | null = null;
+        if (job.reusedFromAssetId) {
+          if (!job.referenceGroupId) throw new Error("Reusable reference job requires a group ID.");
+          const rows = await transaction.select().from(cinematicAssetJobs).where(and(
+            eq(cinematicAssetJobs.id, job.reusedFromAssetId),
+            eq(cinematicAssetJobs.workflowId, input.workflowId),
+            eq(cinematicAssetJobs.referenceGroupId, job.referenceGroupId),
+            eq(cinematicAssetJobs.promptHash, job.promptHash),
+            eq(cinematicAssetJobs.status, "succeeded"),
+          )).limit(1);
+          reused = rows[0] ?? null;
+          if (!reused || reused.objectKey !== job.objectKey || !reused.mimeType || !reused.sizeBytes) {
+            throw new Error(`Reusable reference ${job.reusedFromAssetId} is invalid.`);
+          }
+        }
         await transaction.insert(cinematicAssetJobs).values({
           id: job.assetId,
           batchId: input.batchId,
           workflowId: input.workflowId,
           sceneOrder: job.sceneOrder,
+          referenceGroupId: job.referenceGroupId,
+          referenceBindings: job.referenceBindings,
+          promptHash: job.promptHash,
+          reusedFromAssetId: job.reusedFromAssetId,
           kind: job.kind,
-          status: "queued",
-          progress: 0,
+          status: reused ? "succeeded" : "queued",
+          progress: reused ? 100 : 0,
           capabilityResolution: job.capabilityResolution,
           objectKey: job.objectKey,
+          mimeType: reused?.mimeType ?? null,
+          sizeBytes: reused?.sizeBytes ?? null,
         }).onDuplicateKeyUpdate({ set: { updatedAt: new Date() } });
       }
       await transaction.update(videoWorkflows).set({
-        status: "queued",
-        currentStageId: "assets",
+        status: allReused ? "awaiting_input" : "queued",
+        currentStageId: input.stageId,
         errorMessage: null,
         updatedAt: new Date(),
       }).where(eq(videoWorkflows.id, input.workflowId));
     });
   }
 
-  async findLatestCinematicAssetBatch(workflowId: string) {
+  async findCinematicAssetBatch(
+    workflowId: string,
+    stageId: "consistency_reference" | "assets",
+    planVersion: number,
+  ) {
     const rows = await this.database.select().from(cinematicAssetBatches)
       .where(and(
         eq(cinematicAssetBatches.workflowId, workflowId),
+        eq(cinematicAssetBatches.stageId, stageId),
+        eq(cinematicAssetBatches.planVersion, planVersion),
         isNull(cinematicAssetBatches.supersededAt),
       ))
-      .orderBy(desc(cinematicAssetBatches.createdAt))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async findLatestCinematicAssetBatch(workflowId: string, stageId: "consistency_reference" | "assets" = "assets") {
+    const rows = await this.database.select().from(cinematicAssetBatches)
+      .where(and(
+        eq(cinematicAssetBatches.workflowId, workflowId),
+        eq(cinematicAssetBatches.stageId, stageId),
+        isNull(cinematicAssetBatches.supersededAt),
+      ))
+      .orderBy(
+        desc(cinematicAssetBatches.planVersion),
+        desc(cinematicAssetBatches.createdAt),
+        desc(cinematicAssetBatches.id),
+      )
       .limit(1);
     return rows[0] ?? null;
   }
@@ -1410,13 +1482,14 @@ export class VideoWorkflowRepository {
         isNull(cinematicAssetJobs.supersededAt),
       ));
       if (readAffectedRows(result) !== 1) return false;
-      const batchRows = await transaction.select({ id: cinematicAssetBatches.id })
+      const batchRows = await transaction.select({ id: cinematicAssetBatches.id, stageId: cinematicAssetBatches.stageId })
         .from(cinematicAssetBatches)
         .where(and(
           eq(cinematicAssetBatches.id, input.batchId),
           isNull(cinematicAssetBatches.supersededAt),
         )).limit(1);
-      if (batchRows.length !== 1) return false;
+      const batch = batchRows.at(0);
+      if (!batch || batchRows.length !== 1) return false;
       const pending = await transaction.select({ id: cinematicAssetJobs.id })
         .from(cinematicAssetJobs)
         .where(and(
@@ -1438,7 +1511,7 @@ export class VideoWorkflowRepository {
       }).where(eq(cinematicAssetBatches.id, input.batchId));
       await transaction.update(videoWorkflows).set({
         status: "awaiting_input",
-        currentStageId: "assets",
+        currentStageId: batch.stageId,
         stateVersion: workflow.stateVersion + 1,
         errorMessage: null,
         lastProgressAt: new Date(),
@@ -1489,6 +1562,7 @@ export class VideoWorkflowRepository {
   async claimCinematicAssetBatchApproval(
     workflowId: string,
     planVersion: number,
+    stageId: "consistency_reference" | "assets" = "assets",
   ): Promise<boolean> {
     return this.database.transaction(async (transaction) => {
       const workflows = await transaction.select({
@@ -1509,6 +1583,7 @@ export class VideoWorkflowRepository {
       }).where(and(
         eq(cinematicAssetBatches.workflowId, workflowId),
         eq(cinematicAssetBatches.planVersion, planVersion),
+        eq(cinematicAssetBatches.stageId, stageId),
         eq(cinematicAssetBatches.status, "awaiting_approval"),
         isNull(cinematicAssetBatches.supersededAt),
       ));

@@ -269,6 +269,10 @@ const summarizeArtifact = (artifact: CinematicArtifact): string => {
       return `脚本《${artifact.data.title}》，${artifact.data.durationSeconds} 秒，共 ${artifact.data.beats.length} 个节拍。`;
     case "scene_plan":
       return `${artifact.data.aspectRatio} 场景计划，${artifact.data.durationSeconds} 秒，共 ${artifact.data.scenes.length} 个场景。`;
+    case "consistency_reference":
+      return artifact.data.status === "required"
+        ? `一致性参考图需要 ${artifact.data.groups.length} 个连续性分组。`
+        : `一致性参考图不需要：${artifact.data.reason}`;
     case "assets":
       return `素材计划共 ${artifact.data.assets.length} 项，幻灯片风险 ${artifact.data.slideshowRisk}/10，记录估算成本 ${artifact.data.totalEstimatedCostUsd} USD。`;
     case "edit":

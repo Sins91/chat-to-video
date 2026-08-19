@@ -1612,8 +1612,13 @@ export class VideoWorkflowService {
       : interaction.type === "message"
         ? messageIntent(interaction.text)
         : "revise";
-    if (workflow.currentStageId === "assets") {
-      const batch = await this.repository.findLatestCinematicAssetBatch(workflowId);
+    if (workflow.currentStageId === "assets" || workflow.currentStageId === "consistency_reference") {
+      const executionStage = workflow.currentStageId;
+      const batch = await this.repository.findCinematicAssetBatch(
+        workflowId,
+        executionStage,
+        workflow.currentVersion,
+      );
       if (batch?.status === "awaiting_approval") {
         if (intent !== "approve") {
           throw new ConflictException({
@@ -1624,6 +1629,7 @@ export class VideoWorkflowService {
         const claimed = await this.repository.claimCinematicAssetBatchApproval(
           workflowId,
           workflow.currentVersion,
+          executionStage,
         );
         if (!claimed) {
           throw new ConflictException({
@@ -1647,7 +1653,8 @@ export class VideoWorkflowService {
             videoModel: VideoModelSchema.parse(workflow.videoModel),
             durationSeconds: workflow.durationSeconds,
             continuation: {
-              kind: "assets_approved",
+              kind: "stage_execution_approved",
+              stageId: executionStage,
               baseVersion: workflow.currentVersion,
             },
           }, (runId) => this.repository.setRunId(workflow.id, runId));
@@ -1655,7 +1662,7 @@ export class VideoWorkflowService {
           await this.recordRuntimeFailure(workflow.id, workflow.requestId, error);
           throw new ServiceUnavailableException({
             code: "VIDEO_WORKFLOW_CONTINUATION_FAILED",
-            message: "The workflow could not continue after asset approval.",
+            message: "The workflow could not continue after stage execution approval.",
           });
         }
         return VideoWorkflowInteractionResultSchema.parse({ accepted: true, intent: "approve" });

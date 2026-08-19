@@ -42,7 +42,8 @@ export class SeedanceClient {
   private submissionBody(
     prompt: string,
     durationSeconds: number,
-  ): Record<string, string | number | boolean> {
+    referenceImageUrls: readonly string[] = [],
+  ): Record<string, string | number | boolean | readonly string[]> {
     if (!VIDEO_MODEL_DURATION_OPTIONS[this.config.model].some(
       (option) => option === durationSeconds,
     )) {
@@ -68,6 +69,7 @@ export class SeedanceClient {
       size: this.config.size,
       duration: durationSeconds,
       generate_audio: this.config.seedanceGenerateAudio,
+      ...(referenceImageUrls.length ? { image_urls: referenceImageUrls.slice(0, 3) } : {}),
     };
   }
 
@@ -106,10 +108,10 @@ export class SeedanceClient {
     throw requestFailure(operation, lastError);
   }
 
-  async submit(prompt: string, durationSeconds = this.config.durationSeconds): Promise<string> {
+  async submit(prompt: string, durationSeconds = this.config.durationSeconds, referenceImageUrls: readonly string[] = []): Promise<string> {
     const response = ApimartVideoSubmissionSchema.parse(await this.request("/videos/generations", "submission", {
       method: "POST",
-      body: JSON.stringify(this.submissionBody(prompt, durationSeconds)),
+      body: JSON.stringify(this.submissionBody(prompt, durationSeconds, referenceImageUrls)),
     }));
     const taskId = response.data[0]?.task_id;
     if (!taskId) throw new PermanentVideoError("APIMart did not return a task ID.");

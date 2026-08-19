@@ -33,3 +33,9 @@ Make the music object match the approved proposal: supplied, configured library,
 Use only reviewed pricing. Sum `totalEstimatedCostUsd` from the manifest entries and do not imply it is a live quote when pricing is unavailable. Score `slideshowRisk` from 0–10 based on repeated stills, decorative coverage, weak or unjustified motion, repeated layouts, and typography dependence.
 
 Before returning, verify scene coverage, source authorization, provider availability, prompt continuity, music resolution, arithmetic, motion-promise preservation, and the absence of claimed files.
+
+## Consume approved consistency anchors
+
+Read the persisted `consistency_reference` artifact before planning generated visual assets. When it is `required`, preserve every applicable continuity group in the scene prompt and expect the runtime to attach the approved persisted `referenceBindings`; prompt repetition is not a substitute for a binding.
+
+Do not plan or approve downstream generation when a required anchor object is missing, superseded, failed, or not approved. Treat those states, and an unavailable `image.generate.reference` or `video.generate.reference` capability, as permanent execution blockers. Never silently retry without references. Bind at most three groups per task in character, product, environment, then style priority.

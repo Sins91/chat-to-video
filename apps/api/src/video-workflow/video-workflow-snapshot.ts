@@ -45,7 +45,7 @@ export const buildVideoWorkflowSnapshot = async (
   const currentGenerativeStage = CinematicGenerativeStageSchema.safeParse(
     workflow.currentStageId,
   );
-  const [storyboardRow, job, currentArtifactRow, scriptArtifactRow, artifactRows, assetBatchRow, pendingControlRow] = await Promise.all([
+  const [storyboardRow, job, currentArtifactRow, scriptArtifactRow, artifactRows, consistencyReferenceBatchRow, assetBatchRow, pendingControlRow] = await Promise.all([
     repository.findLatestStoryboard(workflowId),
     repository.findWorkflowVideoJob(workflowId),
     repository.findLatestCinematicArtifact(
@@ -54,9 +54,28 @@ export const buildVideoWorkflowSnapshot = async (
     ),
     repository.findLatestCinematicArtifact(workflowId, "script"),
     repository.listCinematicArtifacts(workflowId),
-    repository.findLatestCinematicAssetBatch(workflowId),
+    repository.findLatestCinematicAssetBatch(workflowId, "consistency_reference"),
+    repository.findLatestCinematicAssetBatch(workflowId, "assets"),
     repository.findPendingWorkflowControl({ workflowId }),
   ]);
+  const consistencyReferenceRows = consistencyReferenceBatchRow
+    ? await repository.listCinematicAssetJobs(consistencyReferenceBatchRow.id)
+    : [];
+  const consistencyReferenceReviewItems = await Promise.all(consistencyReferenceRows.map(async (asset) => ({
+    assetId: asset.id,
+    sceneOrder: asset.sceneOrder,
+    kind: asset.kind,
+    referenceGroupId: asset.referenceGroupId,
+    referenceBindings: asset.referenceBindings,
+    reusedFromAssetId: asset.reusedFromAssetId,
+    status: asset.status,
+    progress: asset.progress,
+    capabilityResolution: asset.capabilityResolution,
+    mimeType: asset.mimeType,
+    sizeBytes: asset.sizeBytes,
+    errorMessage: asset.errorMessage,
+    reviewUrl: asset.status === "succeeded" ? await storage.createDownloadUrl(asset.objectKey) : null,
+  })));
   const assetRows = assetBatchRow
     ? await repository.listCinematicAssetJobs(assetBatchRow.id)
     : [];
@@ -64,6 +83,9 @@ export const buildVideoWorkflowSnapshot = async (
     assetId: asset.id,
     sceneOrder: asset.sceneOrder,
     kind: asset.kind,
+    referenceGroupId: asset.referenceGroupId,
+    referenceBindings: asset.referenceBindings,
+    reusedFromAssetId: asset.reusedFromAssetId,
     status: asset.status,
     progress: asset.progress,
     capabilityResolution: asset.capabilityResolution,
@@ -111,8 +133,21 @@ export const buildVideoWorkflowSnapshot = async (
           createdAt: currentArtifactRow.createdAt.toISOString(),
         })
       : null,
+    consistencyReferenceBatch: consistencyReferenceBatchRow
+      ? {
+          stageId: "consistency_reference",
+          batchId: consistencyReferenceBatchRow.id,
+          workflowId: consistencyReferenceBatchRow.workflowId,
+          planVersion: consistencyReferenceBatchRow.planVersion,
+          status: consistencyReferenceBatchRow.status,
+          assets: consistencyReferenceReviewItems,
+          createdAt: consistencyReferenceBatchRow.createdAt.toISOString(),
+          updatedAt: consistencyReferenceBatchRow.updatedAt.toISOString(),
+        }
+      : null,
     assetBatch: assetBatchRow
       ? {
+          stageId: "assets",
           batchId: assetBatchRow.id,
           workflowId: assetBatchRow.workflowId,
           planVersion: assetBatchRow.planVersion,

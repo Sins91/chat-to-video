@@ -1,4 +1,6 @@
 import type { CinematicArtifact, CinematicGenerativeStage } from "@chat-to-video/contracts";
+import { Mastra } from "@mastra/core/mastra";
+import { InMemoryStore } from "@mastra/core/storage";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -74,6 +76,10 @@ const artifacts: Record<CinematicGenerativeStage, CinematicArtifact> = {
       ],
     },
   },
+  consistency_reference: {
+    stage: "consistency_reference",
+    data: { status: "not_required", reason: "No repeated generated subject.", groups: [] },
+  },
   assets: {
     stage: "assets",
     data: {
@@ -126,15 +132,26 @@ const createOperations = () => ({
     },
   ),
   preflightStageExecution: vi.fn().mockResolvedValue(true),
+  enqueueConsistencyReferenceBatch: vi.fn().mockResolvedValue("not_required"),
   enqueueCinematicAssetBatch: vi.fn().mockResolvedValue(undefined),
   enqueueCinematicVideo: vi.fn().mockResolvedValue(undefined),
   enqueueCinematicVideoVersion: vi.fn().mockResolvedValue(undefined),
   fail: vi.fn().mockResolvedValue(undefined),
 });
 
+const createTestWorkflow = (
+  operations: Parameters<typeof createCinematicWorkflow>[0],
+) => {
+  const workflow = createCinematicWorkflow(operations);
+  new Mastra({
+    storage: new InMemoryStore(),
+    workflows: { [CINEMATIC_WORKFLOW_ID]: workflow },
+  });
+  return workflow;
+};
 describe("Cinematic production workflow", () => {
   it("uses stable native step identifiers and the default durable engine", () => {
-    const workflow = createCinematicWorkflow(
+    const workflow = createTestWorkflow(
       createOperations(),
     );
     expect(CINEMATIC_WORKFLOW_ID).toBe("cinematic-production");
@@ -143,7 +160,7 @@ describe("Cinematic production workflow", () => {
 
   it("runs native steps, revises one review step, and hands off assets exactly once", async () => {
     const operations = createOperations();
-    const workflow = createCinematicWorkflow(
+    const workflow = createTestWorkflow(
       operations,
     );
     const run = await workflow.createRun();
@@ -160,43 +177,147 @@ describe("Cinematic production workflow", () => {
     })).status).toBe("suspended");
     expect((await run.resume({ step: "scene-plan", resumeData: { type: "approve" } })).status)
       .toBe("suspended");
+    expect((await run.resume({ step: "consistency-reference", resumeData: { type: "approve" } })).status)
+      .toBe("suspended");
     expect((await run.resume({ step: "assets", resumeData: { type: "approve" } })).status)
       .toBe("success");
 
-    expect(operations.generateCinematicArtifact).toHaveBeenCalledTimes(6);
+    expect(operations.generateCinematicArtifact).toHaveBeenCalledTimes(7);
     expect(operations.enqueueCinematicAssetBatch).toHaveBeenCalledOnce();
     expect(operations.enqueueCinematicAssetBatch).toHaveBeenCalledWith(
-      expect.objectContaining({ version: 6 }),
+      expect.objectContaining({ version: 7 }),
     );
     expect(operations.enqueueCinematicVideoVersion).not.toHaveBeenCalled();
   });
 
-  it("continues from approved assets in a new run and enqueues final composition", async () => {
+  it("queues required consistency references and does not enter assets before approval", async () => {
     const operations = createOperations();
-    const workflow = createCinematicWorkflow(operations);
+    operations.generateCinematicArtifact.mockImplementation(
+      ({ stage }: { stage: CinematicGenerativeStage }) => Promise.resolve(stage === "consistency_reference"
+        ? {
+            stage: "consistency_reference",
+            data: {
+              status: "required",
+              reason: "The courier appears in two generated scenes.",
+              groups: [{
+                id: "courier",
+                kind: "character",
+                identityMode: "fictional",
+                label: "Courier",
+                sceneOrders: [1, 2],
+                canonicalDescription: "A fictional courier in a dark rain coat.",
+                prompt: "Neutral full-body reference of a fictional courier in a dark rain coat.",
+                aspectRatio: "16:9",
+                estimatedCostUsd: 0.05,
+              }],
+            },
+          }
+        : artifacts[stage]),
+    );
+    const workflow = createTestWorkflow(operations);
+    const run = await workflow.createRun();
+    await run.start({ inputData: input, initialState: initialCinematicState(input) });
+    await run.resume({ step: "proposal", resumeData: { type: "approve" } });
+    await run.resume({ step: "script", resumeData: { type: "approve" } });
+    const planningReview = await run.resume({ step: "scene-plan", resumeData: { type: "approve" } });
+    operations.enqueueConsistencyReferenceBatch.mockResolvedValue("queued");
+    expect(planningReview.status).toBe("suspended");
+    expect(operations.enqueueConsistencyReferenceBatch).not.toHaveBeenCalled();
+
+    const result = await run.resume({
+      step: "consistency-reference",
+      resumeData: { type: "approve" },
+    });
+
+    expect(result.status).toBe("success");
+    expect(operations.activateCinematicArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresApproval: true, version: 5 }),
+    );
+    expect(operations.enqueueConsistencyReferenceBatch).toHaveBeenCalledOnce();
+    expect(operations.enqueueConsistencyReferenceBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 5 }),
+    );
+    expect(operations.enqueueCinematicAssetBatch).not.toHaveBeenCalled();
+  });
+
+  it("continues from approved consistency references at assets planning", async () => {
+    const operations = createOperations();
+    const workflow = createTestWorkflow(operations);
     const continuationInput = {
       ...input,
-      continuation: { kind: "assets_approved" as const, baseVersion: 6 },
+      continuation: {
+        kind: "stage_execution_approved" as const,
+        stageId: "consistency_reference" as const,
+        baseVersion: 5,
+      },
     };
     const run = await workflow.createRun();
     const result = await run.start({
       inputData: continuationInput,
-      initialState: initialCinematicState(continuationInput, 6),
+      initialState: initialCinematicState(continuationInput, 5),
+    });
+
+    expect(result.status).toBe("suspended");
+    expect(operations.generateCinematicArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "assets", version: 6 }),
+    );
+    expect(operations.enqueueConsistencyReferenceBatch).not.toHaveBeenCalled();
+  });
+  it("keeps asset review suspended when execution preflight is blocked", async () => {
+    const operations = createOperations();
+    const workflow = createTestWorkflow(operations);
+    const run = await workflow.createRun();
+
+    await run.start({ inputData: input, initialState: initialCinematicState(input) });
+    await run.resume({ step: "proposal", resumeData: { type: "approve" } });
+    await run.resume({ step: "script", resumeData: { type: "approve" } });
+    await run.resume({ step: "scene-plan", resumeData: { type: "approve" } });
+    await run.resume({
+      step: "consistency-reference",
+      resumeData: { type: "approve" },
+    });
+    operations.preflightStageExecution.mockResolvedValue(false);
+
+    const result = await run.resume({
+      step: "assets",
+      resumeData: { type: "approve" },
+    });
+
+    expect(result.status).toBe("suspended");
+    expect(operations.preflightStageExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "assets", version: 6 }),
+    );
+    expect(operations.enqueueCinematicAssetBatch).not.toHaveBeenCalled();
+    expect(operations.enqueueCinematicVideoVersion).not.toHaveBeenCalled();
+    expect(operations.fail).not.toHaveBeenCalled();
+  });
+
+  it("continues from approved assets in a new run and enqueues final composition", async () => {
+    const operations = createOperations();
+    const workflow = createTestWorkflow(operations);
+    const continuationInput = {
+      ...input,
+      continuation: { kind: "stage_execution_approved" as const, stageId: "assets" as const, baseVersion: 7 },
+    };
+    const run = await workflow.createRun();
+    const result = await run.start({
+      inputData: continuationInput,
+      initialState: initialCinematicState(continuationInput, 7),
     });
 
     expect(result.status).toBe("success");
     expect(operations.generateCinematicArtifact).toHaveBeenCalledOnce();
     expect(operations.generateCinematicArtifact).toHaveBeenCalledWith(
-      expect.objectContaining({ stage: "edit", version: 7 }),
+      expect.objectContaining({ stage: "edit", version: 8 }),
     );
     expect(operations.enqueueCinematicVideoVersion).toHaveBeenCalledWith(
-      expect.objectContaining({ version: 7 }),
+      expect.objectContaining({ version: 8 }),
     );
   });
 
   it("starts a replacement run at its target without replaying earlier paid steps", async () => {
     const operations = createOperations();
-    const workflow = createCinematicWorkflow(
+    const workflow = createTestWorkflow(
       operations,
     );
     const restartInput = {
@@ -231,9 +352,10 @@ describe("Cinematic production workflow", () => {
     ["script", "script"],
     ["scene_plan", "scene-plan"],
     ["assets", "assets"],
+    ["consistency_reference", "consistency-reference"],
   ] as const)("revises %s in the same native step and suspends again", async (targetStage, stepId) => {
     const operations = createOperations();
-    const workflow = createCinematicWorkflow(operations);
+    const workflow = createTestWorkflow(operations);
     const restartInput = {
       ...input,
       restart: {
@@ -264,7 +386,7 @@ describe("Cinematic production workflow", () => {
 
   it("persists scene duration revisions and rejects them at other review steps", async () => {
     const operations = createOperations();
-    const workflow = createCinematicWorkflow(operations);
+    const workflow = createTestWorkflow(operations);
     const run = await workflow.createRun();
     await run.start({ inputData: input, initialState: initialCinematicState(input) });
     await run.resume({ step: "proposal", resumeData: { type: "approve" } });
@@ -286,7 +408,7 @@ describe("Cinematic production workflow", () => {
     );
 
     const invalidOperations = createOperations();
-    const invalidRun = await createCinematicWorkflow(invalidOperations).createRun();
+    const invalidRun = await createTestWorkflow(invalidOperations).createRun();
     await invalidRun.start({ inputData: input, initialState: initialCinematicState(input) });
     const invalid = await invalidRun.resume({
       step: "proposal",

@@ -19,6 +19,7 @@ describe("cinematic artifact visualization", () => {
       "ProposalView",
       "ScriptView",
       "ScenePlanView",
+      "ConsistencyReferenceView",
       "AssetsView",
       "EditView",
     ]) {

@@ -7,7 +7,9 @@ import {
   createGeneratedVideoFilename,
   findMissingWorkflowCapabilities,
   findWorkflowStage,
+  getCinematicConsistencyReferencePriority,
   getRequiredWorkflowCapabilities,
+  getRequestedVideoOutputResolution,
   type CinematicArtifact,
   type CinematicAssetJobPayload,
   type CinematicGenerativeStage,
@@ -33,6 +35,7 @@ import {
 } from "@chat-to-video/contracts";
 import type { VideoWorkflowRepository } from "@chat-to-video/database";
 import { Queue } from "bullmq";
+import { createHash } from "node:crypto";
 import { Redis } from "ioredis";
 
 import {
@@ -66,6 +69,7 @@ const CINEMATIC_RUNNING_MESSAGE: Record<CinematicGenerativeStage, string> = {
   proposal: "正在生成并比较电影化创意方案。",
   script: "正在编排叙事节奏与脚本内容。",
   scene_plan: "正在拆分镜头并规划逐镜头画面。",
+  consistency_reference: "正在识别跨镜头连续性分组并规划锚点图。",
   assets: "正在规划镜头素材、音乐与生成成本。",
   edit: "正在生成剪辑时间线与成片合成方案。",
 };
@@ -75,6 +79,7 @@ const CINEMATIC_AWAITING_MESSAGE: Record<CinematicGenerativeStage, string> = {
   proposal: "创意方案已完成，等待你确认或提出修改。",
   script: "脚本已完成，等待你确认或提出修改。",
   scene_plan: "分镜写作已完成，可调整逐镜头时长或确认继续。",
+  consistency_reference: "一致性参考图规划已完成。",
   assets: "素材规划已完成，等待你确认或提出修改。",
   edit: "剪辑方案已完成。",
 };
@@ -145,10 +150,38 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
           (scene) => scene.sourceType === "title_card",
         ) || assets.data.assets.some((asset) => asset.kind === "title_card"),
         generatesMusic: assets.data.music.sourceMode === "generate",
+        requiresConsistencyReference: false,
         hasAudioAsset: assets.data.music.sourceMode !== "supplied" ||
           assets.data.assets.some((asset) => asset.kind === "audio"),
       },
     };
+  }
+
+  private async consistencyReferenceApprovalIssue(
+    workflowId: string,
+  ): Promise<string | null> {
+    const row = await this.repository.findLatestCinematicArtifact(
+      workflowId,
+      "consistency_reference",
+    );
+    if (!row) {
+      return "\u7d20\u6750\u6267\u884c\u524d\u9700\u8981\u5148\u751f\u6210" +
+        "\u5e76\u4eba\u5de5\u786e\u8ba4\u4e00\u81f4\u6027\u53c2\u8003\u56fe\u3002";
+    }
+    const artifact = CinematicArtifactSchema.parse(row.artifact);
+    if (artifact.stage !== "consistency_reference") {
+      return "\u4e00\u81f4\u6027\u53c2\u8003\u56fe\u51b3\u7b56\u65e0\u6548\uff0c" +
+        "\u8bf7\u4ece\u8be5\u9636\u6bb5\u91cd\u65b0\u5f00\u59cb\u3002";
+    }
+    if (artifact.data.status === "not_required") return null;
+    const batch = await this.repository.findCinematicAssetBatch(
+      workflowId,
+      "consistency_reference",
+      row.version,
+    );
+    if (batch?.status === "approved") return null;
+    return "\u4e00\u81f4\u6027\u53c2\u8003\u56fe\u5c1a\u672a\u751f\u6210\u6216" +
+      "\u672a\u901a\u8fc7\u4eba\u5de5\u786e\u8ba4\uff0c\u8bf7\u5148\u5b8c\u6210\u53c2\u8003\u56fe\u5ba1\u6838\u3002";
   }
 
   async preflightStageExecution(input: WorkflowInput & {
@@ -188,14 +221,16 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
                 (scene.sourceType === "generated_image" || scene.sourceType === "title_card")
               )
               ? "需要运动的镜头不能降级为静态图片或标题卡。"
-              : null;
+                  : null;
     const required = getRequiredWorkflowCapabilities(definition.capabilities, facts);
-    const missing = findMissingWorkflowCapabilities(
-      required,
-      await this.capabilityResolutions(),
-    );
-    if (missing.length === 0 && structuralIssue === null) return true;
-    const message = structuralIssue ??
+    const [resolutions, consistencyReferenceIssue] = await Promise.all([
+      this.capabilityResolutions(),
+      this.consistencyReferenceApprovalIssue(input.workflowId),
+    ]);
+    const missing = findMissingWorkflowCapabilities(required, resolutions);
+    const blockingIssue = consistencyReferenceIssue ?? structuralIssue;
+    if (missing.length === 0 && blockingIssue === null) return true;
+    const message = blockingIssue ??
       `当前部署缺少素材执行能力：${missing.join("、")}。请完成配置后再次确认，或修改素材规划。`;
     await this.repository.updateWorkflow(input.workflowId, {
       status: "awaiting_input",
@@ -217,6 +252,160 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     return false;
   }
 
+  async enqueueConsistencyReferenceBatch(input: WorkflowInput & {
+    version: number;
+  }): Promise<"blocked" | "not_required" | "queued"> {
+    const row = await this.repository.findLatestCinematicArtifact(input.workflowId, "consistency_reference");
+    if (!row) throw new Error("Consistency reference artifact is unavailable.");
+    const artifact = CinematicArtifactSchema.parse(row.artifact);
+    if (artifact.stage !== "consistency_reference") throw new Error("Consistency reference artifact is invalid.");
+    if (artifact.data.status === "not_required") return "not_required";
+    const resolution = (await this.capabilityResolutions()).find((candidate) =>
+      candidate.capabilityId === "image.generate" && candidate.status === "available"
+    );
+    const [proposalRow, scenePlanRow] = await Promise.all([
+      this.repository.findLatestCinematicArtifact(input.workflowId, "proposal"),
+      this.repository.findLatestCinematicArtifact(input.workflowId, "scene_plan"),
+    ]);
+    const proposal = proposalRow ? CinematicArtifactSchema.parse(proposalRow.artifact) : null;
+    const scenePlan = scenePlanRow ? CinematicArtifactSchema.parse(scenePlanRow.artifact) : null;
+    const generatedSceneOrders = new Set(scenePlan?.stage === "scene_plan"
+      ? scenePlan.data.scenes
+        .filter((scene) => scene.sourceType === "generated_image" || scene.sourceType === "generated_video")
+        .map((scene) => scene.order)
+      : []);
+    const invalidGroup = artifact.data.groups.find((group) =>
+      group.sceneOrders.some((sceneOrder) => !generatedSceneOrders.has(sceneOrder))
+    );
+    const realPersonGroup = artifact.data.groups.find((group) => group.identityMode === "real_person");
+    const referenceCost = artifact.data.groups.reduce((total, group) => total + group.estimatedCostUsd, 0);
+    const blocker = scenePlan?.stage !== "scene_plan"
+      ? "缺少已批准的镜头计划。"
+      : invalidGroup
+        ? `连续性分组 ${invalidGroup.id} 只能关联存在的生成镜头。`
+        : realPersonGroup
+          ? `连续性分组 ${realPersonGroup.id} 涉及真人身份参考；当前版本未接入经审核的 asset:// 人像素材能力。`
+          : !resolution
+            ? "参考图生成能力尚未通过真实 APIMart 验证；禁止降级为纯提示词生成。"
+            : proposal?.stage !== "proposal"
+            ? "缺少已批准的创意方案预算。"
+            : referenceCost > proposal.data.estimatedCostUsd
+              ? `参考图预计成本 ${referenceCost.toFixed(2)} 超过已批准项目预算 ${proposal.data.estimatedCostUsd.toFixed(2)}，请修改连续性分组。`
+              : null;
+    if (blocker) {
+      await this.repository.updateWorkflow(input.workflowId, {
+        status: "awaiting_input",
+        currentStageId: "consistency_reference",
+        currentVersion: input.version,
+        failureCode: null,
+        errorMessage: blocker,
+      });
+      await this.events.append({
+        eventId: `${input.workflowId}:consistency-reference:blocked:v${input.version}`,
+        workflowId: input.workflowId,
+        requestId: input.requestId,
+        type: "agent.step",
+        data: {
+          status: "awaiting_input",
+          ...videoWorkflowStep("consistency_reference", "awaiting_input", blocker),
+        },
+      });
+      return "blocked";
+    }
+    const batchId = `${input.workflowId}-consistency-reference-v${input.version}`;
+    const outputResolution = getRequestedVideoOutputResolution(input.initialPrompt);
+    const prioritizedGroups = [...artifact.data.groups].sort((left, right) =>
+      getCinematicConsistencyReferencePriority(left.kind) -
+      getCinematicConsistencyReferencePriority(right.kind)
+    );
+    const jobEntries = await Promise.all(prioritizedGroups.map(async (group) => {
+      const promptHash = createHash("sha256")
+        .update(JSON.stringify({ prompt: group.prompt, aspectRatio: group.aspectRatio, outputResolution }))
+        .digest("hex");
+      const groupHash = createHash("sha256").update(group.id).digest("hex").slice(0, 12);
+      const assetId = `${input.workflowId}-ref-${groupHash}-${promptHash.slice(0, 12)}`;
+      const reusable = await this.repository.findReusableCinematicReferenceJob(
+        input.workflowId,
+        group.id,
+        promptHash,
+      );
+      return {
+        group,
+        job: CinematicAssetJobPayloadSchema.parse({
+          workflowId: input.workflowId,
+          requestId: input.requestId,
+          batchId,
+          assetId,
+          planVersion: input.version,
+          stageId: "consistency_reference",
+          sceneOrder: null,
+          referenceGroupId: group.id,
+          referenceBindings: [],
+          promptHash,
+          reusedFromAssetId: reusable?.id ?? null,
+          kind: "image",
+          prompt: group.prompt,
+          objectKey: reusable?.objectKey ?? `tenant/demo/project/demo/derived/${batchId}/${assetId}.png`,
+          capabilityResolution: resolution,
+          aspectRatio: group.aspectRatio,
+          outputResolution,
+        }),
+      };
+    }));
+    const jobs = jobEntries.map(({ job }) => job);
+    await this.repository.createCinematicAssetBatch({
+      batchId,
+      workflowId: input.workflowId,
+      planVersion: input.version,
+      stageId: "consistency_reference",
+      jobs,
+    });
+    if (jobs.every((job) => job.reusedFromAssetId !== null)) {
+      await this.events.append({
+        eventId: `${batchId}:reused-awaiting-approval`,
+        workflowId: input.workflowId,
+        requestId: input.requestId,
+        type: "agent.step",
+        data: {
+          status: "awaiting_input",
+          ...videoWorkflowStep("consistency_reference", "awaiting_input", "未变化的一致性参考图已复用，等待确认。"),
+        },
+      });
+      return "queued";
+    }
+    for (const { group, job } of jobEntries) {
+      if (job.reusedFromAssetId) continue;
+      try {
+        await this.imageQueue.add("generate-cinematic-reference", job, {
+          jobId: job.assetId,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5_000 },
+          priority: getCinematicConsistencyReferencePriority(group.kind),
+          removeOnComplete: 100,
+          removeOnFail: 500,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error
+          ? `Reference queue handoff failed: ${error.message}`.slice(0, 1_000)
+          : "Reference queue handoff failed.";
+        await this.repository.failCinematicAssetJob({ assetId: job.assetId, batchId, workflowId: input.workflowId, message });
+        throw error;
+      }
+    }
+    await this.events.append({
+      eventId: `${batchId}:queued`,
+      workflowId: input.workflowId,
+      requestId: input.requestId,
+      type: "job.progress",
+      data: {
+        jobId: batchId,
+        status: "queued",
+        progress: 0,
+        ...videoWorkflowStep("consistency_reference", "running", "一致性参考图已进入图片生成队列。"),
+      },
+    });
+    return "queued";
+  }
   async enqueueCinematicAssetBatch(input: WorkflowInput & {
     version: number;
   }): Promise<void> {
@@ -245,23 +434,61 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       if (!resolution) throw new Error(`No adapter resolved for ${capabilityId}.`);
       return resolution;
     };
+    const referenceRow = await this.repository.findLatestCinematicArtifact(input.workflowId, "consistency_reference");
+    if (!referenceRow) throw new Error("Assets require a persisted consistency-reference decision.");
+    const referenceArtifact = CinematicArtifactSchema.parse(referenceRow.artifact);
+    if (referenceArtifact.stage !== "consistency_reference") throw new Error("Consistency-reference artifact is invalid.");
+    const approvedReferenceByGroup = new Map<string, { assetId: string; objectKey: string }>();
+    if (referenceArtifact.data.status === "required") {
+      const referenceBatch = await this.repository.findCinematicAssetBatch(
+        input.workflowId,
+        "consistency_reference",
+        referenceRow.version,
+      );
+      if (!referenceBatch || referenceBatch.status !== "approved") throw new Error("Assets cannot be queued before consistency references are approved.");
+      for (const referenceJob of await this.repository.listCinematicAssetJobs(referenceBatch.id)) {
+        if (!referenceJob.referenceGroupId || referenceJob.status !== "succeeded" || referenceJob.supersededAt !== null) continue;
+        approvedReferenceByGroup.set(referenceJob.referenceGroupId, { assetId: referenceJob.id, objectKey: referenceJob.objectKey });
+      }
+      if (approvedReferenceByGroup.size !== referenceArtifact.data.groups.length) throw new Error("An approved consistency reference is missing or superseded.");
+    }
+    const referencePriority = ["character", "product", "environment", "style"] as const;
+    const bindingsForScene = (sceneOrder: number) => referenceArtifact.data.status === "required"
+      ? referenceArtifact.data.groups
+        .filter((group) => group.sceneOrders.includes(sceneOrder))
+        .sort((left, right) => referencePriority.indexOf(left.kind) - referencePriority.indexOf(right.kind))
+        .slice(0, 3)
+        .map((group) => {
+          const approved = approvedReferenceByGroup.get(group.id);
+          if (!approved) throw new Error(`Approved reference ${group.id} is unavailable.`);
+          return { groupId: group.id, assetId: approved.assetId, objectKey: approved.objectKey, purpose: group.kind, approvalStatus: "approved" as const };
+        })
+      : [];
     const batchId = `${input.workflowId}-assets-v${input.version}`;
     const jobs: CinematicAssetJobPayload[] = assets.data.assets.map((asset, index) => {
       const scene = scenePlan.data.scenes.find((candidate) => candidate.order === asset.sceneOrder);
       if (!scene) throw new Error(`Asset plan references missing scene ${asset.sceneOrder}.`);
       const assetId = `${batchId}-${index + 1}`;
+      const referenceBindings = bindingsForScene(asset.sceneOrder);
       if (asset.kind === "video") {
+        if (referenceBindings.length > 0 && input.videoModel !== "doubao-seedance-2.0") {
+          throw new Error("The selected video model cannot consume approved reference images; no prompt-only fallback is allowed.");
+        }
         return CinematicAssetJobPayloadSchema.parse({
           workflowId: input.workflowId,
           requestId: input.requestId,
           batchId,
           assetId,
           planVersion: input.version,
+          stageId: "assets",
+          referenceGroupId: null,
+          referenceBindings,
+          promptHash: createHash("sha256").update(asset.prompt).digest("hex"),
           sceneOrder: asset.sceneOrder,
           kind: "video",
           prompt: asset.prompt,
           objectKey: `tenant/demo/project/demo/derived/${batchId}/${assetId}.mp4`,
-          capabilityResolution: resolutionFor("video.generate"),
+          capabilityResolution: resolutionFor(referenceBindings.length > 0 ? "video.generate.reference" : "video.generate"),
           videoModel: input.videoModel,
           durationSeconds: scene.generationDurationSeconds ?? scene.durationSeconds,
         });
@@ -269,13 +496,17 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       const kind = asset.kind === "title_card" ? "title_card" as const : "image" as const;
       const capabilityId = kind === "title_card"
         ? "image.render.title-card" as const
-        : "image.generate" as const;
+        : referenceBindings.length > 0 ? "image.generate.reference" as const : "image.generate" as const;
       return CinematicAssetJobPayloadSchema.parse({
         workflowId: input.workflowId,
         requestId: input.requestId,
         batchId,
         assetId,
         planVersion: input.version,
+        stageId: "assets",
+        referenceGroupId: null,
+        referenceBindings,
+        promptHash: createHash("sha256").update(asset.prompt).digest("hex"),
         sceneOrder: asset.sceneOrder,
         kind,
         prompt: asset.prompt,
@@ -291,6 +522,10 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       batchId,
       assetId: musicId,
       planVersion: input.version,
+      stageId: "assets",
+      referenceGroupId: null,
+      referenceBindings: [],
+      promptHash: createHash("sha256").update(assets.data.music.direction).digest("hex"),
       sceneOrder: null,
       kind: "music",
       prompt: assets.data.music.direction,
@@ -303,9 +538,11 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       batchId,
       workflowId: input.workflowId,
       planVersion: input.version,
+      stageId: "assets",
       jobs,
     });
     for (const job of jobs) {
+      if (job.reusedFromAssetId) continue;
       try {
         const queue = job.kind === "music"
           ? this.agentQueue

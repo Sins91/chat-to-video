@@ -20,6 +20,7 @@ export const resolveWorkerCapabilities = (
   if (!config.apimart.apiKey || !config.ffmpegPath) {
     throw new Error("Worker capability registry requires APIMart and FFmpeg configuration.");
   }
+  const referenceInputsVerified = config.apimart.referenceInputsVerified === true;
   return WorkflowCapabilitySnapshotSchema.parse({
   workerId,
   generatedAt: new Date().toISOString(),
@@ -55,6 +56,22 @@ export const resolveWorkerCapabilities = (
       adapterId: "apimart.seedream-5-pro",
       provider: "apimart",
       reason: null,
+    }),
+    resolution({
+      capabilityId: "image.generate.reference",
+      status: referenceInputsVerified ? "available" : "unconfigured",
+      executionBoundary: "image_job",
+      adapterId: referenceInputsVerified ? "apimart.seedream-5-pro-reference" : null,
+      provider: "apimart",
+      reason: referenceInputsVerified ? null : "Set APIMART_REFERENCE_INPUTS_VERIFIED=true only after the opt-in integration contract passes.",
+    }),
+    resolution({
+      capabilityId: "video.generate.reference",
+      status: referenceInputsVerified ? "available" : "unconfigured",
+      executionBoundary: "render_job",
+      adapterId: referenceInputsVerified ? "apimart.seedance-2-reference" : null,
+      provider: "apimart",
+      reason: referenceInputsVerified ? null : "Set APIMART_REFERENCE_INPUTS_VERIFIED=true only after the opt-in integration contract passes.",
     }),
     resolution({
       capabilityId: "image.render.title-card",

@@ -23,6 +23,7 @@ export const CINEMATIC_STAGE_SKILL_IDS = Object.freeze({
   proposal: "cinematic-proposal",
   script: "cinematic-script",
   scene_plan: "cinematic-scene-plan",
+  consistency_reference: "cinematic-consistency-reference",
   assets: "cinematic-assets",
   edit: "cinematic-edit",
 } as const satisfies Record<CinematicGenerativeStage, string>);

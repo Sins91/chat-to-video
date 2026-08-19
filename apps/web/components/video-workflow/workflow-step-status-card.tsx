@@ -1,6 +1,9 @@
 "use client";
 
-import type { WorkflowStepProgress } from "@chat-to-video/contracts";
+import {
+  findWorkflowPipelineDefinition,
+  type WorkflowStepProgress,
+} from "@chat-to-video/contracts";
 import {
   CheckIcon,
   CircleIcon,
@@ -16,17 +19,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { VideoOutputEstimate } from "@/lib/video-output-estimate";
-
-const DEFAULT_WORKFLOW_STEP_LABELS = [
-  "理解需求",
-  "创作研究",
-  "创意方案",
-  "脚本生成",
-  "分镜写作",
-  "素材规划",
-  "剪辑方案",
-  "视频生成",
-] as const;
 
 const stateLabel = {
   running: "进行中",
@@ -54,22 +46,23 @@ const ToolActivityIcon = ({
 
 export const WorkflowStepStatusCard = memo(function WorkflowStepStatusCard({
   compact = false,
+  pipelineId,
   progress,
   videoOutputEstimate,
 }: {
   readonly compact?: boolean;
+  readonly pipelineId?: string;
   readonly progress: WorkflowStepProgress;
   readonly videoOutputEstimate: VideoOutputEstimate;
 }) {
-  const currentStepLabel = progress.stepTotal === DEFAULT_WORKFLOW_STEP_LABELS.length
-    ? DEFAULT_WORKFLOW_STEP_LABELS[progress.stepIndex - 1] ?? progress.stepLabel
-    : progress.stepLabel;
+  const pipeline = pipelineId ? findWorkflowPipelineDefinition(pipelineId) : null;
+  const pipelineStepLabels = pipeline && progress.stepTotal === pipeline.stages.length + 1
+    ? ["理解需求", ...pipeline.stages.map((stage) => stage.stepLabel ?? stage.label)]
+    : null;
+  const currentStepLabel = pipelineStepLabels?.[progress.stepIndex - 1] ?? progress.stepLabel;
   const getStepLabel = (stepNumber: number): string => {
     if (stepNumber === progress.stepIndex) return currentStepLabel;
-    if (progress.stepTotal !== DEFAULT_WORKFLOW_STEP_LABELS.length) {
-      return `步骤 ${stepNumber}`;
-    }
-    return DEFAULT_WORKFLOW_STEP_LABELS[stepNumber - 1] ?? `步骤 ${stepNumber}`;
+    return pipelineStepLabels?.[stepNumber - 1] ?? `步骤 ${stepNumber}`;
   };
 
   return (

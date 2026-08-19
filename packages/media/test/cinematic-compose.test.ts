@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { composeCinematicVideo, renderTitleCard } from "../src/index.js";
+import { composeCinematicVideo, renderTitleCard, resizeImageToVideoFrame } from "../src/index.js";
 
 describe("composeCinematicVideo validation", () => {
   it("rejects more than sixty clips before starting FFmpeg", async () => {
@@ -31,6 +31,15 @@ describe("composeCinematicVideo validation", () => {
     const image = await renderTitleCard({ title: "雨夜来信", aspectRatio: "16:9" });
     expect(image.byteLength).toBeGreaterThan(100);
     expect([...image.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+  });
+
+  it("resizes generated images to exact video frame dimensions", async () => {
+    const source = await renderTitleCard({ title: "Reference", aspectRatio: "16:9" });
+    const image = await resizeImageToVideoFrame({ body: source, width: 854, height: 480 });
+    const view = new DataView(image.buffer, image.byteOffset, image.byteLength);
+
+    expect(view.getUint32(16)).toBe(854);
+    expect(view.getUint32(20)).toBe(480);
   });
 
   it("rejects an invalid music gain before starting FFmpeg", async () => {

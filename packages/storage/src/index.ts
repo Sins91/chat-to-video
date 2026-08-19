@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export type StorageConfig = {
@@ -53,6 +53,12 @@ export class ObjectStorage {
     return new Uint8Array(await response.Body.transformToByteArray());
   }
 
+  async assertObjectExists(objectKey: string): Promise<void> {
+    await this.client.send(new HeadObjectCommand({
+      Bucket: this.config.bucket,
+      Key: assertSafeObjectKey(objectKey),
+    }));
+  }
   async deleteObject(objectKey: string): Promise<void> {
     await this.client.send(new DeleteObjectCommand({
       Bucket: this.config.bucket,

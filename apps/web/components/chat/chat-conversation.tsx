@@ -315,7 +315,7 @@ const cinematicAssetBatchSummaryText = (
 
 const completedVideoSummary = (snapshot: VideoWorkflowSnapshot): string => {
   const model = getVideoModelPresentation(snapshot.videoModel);
-  const output = getVideoOutputEstimate(snapshot.durationSeconds);
+  const output = getVideoOutputEstimate(snapshot.durationSeconds, snapshot.initialPrompt);
   const sceneCount = snapshot.currentArtifact?.artifact.stage === "edit"
     ? snapshot.currentArtifact.artifact.data.timeline.length
     : snapshot.storyboard?.storyboard.shots.length ?? null;

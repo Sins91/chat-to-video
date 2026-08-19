@@ -9,7 +9,9 @@ import {
 import { z } from "zod";
 
 const APIMART_PRICING_SOURCE = "https://api.apimart.ai/api/pricing/model";
-const APIMART_PRICING_VERSION = "2026-08-14";
+const APIMART_VIDEO_PRICING_VERSION = "2026-08-14";
+const APIMART_IMAGE_PRICING_SOURCE = `${APIMART_PRICING_SOURCE}?model=doubao-seedream-5-0-pro`;
+const APIMART_IMAGE_PRICING_VERSION = "2026-08-18";
 
 type CinematicPrice = {
   readonly usdPerGeneratedSecond: number;
@@ -23,6 +25,10 @@ export type CinematicPricingCatalog = Partial<
 
 type CinematicMediaPricing = {
   readonly usdPerGeneratedImage: number;
+  readonly freeInputImagesPerGeneration: number;
+  readonly usdPerAdditionalInputImage: number;
+  readonly imagePricingSource: string;
+  readonly imagePricingVersion: string;
   readonly usdPerMusicGeneration: number;
 };
 
@@ -30,17 +36,21 @@ const REVIEWED_PRICING: CinematicPricingCatalog = Object.freeze({
   "MiniMax-Hailuo-2.3": {
     usdPerGeneratedSecond: 0.061,
     source: APIMART_PRICING_SOURCE,
-    version: APIMART_PRICING_VERSION,
+    version: APIMART_VIDEO_PRICING_VERSION,
   },
   "doubao-seedance-2.0": {
     usdPerGeneratedSecond: 0.1775,
     source: APIMART_PRICING_SOURCE,
-    version: APIMART_PRICING_VERSION,
+    version: APIMART_VIDEO_PRICING_VERSION,
   },
 });
 
 const REVIEWED_MEDIA_PRICING: CinematicMediaPricing = Object.freeze({
-  usdPerGeneratedImage: 0.0732,
+  usdPerGeneratedImage: 0.0366,
+  freeInputImagesPerGeneration: 1,
+  usdPerAdditionalInputImage: 0.003,
+  imagePricingSource: APIMART_IMAGE_PRICING_SOURCE,
+  imagePricingVersion: APIMART_IMAGE_PRICING_VERSION,
   usdPerMusicGeneration: 0.075,
 });
 
@@ -48,6 +58,7 @@ export const EstimateCinematicCostInputSchema = z.object({
   model: VideoModelSchema,
   durationsSeconds: z.array(z.number().int().positive()).min(1).max(60),
   generatedImageCount: z.number().int().min(0).max(120).default(0),
+  generatedImageReferenceCounts: z.array(z.number().int().min(0).max(10)).max(120).default([]),
   generatedMusicCount: z.number().int().min(0).max(10).default(0),
 }).strict().superRefine((input, context) => {
   const maximum = getVideoModelMaxDurationSeconds(input.model);
@@ -60,6 +71,13 @@ export const EstimateCinematicCostInputSchema = z.object({
       });
     }
   });
+  if (input.generatedImageReferenceCounts.length > input.generatedImageCount) {
+    context.addIssue({
+      code: "custom",
+      message: "Reference-image counts cannot exceed the generated-image count.",
+      path: ["generatedImageReferenceCounts"],
+    });
+  }
 });
 
 export const EstimateCinematicCostOutputSchema = z.object({
@@ -71,6 +89,15 @@ export const EstimateCinematicCostOutputSchema = z.object({
 }).strict();
 
 const roundUsd = (amount: number): number => Number(amount.toFixed(6));
+
+const generatedImageCost = (
+  referenceImageCount: number,
+  pricing: CinematicMediaPricing = REVIEWED_MEDIA_PRICING,
+): number => roundUsd(
+  pricing.usdPerGeneratedImage +
+  Math.max(0, referenceImageCount - pricing.freeInputImagesPerGeneration) *
+    pricing.usdPerAdditionalInputImage,
+);
 
 export const estimateCinematicCost = (
   input: z.input<typeof EstimateCinematicCostInputSchema>,
@@ -98,10 +125,18 @@ export const estimateCinematicCost = (
     amountUsd: roundUsd(
       generatedSeconds * price.usdPerGeneratedSecond +
       parsed.generatedImageCount * mediaPricing.usdPerGeneratedImage +
-      parsed.generatedMusicCount * mediaPricing.usdPerMusicGeneration,
+      parsed.generatedImageReferenceCounts.reduce(
+        (total, count) => total + Math.max(
+          0,
+          count - mediaPricing.freeInputImagesPerGeneration,
+        ) * mediaPricing.usdPerAdditionalInputImage,
+        0,
+      ) + parsed.generatedMusicCount * mediaPricing.usdPerMusicGeneration,
     ),
-    pricingSource: price.source,
-    pricingVersion: price.version,
+    pricingSource: parsed.generatedImageCount > 0
+      ? mediaPricing.imagePricingSource : price.source,
+    pricingVersion: parsed.generatedImageCount > 0
+      ? mediaPricing.imagePricingVersion : price.version,
     reason: null,
   });
 };
@@ -154,6 +189,20 @@ export const applyReviewedCinematicPricing = (
       },
     });
   }
+  if (artifact.stage === "consistency_reference") {
+    if (artifact.data.status === "not_required") return artifact;
+    return CinematicArtifactSchema.parse({
+      ...artifact,
+      data: {
+        ...artifact.data,
+        groups: artifact.data.groups.map((group) => ({
+          ...group,
+          estimatedCostUsd: generatedImageCost(0),
+        })),
+      },
+    });
+  }
+
   if (artifact.stage !== "assets") return artifact;
 
   const scenePlan = input.approvedArtifacts.find(
@@ -166,12 +215,26 @@ export const applyReviewedCinematicPricing = (
   const scenesByOrder = new Map(
     scenePlan.data.scenes.map((scene) => [scene.order, scene] as const),
   );
+  const consistencyReference = input.approvedArtifacts.find(
+    (approved): approved is Extract<CinematicArtifact, { stage: "consistency_reference" }> =>
+      approved.stage === "consistency_reference",
+  );
+  const referenceCountForScene = (sceneOrder: number): number =>
+    consistencyReference?.data.status === "required"
+      ? consistencyReference.data.groups
+        .filter((group) => group.sceneOrders.includes(sceneOrder))
+        .slice(0, 3).length
+      : 0;
+
   const assets = artifact.data.assets.map((asset) => {
     if (asset.sourceMode !== "generate" || asset.kind === "title_card") {
       return { ...asset, estimatedCostUsd: 0 };
     }
     if (asset.kind === "image") {
-      return { ...asset, estimatedCostUsd: REVIEWED_MEDIA_PRICING.usdPerGeneratedImage };
+      return {
+        ...asset,
+        estimatedCostUsd: generatedImageCost(referenceCountForScene(asset.sceneOrder)),
+      };
     }
     if (asset.kind === "audio") {
       return { ...asset, estimatedCostUsd: REVIEWED_MEDIA_PRICING.usdPerMusicGeneration };

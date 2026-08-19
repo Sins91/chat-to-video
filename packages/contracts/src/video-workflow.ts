@@ -252,6 +252,7 @@ export const VideoWorkflowSnapshotSchema = z
     currentStage: WorkflowStageIdSchema.default("research"),
     cinematicStage: CinematicStageSchema.optional(),
     currentArtifact: CinematicArtifactVersionSchema.nullable().default(null),
+    consistencyReferenceBatch: CinematicAssetBatchSchema.nullable().default(null),
     assetBatch: CinematicAssetBatchSchema.nullable().default(null),
     requestId: z.string().uuid(),
     videoModel: VideoModelSchema,

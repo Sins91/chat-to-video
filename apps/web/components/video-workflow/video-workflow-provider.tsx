@@ -128,10 +128,7 @@ const legacyWorkflowStep = (
   snapshot: VideoWorkflowSnapshot,
   message?: string,
 ): WorkflowStepProgress => {
-  const stage = snapshot.status === "queued" || snapshot.status === "running" ||
-      snapshot.status === "succeeded"
-    ? "compose"
-    : snapshot.currentStage;
+  const stage = snapshot.currentStage;
   const pipeline = findWorkflowPipelineDefinition(snapshot.pipeline) ?? CINEMATIC_PIPELINE_DEFINITION;
   const stageDefinition = findWorkflowStage(pipeline, stage);
   const stageIndex = pipeline.stages.findIndex((definition) => definition.id === stage);
@@ -428,7 +425,24 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
           setSnapshot((current) => {
             if (!current || current.workflowId !== workflowId) return current;
             const status = workflowEvent.data.status;
-            const assetBatch = current.assetBatch;
+            const referenceBatch = current.consistencyReferenceBatch;
+            if (referenceBatch?.assets.some((asset) => asset.assetId === workflowEvent.data.jobId)) {
+              return {
+                ...current,
+                status: status === "running" ? "running" : current.status,
+                updatedAt: workflowEvent.timestamp,
+                consistencyReferenceBatch: {
+                  ...referenceBatch,
+                  status: status === "running" ? "running" : referenceBatch.status,
+                  updatedAt: workflowEvent.timestamp,
+                  assets: referenceBatch.assets.map((asset) =>
+                    asset.assetId === workflowEvent.data.jobId
+                      ? { ...asset, status, progress: workflowEvent.data.progress }
+                      : asset
+                  ),
+                },
+              };
+            }            const assetBatch = current.assetBatch;
             if (assetBatch?.assets.some((asset) => asset.assetId === workflowEvent.data.jobId)) {
               return {
                 ...current,
@@ -463,6 +477,9 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
           });
           const currentSnapshot = snapshotRef.current;
           const isKnownJob = currentSnapshot?.videoJob?.jobId === workflowEvent.data.jobId ||
+            currentSnapshot?.consistencyReferenceBatch?.assets.some(
+              (asset) => asset.assetId === workflowEvent.data.jobId,
+            ) ||
             currentSnapshot?.assetBatch?.assets.some(
               (asset) => asset.assetId === workflowEvent.data.jobId,
             );

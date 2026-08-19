@@ -16,6 +16,7 @@ const nonEmptyString = (value: unknown): string | null =>
 const wait = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 const SAFE_REQUEST_RETRIES = 2;
+const MAX_UPLOAD_IMAGE_BYTES = 20 * 1024 * 1024;
 
 type MediaRequestOperation = "submission" | "status polling";
 export type ApimartMediaTaskProgress = {
@@ -46,6 +47,22 @@ const detectMediaContentType = (body: Uint8Array): string | null => {
 
 export class ApimartMediaClient {
   constructor(private readonly config: WorkerConfig["apimart"]) {}
+
+  private assertTrustedMediaUrl(value: string, context: string): string {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch (error: unknown) {
+      throw new PermanentVideoError(`APIMart ${context} returned an invalid URL.`, { cause: error });
+    }
+    const hostname = url.hostname.toLowerCase();
+    if (url.protocol !== "https:" || !this.config.resultHosts.some(
+      (host) => hostname === host || hostname.endsWith(`.${host}`),
+    )) {
+      throw new PermanentVideoError(`APIMart ${context} returned an untrusted URL.`);
+    }
+    return url.toString();
+  }
 
   private async request(
     path: string,
@@ -108,15 +125,48 @@ export class ApimartMediaClient {
     return taskId;
   }
 
+  async uploadImage(input: { body: Uint8Array; filename: string }): Promise<string> {
+    if (input.body.byteLength === 0 || input.body.byteLength > MAX_UPLOAD_IMAGE_BYTES) {
+      throw new PermanentVideoError("APIMart upload requires an image between 1 byte and 20 MB.");
+    }
+    const contentType = detectMediaContentType(input.body);
+    if (!contentType?.startsWith("image/")) {
+      throw new PermanentVideoError("APIMart upload requires supported image bytes.");
+    }
+    const bodyCopy = new Uint8Array(input.body.byteLength);
+    bodyCopy.set(input.body);
+    const form = new FormData();
+    form.append("file", new Blob([bodyCopy.buffer], { type: contentType }), input.filename);
+    const response = await fetch(`${this.config.baseUrl}/uploads/images`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.config.apiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) {
+      const message = `APIMart image upload failed with status ${response.status}.`;
+      if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+        throw new PermanentVideoError(message);
+      }
+      throw new Error(message);
+    }
+    const payload = asObject(await response.json() as unknown, "image upload");
+    const url = nonEmptyString(payload.url);
+    if (!url) throw new PermanentVideoError("APIMart image upload omitted the URL.");
+    return this.assertTrustedMediaUrl(url, "image upload");
+  }
+
   async submitImage(input: {
     prompt: string;
     aspectRatio: "16:9" | "9:16" | "1:1";
+    imageUrls?: string[];
   }): Promise<string> {
     return this.submit("/images/generations", {
       model: "doubao-seedream-5-0-pro",
       prompt: input.prompt,
+      ...(input.imageUrls?.length ? { image_urls: input.imageUrls.slice(0, 3) } : {}),
       size: input.aspectRatio,
-      resolution: "2K",
+      resolution: "1K",
       n: 1,
       output_format: "png",
       watermark: false,

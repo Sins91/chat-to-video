@@ -12,6 +12,7 @@ const facts = {
   hasTitleCard: false,
   generatesMusic: true,
   hasAudioAsset: true,
+  requiresConsistencyReference: false,
 };
 
 describe("workflow capability requirements", () => {
