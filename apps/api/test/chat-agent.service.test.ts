@@ -3,12 +3,14 @@ import type { UIMessageChunk } from "ai";
 
 import { ChatAgentService, getChatFallbackReply } from "../src/chat-agent.service.js";
 
-const createGateway = () => ({ classifyWorkflowIntent: vi.fn(), inferCinematicDuration: vi.fn(), streamChat: vi.fn(), generateStoryboard: vi.fn(), generateCinematicArtifact: vi.fn() });
+const createGateway = () => ({ analyzeReferenceImages: vi.fn(), classifyWorkflowIntent: vi.fn(), inferCinematicDuration: vi.fn(), streamChat: vi.fn(), generateStoryboard: vi.fn(), generateCinematicArtifact: vi.fn() });
 const createConversations = () => ({
   ensureUserMessage: vi.fn().mockResolvedValue("00000000-0000-4000-8000-000000000010"),
+  getScope: vi.fn().mockResolvedValue({ tenantId: "demo", projectId: "demo" }),
   listModelMessages: vi.fn().mockResolvedValue([{ role: "user", content: "hello" }]),
   appendAssistantMessage: vi.fn(),
 });
+const createReferenceImages = () => ({ analyze: vi.fn().mockResolvedValue([]) });
 
 const readChunks = async (stream: ReadableStream<UIMessageChunk>): Promise<UIMessageChunk[]> => {
   const chunks: UIMessageChunk[] = [];
@@ -30,7 +32,7 @@ describe("ChatAgentService", () => {
     });
     gateway.streamChat.mockResolvedValue({ stream });
     const conversations = createConversations();
-    const service = new ChatAgentService(gateway, conversations as never);
+    const service = new ChatAgentService(gateway, conversations as never, createReferenceImages() as never);
     const abortController = new AbortController();
 
     const result = await service.stream(
@@ -47,6 +49,8 @@ describe("ChatAgentService", () => {
       abortSignal: abortController.signal,
       requestId: result.requestId,
       messages: [{ role: "user", content: "hello" }],
+      tenantId: "demo",
+      projectId: "demo",
     });
   });
 
@@ -62,7 +66,7 @@ describe("ChatAgentService", () => {
     const gateway = createGateway();
     gateway.streamChat.mockRejectedValue(new Error("secret provider response"));
     const conversations = createConversations();
-    const service = new ChatAgentService(gateway, conversations as never);
+    const service = new ChatAgentService(gateway, conversations as never, createReferenceImages() as never);
 
     const result = await service.stream(
       { message: { id: "user-1", content: "hello" } },
@@ -91,7 +95,7 @@ describe("ChatAgentService", () => {
       }),
     });
     const conversations = createConversations();
-    const service = new ChatAgentService(gateway, conversations as never);
+    const service = new ChatAgentService(gateway, conversations as never, createReferenceImages() as never);
 
     const result = await service.stream(
       { message: { id: "user-1", content: "hello" } },
@@ -120,7 +124,7 @@ describe("ChatAgentService", () => {
       }),
     });
     const conversations = createConversations();
-    const service = new ChatAgentService(gateway, conversations as never);
+    const service = new ChatAgentService(gateway, conversations as never, createReferenceImages() as never);
 
     const result = await service.stream(
       { message: { id: "user-1", content: "hello" } },
@@ -150,7 +154,7 @@ describe("ChatAgentService", () => {
       }),
     });
     const conversations = createConversations();
-    const service = new ChatAgentService(gateway, conversations as never);
+    const service = new ChatAgentService(gateway, conversations as never, createReferenceImages() as never);
     const abortController = new AbortController();
     abortController.abort();
 
@@ -183,7 +187,7 @@ describe("ChatAgentService", () => {
       }),
     });
     const conversations = createConversations();
-    const service = new ChatAgentService(gateway, conversations as never);
+    const service = new ChatAgentService(gateway, conversations as never, createReferenceImages() as never);
 
     const result = await service.stream(
       { message: { id: "user-1", content: "hello" } },

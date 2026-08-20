@@ -106,6 +106,21 @@ describe("Agent UI shell", () => {
     expect(sidebar).toContain("{conversation.title}</TooltipContent>");
   });
 
+  it("opens user-uploaded chat images in an accessible large preview", async () => {
+    const [attachments, conversation] = await Promise.all([
+      readFile(resolve(webRoot, "src/components/ai-elements/attachments.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/chat/chat-conversation.tsx"), "utf8"),
+    ]);
+
+    expect(conversation).toContain("AttachmentImageLightbox");
+    expect(conversation).toContain("image.previewUrl ? <AttachmentImageLightbox");
+    expect(attachments).toContain("DialogTrigger");
+    expect(attachments).toContain("DialogContent");
+    expect(attachments).toContain("放大查看图片");
+    expect(attachments).toContain("cursor-zoom-in");
+    expect(attachments).toContain("max-h-[calc(100dvh-4rem)]");
+  });
+
   it("marks history conversations that contain a generated video", async () => {
     const [sidebar, generatedVideoClient] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-history-sidebar.tsx"), "utf8"),

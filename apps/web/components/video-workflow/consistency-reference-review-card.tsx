@@ -4,7 +4,7 @@ import type { CinematicArtifactVersion, CinematicAssetBatch } from "@chat-to-vid
 
 type ReferenceArtifact = Extract<CinematicArtifactVersion["artifact"], { stage: "consistency_reference" }>;
 
-const kindLabel = { character: "人物", product: "产品", environment: "环境", style: "视觉风格" } as const;
+const kindLabel = { character: "人物", product: "产品", element: "元素", environment: "环境", style: "视觉风格" } as const;
 const statusLabel = { queued: "等待生成", running: "生成中", succeeded: "已完成", failed: "生成失败", cancelled: "已取消" } as const;
 
 export function ConsistencyReferenceReviewCard({ batch, artifact }: {

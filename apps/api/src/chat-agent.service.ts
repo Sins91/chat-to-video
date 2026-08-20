@@ -4,6 +4,7 @@ import type { UIMessageChunk } from "ai";
 import { randomUUID } from "node:crypto";
 
 import { ConversationService } from "./conversation/conversation.service.js";
+import { ReferenceImageService } from "./reference-image/reference-image.service.js";
 import {
   MODEL_GATEWAY,
   ModelGatewayError,
@@ -17,6 +18,7 @@ export type ChatAgentStream = ChatModelStream & {
 };
 
 const CHAT_FALLBACK_REPLIES = {
+  image: "参考图已安全留档，但当前模型暂时无法完成图片理解。请稍后重试；系统不会将未识别结果用于一致性绑定。",
   incomplete: "聊天服务返回了不完整的内容。我暂时无法完成回答，请重新发送这条消息。",
   network: "当前无法连接聊天服务。我暂时无法完成回答，请检查网络后重新发送这条消息。",
   timeout: "这次响应超时了。我暂时无法完成回答，请稍后重新发送这条消息。",
@@ -27,6 +29,7 @@ const CHAT_FALLBACK_REPLIES = {
 export const getChatFallbackReply = (error: unknown): string => {
   const detail = error instanceof Error ? `${error.name} ${error.message}` : String(error);
   const normalized = detail.toLowerCase();
+  if (/reference_image|image understanding|图片理解|multimodal/u.test(normalized)) return CHAT_FALLBACK_REPLIES.image;
   if (/chat_timeout|timeout|timed out|aborterror|超时/u.test(normalized)) return CHAT_FALLBACK_REPLIES.timeout;
   if (/empty_response|incomplete_response|empty|incomplete|不完整/u.test(normalized)) return CHAT_FALLBACK_REPLIES.incomplete;
   if (/agent_tool_calling_unsupported|tool.call|工具调用|unsupported tool/u.test(normalized)) return CHAT_FALLBACK_REPLIES.tool;
@@ -54,10 +57,11 @@ export class ChatAgentService {
   constructor(
     @Inject(MODEL_GATEWAY) private readonly modelGateway: ModelGateway,
     @Inject(ConversationService) private readonly conversations: ConversationService,
+    @Inject(ReferenceImageService) private readonly referenceImages: ReferenceImageService,
   ) {}
 
   async stream(
-    input: { conversationId?: string; message: { id: string; content: string } },
+    input: { conversationId?: string; message: { id: string; content: string; referenceImageIds?: string[] } },
     abortSignal: AbortSignal,
   ): Promise<ChatAgentStream> {
     const requestId = randomUUID();
@@ -65,11 +69,28 @@ export class ChatAgentService {
       conversationId: input.conversationId,
       messageId: input.message.id,
       content: input.message.content,
+      referenceImageIds: input.message.referenceImageIds ?? [],
     });
-    const [messages, scope]: [ChatAgentMessage[], Awaited<ReturnType<ConversationService["getScope"]>>] = await Promise.all([
-      this.conversations.listModelMessages(conversationId),
-      this.conversations.getScope(conversationId),
-    ]);
+    const scope = await this.conversations.getScope(conversationId);
+    try {
+      await this.referenceImages.analyze({
+        ids: input.message.referenceImageIds ?? [],
+        requestId,
+        conversationId,
+        tenantId: scope.tenantId,
+        projectId: scope.projectId,
+        userText: input.message.content,
+      });
+    } catch (error: unknown) {
+      this.logger.error(
+        `Reference image analysis failed requestId=${requestId} error=${error instanceof Error ? error.name : "unknown"}`,
+      );
+      const fallback = CHAT_FALLBACK_REPLIES.image;
+      const assistantMessageId = randomUUID();
+      await this.conversations.appendAssistantMessage(conversationId, assistantMessageId, fallback);
+      return { conversationId, requestId, stream: createFallbackStream(assistantMessageId, fallback) };
+    }
+    const messages: ChatAgentMessage[] = await this.conversations.listModelMessages(conversationId);
 
     try {
       const result = await this.modelGateway.streamChat({

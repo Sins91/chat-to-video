@@ -7,6 +7,7 @@ export const WORKFLOW_CAPABILITY_SNAPSHOT_TTL_SECONDS = 90;
 export const WorkflowCapabilityIdSchema = z.enum([
   "image.generate",
   "image.generate.reference",
+  "image.reference.supplied",
   "image.render.title-card",
   "video.generate",
   "video.generate.audio",

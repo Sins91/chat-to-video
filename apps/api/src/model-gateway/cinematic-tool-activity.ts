@@ -14,6 +14,21 @@ const CINEMATIC_TOOL_PRESENTERS: Readonly<Record<string, CinematicToolPresenter>
     get_video_model_constraints: { toolLabel: "视频模型约束", operation: "查询视频模型限制" },
     get_cinematic_context: { toolLabel: "制作上下文", operation: "读取当前制作上下文" },
     estimate_cinematic_cost: { toolLabel: "成本估算", operation: "估算视频生成成本" },
+    prompt_compressor: {
+      toolLabel: "提示词压缩",
+      operation: (input) => {
+        if (typeof input !== "object" || input === null) return "压缩超长生产提示词";
+        const purpose = "purpose" in input && typeof input.purpose === "string"
+          ? input.purpose.replace(/[^a-z_]+/gu, "").slice(0, 40)
+          : "production_prompt";
+        const maximum = "maxCharacters" in input && typeof input.maxCharacters === "number"
+          ? input.maxCharacters
+          : null;
+        return maximum === 1_000 || maximum === 4_000
+          ? `压缩 ${purpose} 提示词至 ${maximum} 字符以内`
+          : `压缩 ${purpose} 提示词`;
+      },
+    },
     web_search: { toolLabel: "网络搜索", operation: "搜索相关参考资料" },
     image_selector: { toolLabel: "图像服务选择", operation: "选择图像生成服务" },
     video_selector: { toolLabel: "视频服务选择", operation: "选择视频生成服务" },

@@ -164,6 +164,7 @@ export const buildVideoWorkflowSnapshot = async (
       pendingControlRow !== null,
     ),
     durationSeconds: workflow.durationSeconds,
+    outputResolution: workflow.outputResolution,
     initialPrompt: workflow.initialPrompt,
     promptTrace: buildGeneratedVideoPromptTrace({
       initialPrompt: workflow.initialPrompt,
@@ -189,6 +190,7 @@ export const buildVideoWorkflowSnapshot = async (
           queueAhead,
           providerTaskId: job.providerTaskId,
           errorMessage: job.errorMessage,
+          outputResolution: job.outputResolution,
           videoTitle,
           playbackUrl,
         }

@@ -8,6 +8,8 @@ import {
   VideoWorkflowEventSchema,
   WorkflowStepProgressSchema,
   type ConversationEntry,
+  type ReferenceImageView,
+  type ReferenceImagePurpose,
   type GeneratedVideoPromptTrace,
   type VideoModel,
   type VideoWorkflowEvent,
@@ -27,7 +29,9 @@ import {
   retryVideoWorkflow,
   resolveWorkflowUserIntent,
   resolveVideoWorkflowIntent,
+  resolveReferenceImages,
   updateVideoWorkflowModel,
+  updateReferenceImagePurpose as updateReferenceImagePurposeRequest,
 } from "@/lib/video-workflow-client";
 import { formatVideoWorkflowError, type VideoWorkflowOperation } from "@/lib/video-workflow-error";
 import { isWorkflowEventHistoricalReplay } from "@/lib/workflow-event-replay";
@@ -54,11 +58,17 @@ type VideoWorkflowContextValue = {
   recoverWorkflow: () => Promise<void>;
   submitText: (text: string, messageId: string) => Promise<void>;
   resolveUserIntent: (text: string, messageId: string) => Promise<"workflow" | "chat">;
-  resolveControlIntent: (text: string, messageId: string) => Promise<{
+  resolveControlIntent: (text: string, messageId: string, referenceImages?: readonly ReferenceImageView[]) => Promise<{
     route: "workflow" | "chat";
     conversationId: string | null;
     workflowId: string | null;
   }>;
+  resolveReferenceImagePurpose: (
+    resolutionRequestId: string,
+    referenceImageId: string,
+    purpose: ReferenceImagePurpose,
+  ) => Promise<void>;
+  updateReferenceImagePurpose: (referenceImageId: string, purpose: ReferenceImagePurpose) => Promise<void>;
   submitSceneDurations: (scenes: ReadonlyArray<{ order: number; durationSeconds: number }>) => Promise<void>;
   refresh: () => Promise<void>;
   prepareConversationSwitch: (conversationId: string) => Promise<boolean>;
@@ -609,6 +619,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         conversationId: loadedConversationId ?? undefined,
         messageId,
         prompt,
+        referenceImageIds: [],
         videoModel,
       });
       router.replace(`/studio/agent?conversationId=${encodeURIComponent(created.conversationId)}`);
@@ -643,7 +654,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
-      const result = await resolveWorkflowUserIntent(workflowId, { messageId, text });
+      const result = await resolveWorkflowUserIntent(workflowId, { messageId, text, referenceImageIds: [] });
       if (result.applied) {
         await refresh();
         notifyConversationHistoryChanged();
@@ -665,6 +676,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
   const resolveControlIntent = useCallback(async (
     text: string,
     messageId: string,
+    referenceImages: readonly ReferenceImageView[] = [],
   ): Promise<{ route: "workflow" | "chat"; conversationId: string | null; workflowId: string | null }> => {
     const normalizedText = text.trim();
     const pendingControlKind = snapshotRef.current?.pendingControl?.kind ?? null;
@@ -674,6 +686,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     setEntries((current) => appendOptimisticUserEntry(current, {
       messageId,
       text: normalizedText,
+      referenceImages,
       createdAt: new Date().toISOString(),
     }));
     try {
@@ -681,6 +694,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       const result = await resolveVideoWorkflowIntent({
         messageId,
         text: normalizedText,
+        referenceImageIds: referenceImages.map((image) => image.id),
         conversationId: loadedConversationId ?? undefined,
         workflowId: snapshotRef.current?.workflowId,
         pendingActionId: snapshotRef.current?.pendingControl?.controlRequestId,
@@ -745,6 +759,66 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       setIsSubmitting(false);
     }
   }, [followCurrentWorkflowPreview, loadedConversationId, refresh, router, videoModel]);
+
+  const resolveReferenceImagePurpose = useCallback(async (
+    resolutionRequestId: string,
+    referenceImageId: string,
+    purpose: ReferenceImagePurpose,
+  ): Promise<void> => {
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const result = await resolveReferenceImages({
+        resolutionRequestId,
+        resolutions: [{ referenceImageId, purpose, sceneOrders: [] }],
+      });
+      if (result.conversationId) {
+        const detailPromise = getConversation(result.conversationId);
+        const snapshotPromise = result.workflowId ? getVideoWorkflow(result.workflowId) : Promise.resolve(null);
+        const [detail, nextSnapshot] = await Promise.all([detailPromise, snapshotPromise]);
+        activeConversationIdRef.current = result.conversationId;
+        setEntries(detail.entries);
+        setLoadedConversationId(result.conversationId);
+        setSnapshot(nextSnapshot ?? detail.videoWorkflow);
+        if (nextSnapshot) setVideoModel(nextSnapshot.videoModel);
+        if (result.conversationId !== loadedConversationId) {
+          router.replace(`/studio/agent?conversationId=${encodeURIComponent(result.conversationId)}`);
+        }
+      } else {
+        await refresh();
+      }
+      notifyConversationHistoryChanged();
+    } catch (error: unknown) {
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation: "revise",
+        workflowId: snapshotRef.current?.workflowId,
+        requestId: snapshotRef.current?.requestId,
+      }));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [loadedConversationId, refresh, router]);
+
+  const updateReferenceImagePurpose = useCallback(async (
+    referenceImageId: string,
+    purpose: ReferenceImagePurpose,
+  ): Promise<void> => {
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await updateReferenceImagePurposeRequest(referenceImageId, { purpose, sceneOrders: [] });
+      await refresh();
+      notifyConversationHistoryChanged();
+    } catch (error: unknown) {
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation: "revise",
+        workflowId: snapshotRef.current?.workflowId,
+        requestId: snapshotRef.current?.requestId,
+      }));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [refresh]);
 
   const submitSceneDurations = useCallback(async (
     scenes: ReadonlyArray<{ order: number; durationSeconds: number }>,
@@ -969,13 +1043,15 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     submitText,
     resolveUserIntent,
     resolveControlIntent,
+    resolveReferenceImagePurpose,
+    updateReferenceImagePurpose,
     submitSceneDurations,
     refresh,
     prepareConversationSwitch,
     newConversation,
     videoModel: activeVideoModel,
     setVideoModel: changeVideoModel,
-  }), [activeEntries, activeErrorMessage, activeSnapshot, activeVideoModel, changeVideoModel, chatScrollRestoreRequest, chatVideoFocusRequest, isConversationLoading, isSubmitting, loadedConversationId, newConversation, openGeneratedVideo, prepareConversationSwitch, previewVideo, recoverWorkflow, refresh, registerChatViewportController, retryWorkflow, returnToCurrentVideo, resolveControlIntent, resolveUserIntent, startWorkflow, stepProgress, stepProgressHistory, submitSceneDurations, submitText]);
+  }), [activeEntries, activeErrorMessage, activeSnapshot, activeVideoModel, changeVideoModel, chatScrollRestoreRequest, chatVideoFocusRequest, isConversationLoading, isSubmitting, loadedConversationId, newConversation, openGeneratedVideo, prepareConversationSwitch, previewVideo, recoverWorkflow, refresh, registerChatViewportController, retryWorkflow, returnToCurrentVideo, resolveControlIntent, resolveReferenceImagePurpose, resolveUserIntent, startWorkflow, stepProgress, stepProgressHistory, submitSceneDurations, submitText, updateReferenceImagePurpose]);
 
   return <VideoWorkflowContext value={value}>{children}</VideoWorkflowContext>;
 }

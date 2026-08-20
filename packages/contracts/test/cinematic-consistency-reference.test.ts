@@ -3,6 +3,7 @@ import {
   CinematicConsistencyReferenceArtifactSchema,
   CinematicReferenceBindingsSchema,
   getCinematicConsistencyReferencePriority,
+  MAX_CONSISTENCY_REFERENCE_TEXT_CHARS,
 } from "@chat-to-video/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -50,6 +51,37 @@ describe("cinematic consistency-reference contracts", () => {
       reason: "No repeated generated subject.",
       groups: [],
     }).success).toBe(true);
+  });
+
+  it("accepts 4000-character reference text and rejects longer values", () => {
+    const group = {
+      id: "lead",
+      kind: "character" as const,
+      identityMode: "fictional" as const,
+      label: "Lead",
+      sceneOrders: [1, 2],
+      canonicalDescription: "描".repeat(MAX_CONSISTENCY_REFERENCE_TEXT_CHARS),
+      prompt: "提".repeat(MAX_CONSISTENCY_REFERENCE_TEXT_CHARS),
+      aspectRatio: "16:9" as const,
+      estimatedCostUsd: 0.05,
+    };
+    const artifact = { status: "required" as const, reason: "Repeated lead.", groups: [group] };
+
+    expect(CinematicConsistencyReferenceArtifactSchema.safeParse(artifact).success).toBe(true);
+    expect(CinematicConsistencyReferenceArtifactSchema.safeParse({
+      ...artifact,
+      groups: [{
+        ...group,
+        canonicalDescription: "描".repeat(MAX_CONSISTENCY_REFERENCE_TEXT_CHARS + 1),
+      }],
+    }).success).toBe(false);
+    expect(CinematicConsistencyReferenceArtifactSchema.safeParse({
+      ...artifact,
+      groups: [{
+        ...group,
+        prompt: "提".repeat(MAX_CONSISTENCY_REFERENCE_TEXT_CHARS + 1),
+      }],
+    }).success).toBe(false);
   });
 
   it("ranks character anchors ahead of every other reference kind", () => {

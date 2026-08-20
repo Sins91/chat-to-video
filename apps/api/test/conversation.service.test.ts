@@ -19,11 +19,16 @@ const createRepository = () => ({
   listStoryboardVersions: vi.fn(),
   softDelete: vi.fn(),
 });
+const createReferenceImages = () => ({
+  bindToMessage: vi.fn(),
+  listForConversation: vi.fn().mockResolvedValue(new Map()),
+  modelMessages: vi.fn((_conversationId: string, messages: unknown) => messages),
+});
 
 describe("ConversationService", () => {
   it("creates a titled conversation on the first user message", async () => {
     const repository = createRepository();
-    const service = new ConversationService(repository as unknown as ConversationRepository, {} as VideoWorkflowService);
+    const service = new ConversationService(repository as unknown as ConversationRepository, {} as VideoWorkflowService, createReferenceImages() as never);
     const conversationId = await service.ensureUserMessage({ messageId: "user-1", content: "  一个   新的视频创意  " });
     expect(conversationId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(repository.createWithUserMessage).toHaveBeenCalledWith(expect.objectContaining({
@@ -94,6 +99,7 @@ describe("ConversationService", () => {
     const service = new ConversationService(
       repository as unknown as ConversationRepository,
       workflows as unknown as VideoWorkflowService,
+      createReferenceImages() as never,
     );
 
     const detail = await service.get(conversationId);
@@ -172,6 +178,7 @@ describe("ConversationService", () => {
     const service = new ConversationService(
       repository as unknown as ConversationRepository,
       workflows as unknown as VideoWorkflowService,
+      createReferenceImages() as never,
     );
 
     const detail = await service.get(conversationId);
@@ -192,7 +199,7 @@ describe("ConversationService", () => {
   it("rejects writes to a deleted or unknown conversation", async () => {
     const repository = createRepository();
     repository.findActiveConversation.mockResolvedValue(null);
-    const service = new ConversationService(repository as unknown as ConversationRepository, {} as VideoWorkflowService);
+    const service = new ConversationService(repository as unknown as ConversationRepository, {} as VideoWorkflowService, createReferenceImages() as never);
     await expect(service.ensureUserMessage({
       conversationId: "00000000-0000-4000-8000-000000000010",
       messageId: "user-1",
@@ -219,7 +226,7 @@ describe("ConversationService", () => {
         updatedAt: new Date("2026-08-12T11:00:00.000Z"),
       },
     ]);
-    const service = new ConversationService(repository as unknown as ConversationRepository, {} as VideoWorkflowService);
+    const service = new ConversationService(repository as unknown as ConversationRepository, {} as VideoWorkflowService, createReferenceImages() as never);
 
     const result = await service.list(undefined, 1);
     const cursor = JSON.parse(Buffer.from(result.nextCursor ?? "", "base64url").toString("utf8")) as Record<string, unknown>;
@@ -242,6 +249,7 @@ describe("ConversationService", () => {
     const service = new ConversationService(
       repository as unknown as ConversationRepository,
       {} as VideoWorkflowService,
+      createReferenceImages() as never,
     );
 
     await expect(service.list(undefined, 30)).resolves.toEqual({

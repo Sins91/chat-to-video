@@ -7,7 +7,157 @@ import { ApimartModelGateway } from "../src/model-gateway/apimart-model-gateway.
 import { ModelGatewayError } from "../src/model-gateway/model-gateway.js";
 import type { MastraAgents } from "../src/model-gateway/mastra-agents.js";
 
+const fallbackResearchArtifact: CinematicArtifact = {
+  stage: "research",
+  data: {
+    summary: "以用户上传的人物造型为视觉锚点的雨夜研究。",
+    sourceMode: "generated",
+    moodKeywords: ["雨夜", "悬疑", "人物一致性"],
+    visualReferences: [
+      { title: "人物造型", description: "保留黑色风衣与短发轮廓。", url: null },
+      { title: "湿润街面", description: "冷色霓虹倒影。", url: null },
+      { title: "暗巷入口", description: "低照度与纵深构图。", url: null },
+    ],
+    musicDirection: "低频弦乐贯穿全片。",
+    soundDirection: "雨声、脚步与对白，不含背景配乐。",
+    productionConstraints: ["保持人物服装与发型一致"],
+  },
+};
+
 describe("cinematic structured-output diagnostics", () => {
+  it("recovers an empty evidence response through the structurer without resending reference images", async () => {
+    const evidenceGenerate = vi.fn().mockResolvedValue({
+      text: "",
+      finishReason: "stop",
+      steps: [{
+        finishReason: "stop",
+        toolCalls: [{ toolName: "web_search", args: { query: "雨夜视觉" } }],
+        toolResults: [{
+          toolName: "web_search",
+          result: {
+            results: [{
+              title: "雨夜参考",
+              url: "https://example.com/reference?X-Amz-Signature=secret",
+              snippet: "冷色街灯与湿地反射。",
+            }],
+          },
+        }, {
+          toolName: "get_cinematic_context",
+          result: {
+            summary: "已批准的上下游摘要。",
+            objectKey: "tenant/t1/project/p1/source/private.png",
+          },
+        }, {
+          toolName: "skill",
+          result: { content: "PRIVATE_SKILL_CONTENT" },
+        }],
+      }],
+    });
+    const structuringGenerate = vi.fn().mockResolvedValue({ object: fallbackResearchArtifact });
+    const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    const agents = {
+      cinematic: { generate: evidenceGenerate },
+      cinematicStructurer: { generate: structuringGenerate },
+      chat: { stream: vi.fn() },
+      storyboard: { generate: vi.fn() },
+      providerName: "apimart",
+      structuredOutputModel: {},
+      storyboardTimeoutMs: 120_000,
+      timeoutMs: 30_000,
+    };
+    const gateway = new ApimartModelGateway(agents as unknown as MastraAgents);
+    const referenceImageId = "00000000-0000-4000-8000-000000000004";
+
+    try {
+      await expect(gateway.generateCinematicArtifact({
+        requestId: "00000000-0000-4000-8000-000000000001",
+        workflowId: "00000000-0000-4000-8000-000000000002",
+        conversationId: "00000000-0000-4000-8000-000000000003",
+        tenantId: "tenant-1",
+        projectId: "project-1",
+        initialPrompt: "参考上传人物制作雨夜悬疑短片",
+        stage: "research",
+        durationSeconds: 10,
+        videoModel: "MiniMax-Hailuo-2.3",
+        modelMaxDurationSeconds: 10,
+        approvedArtifacts: [],
+        referenceImages: [{
+          id: referenceImageId,
+          analysis: {
+            referenceImageId,
+            purpose: "character",
+            label: "黑色风衣人物",
+            visibleFeatures: ["黑色风衣", "短发"],
+            consistencyRequirements: ["保持服装和发型"],
+            recommendedSceneOrders: [1, 2],
+            confidence: 0.95,
+            containsRealPerson: false,
+            containsSensitiveContent: false,
+            requiresUserConfirmation: false,
+          },
+          declaration: null,
+        }],
+      })).resolves.toEqual(fallbackResearchArtifact);
+
+      expect(warn.mock.calls.flat().join(" ")).toContain("recoveredByStructurer=true");
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(evidenceGenerate).toHaveBeenCalledTimes(1);
+    expect(typeof evidenceGenerate.mock.calls[0]?.[0]).toBe("string");
+    expect(evidenceGenerate.mock.calls[0]?.[0]).toContain("黑色风衣人物");
+    expect(structuringGenerate).toHaveBeenCalledTimes(1);
+    const structuringPrompt = structuringGenerate.mock.calls[0]?.[0] as string;
+    expect(structuringPrompt).toContain("No artifact draft was returned");
+    expect(structuringPrompt).toContain("https://example.com/reference");
+    expect(structuringPrompt).not.toContain("X-Amz-Signature");
+    expect(structuringPrompt).not.toContain("private.png");
+    expect(structuringPrompt).not.toContain("PRIVATE_SKILL_CONTENT");
+  });
+
+  it("structures empty evidence when no registered tool produced a result", async () => {
+    const evidenceGenerate = vi.fn().mockResolvedValue({
+      text: "",
+      finishReason: "stop",
+      steps: [],
+    });
+    const structuringGenerate = vi.fn().mockResolvedValue({ object: fallbackResearchArtifact });
+    const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    const gateway = new ApimartModelGateway({
+      cinematic: { generate: evidenceGenerate },
+      cinematicStructurer: { generate: structuringGenerate },
+      chat: { stream: vi.fn() },
+      storyboard: { generate: vi.fn() },
+      providerName: "apimart",
+      structuredOutputModel: {},
+      storyboardTimeoutMs: 120_000,
+      timeoutMs: 30_000,
+    } as unknown as MastraAgents);
+
+    try {
+      await expect(gateway.generateCinematicArtifact({
+        requestId: "00000000-0000-4000-8000-000000000001",
+        workflowId: "00000000-0000-4000-8000-000000000002",
+        tenantId: "tenant-1",
+        projectId: "project-1",
+        initialPrompt: "制作一条十秒雨夜悬疑短片",
+        stage: "research",
+        durationSeconds: 10,
+        videoModel: "MiniMax-Hailuo-2.3",
+        modelMaxDurationSeconds: 10,
+        approvedArtifacts: [],
+      })).resolves.toEqual(fallbackResearchArtifact);
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(evidenceGenerate).toHaveBeenCalledTimes(1);
+    expect(structuringGenerate).toHaveBeenCalledTimes(1);
+    expect(structuringGenerate.mock.calls[0]?.[0]).toContain("制作一条十秒雨夜悬疑短片");
+    expect(structuringGenerate.mock.calls[0]?.[0]).toContain("Bounded registered-tool results:\n[]");
+  });
+
   it("retries a retryable transport error without adding schema-repair instructions", async () => {
     const artifact: CinematicArtifact = {
       stage: "research",

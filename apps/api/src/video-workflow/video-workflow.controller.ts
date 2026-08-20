@@ -22,7 +22,12 @@ import {
   VideoWorkflowInteractionSchema,
   ResolveWorkflowUserIntentRequestSchema,
   ResolveVideoWorkflowIntentRequestSchema,
+  ResolveReferenceImagesRequestSchema,
+  ReferenceImageIdSchema,
+  UpdateReferenceImagePurposeRequestSchema,
   type ResolveVideoWorkflowIntentResponse,
+  type ResolveReferenceImagesRequest,
+  type ReferenceImageView,
   type ResolveWorkflowUserIntentResponse,
   type CreateVideoWorkflowResponse,
   type UpdateVideoWorkflowModelResponse,
@@ -69,6 +74,32 @@ export class VideoWorkflowController {
       issues: parsed.error.issues,
     });
     return this.workflows.resolveVideoIntent(parsed.data);
+  }
+
+  @Post("reference-resolutions/resolve")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async resolveReferenceImages(@Body() body: unknown): Promise<ResolveVideoWorkflowIntentResponse> {
+    const parsed = ResolveReferenceImagesRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException({
+      code: "INVALID_REFERENCE_RESOLUTION_REQUEST",
+      message: "参考图用途确认参数无效。",
+      issues: parsed.error.issues,
+    });
+    return this.workflows.resolveReferenceImages(parsed.data satisfies ResolveReferenceImagesRequest);
+  }
+
+  @Patch("reference-images/:referenceImageId/purpose")
+  async updateReferenceImagePurpose(
+    @Param("referenceImageId") referenceImageId: unknown,
+    @Body() body: unknown,
+  ): Promise<ReferenceImageView> {
+    const id = ReferenceImageIdSchema.safeParse(referenceImageId);
+    const parsed = UpdateReferenceImagePurposeRequestSchema.safeParse(body);
+    if (!id.success || !parsed.success) throw new BadRequestException({
+      code: "INVALID_REFERENCE_PURPOSE_REQUEST",
+      message: "参考图用途修改参数无效。",
+    });
+    return this.workflows.updateReferenceImagePurpose(id.data, parsed.data);
   }
 
   @Get(":workflowId")

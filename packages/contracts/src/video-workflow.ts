@@ -5,6 +5,7 @@ import {
 } from "./cinematic.js";
 import { WorkflowPipelineIdSchema, WorkflowStageIdSchema } from "./workflow-pipeline.js";
 import { GeneratedVideoPromptTraceSchema } from "./generated-video.js";
+import { PRODUCTION_PROMPT_MAX_CHARACTERS } from "./production-prompt.js";
 import { WorkflowCapabilityResolutionSchema } from "./workflow-capability.js";
 import { PendingWorkflowControlSchema } from "./workflow-control.js";
 import { CinematicAssetBatchSchema } from "./cinematic-assets.js";
@@ -13,10 +14,12 @@ import {
   VideoJobIdSchema,
   VideoJobStatusSchema,
   VideoModelSchema,
+  VideoOutputResolutionSchema,
   VideoWorkflowIdSchema,
 } from "./video-workflow-common.js";
 export * from "./video-workflow-common.js";
 import { z } from "zod";
+import { ReferenceImageIdsSchema } from "./reference-image.js";
 
 const RelatedConversationIdSchema = z.string().uuid();
 const RelatedMessageIdSchema = z.string().trim().min(1).max(100);
@@ -38,7 +41,9 @@ export const StoryboardSchema = z
     title: z.string().trim().min(1).max(100),
     creativeSummary: z.string().trim().min(1).max(500),
     shots: z.array(StoryboardShotSchema).min(2).max(4),
-    videoPrompt: z.string().trim().min(1).max(4_000),
+    videoPrompt: z.string().trim().min(1).max(
+      PRODUCTION_PROMPT_MAX_CHARACTERS.storyboard_generation,
+    ),
   })
   .strict()
   .superRefine((storyboard, context) => {
@@ -238,6 +243,7 @@ export const VideoJobSnapshotSchema = z
     queueAhead: z.number().int().nonnegative().max(1_000_000).nullable().default(null),
     providerTaskId: z.string().min(1).max(200).nullable(),
     errorMessage: z.string().max(1_000).nullable(),
+    outputResolution: VideoOutputResolutionSchema.default("720p"),
     videoTitle: z.string().trim().min(1).max(120).nullable().default(null),
     playbackUrl: z.string().url().nullable(),
   })
@@ -258,6 +264,7 @@ export const VideoWorkflowSnapshotSchema = z
     videoModel: VideoModelSchema,
     canChangeVideoModel: z.boolean().default(false),
     durationSeconds: CinematicRenderPlanSchema.shape.durationSeconds.default(10),
+    outputResolution: VideoOutputResolutionSchema.default("480p"),
     initialPrompt: z.string().trim().min(1).max(8_000),
     promptTrace: GeneratedVideoPromptTraceSchema.default([]),
     status: VideoWorkflowStatusSchema,
@@ -283,6 +290,7 @@ export const CreateVideoWorkflowRequestSchema = z
     conversationId: RelatedConversationIdSchema.optional(),
     messageId: RelatedMessageIdSchema,
     prompt: z.string().trim().min(1).max(8_000),
+    referenceImageIds: ReferenceImageIdsSchema,
     videoModel: VideoModelSchema,
   })
   .strict();
@@ -415,7 +423,10 @@ export const RenderVideoJobPayloadSchema = z
     cinematic: CinematicRenderPlanSchema.optional(),
     storyboardVersion: z.number().int().positive(),
     videoModel: VideoModelSchema.default("doubao-seedance-2.0"),
-    videoPrompt: z.string().trim().min(1).max(4_000),
+    outputResolution: VideoOutputResolutionSchema.default("720p"),
+    videoPrompt: z.string().trim().min(1).max(
+      PRODUCTION_PROMPT_MAX_CHARACTERS.render_generation,
+    ),
     capabilityResolutions: z.array(WorkflowCapabilityResolutionSchema).default([]),
     objectKey: z.string()
       .regex(/^tenant\/demo\/project\/demo\/render\/[a-zA-Z0-9-]+\/(?:video|[\p{L}\p{N}][\p{L}\p{N} _.-]{0,95})\.mp4$/u)
@@ -486,7 +497,7 @@ export type WorkflowToolActivity = z.infer<typeof WorkflowToolActivitySchema>;
 export type WorkflowStepProgress = z.infer<typeof WorkflowStepProgressSchema>;
 export type VideoWorkflowSnapshot = z.infer<typeof VideoWorkflowSnapshotSchema>;
 export type VideoWorkflowRestartStage = z.infer<typeof VideoWorkflowRestartStageSchema>;
-export type CreateVideoWorkflowRequest = z.infer<typeof CreateVideoWorkflowRequestSchema>;
+export type CreateVideoWorkflowRequest = z.input<typeof CreateVideoWorkflowRequestSchema>;
 export type CreateVideoWorkflowResponse = z.infer<typeof CreateVideoWorkflowResponseSchema>;
 export type UpdateVideoWorkflowModelRequest = z.infer<typeof UpdateVideoWorkflowModelRequestSchema>;
 export type UpdateVideoWorkflowModelResponse = z.infer<typeof UpdateVideoWorkflowModelResponseSchema>;

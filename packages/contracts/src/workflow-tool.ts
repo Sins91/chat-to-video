@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const WorkflowToolIdSchema = z.enum([
   "web_search",
+  "prompt_compressor",
   "video_analyzer",
   "transcriber",
   "tts_selector",

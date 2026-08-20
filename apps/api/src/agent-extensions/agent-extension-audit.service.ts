@@ -8,6 +8,7 @@ import type { AgentExtensionRequestContext } from "./agent-extension.context.js"
 export type AgentExtensionAuditHandle = {
   callKey: string;
   startedAt: number;
+  inputSummary?: string;
 };
 
 const SKILL_TOOL_NAMES = new Set(["skill", "skill_read", "skill_search"]);
@@ -29,14 +30,42 @@ const getSkillId = (input: unknown): string | undefined => {
   return undefined;
 };
 
-const summarizeInput = (input: unknown): string | undefined => {
+const summarizeInput = (input: unknown, toolName: string): string | undefined => {
   if (typeof input !== "object" || input === null) return undefined;
+  if (toolName === "prompt_compressor") {
+    const purpose = "purpose" in input && typeof input.purpose === "string"
+      ? safeIdentifier(input.purpose)
+      : undefined;
+    const maximum = "maxCharacters" in input && typeof input.maxCharacters === "number"
+      ? input.maxCharacters
+      : undefined;
+    const originalCharacters = "prompt" in input && typeof input.prompt === "string"
+      ? input.prompt.length
+      : undefined;
+    if (purpose && (maximum === 1_000 || maximum === 4_000) && originalCharacters) {
+      return `purpose=${purpose} maxCharacters=${maximum} originalCharacters=${originalCharacters}`;
+    }
+  }
   const fields = Object.keys(input)
     .filter((key) => /^[a-zA-Z][a-zA-Z0-9_]*$/u.test(key))
     .filter((key) => !/(cookie|secret|signature|token|url)/iu.test(key))
     .sort()
     .slice(0, 12);
   return fields.length > 0 ? `fields=${fields.join(",")}` : undefined;
+};
+
+const summarizeOutput = (output: unknown): string | undefined => {
+  if (typeof output !== "object" || output === null) return undefined;
+  const compressedCharacters = "compressedCharacters" in output &&
+      typeof output.compressedCharacters === "number"
+    ? output.compressedCharacters
+    : undefined;
+  const wasCompressed = "wasCompressed" in output && typeof output.wasCompressed === "boolean"
+    ? output.wasCompressed
+    : undefined;
+  return compressedCharacters && wasCompressed !== undefined
+    ? `compressedCharacters=${compressedCharacters} wasCompressed=${wasCompressed}`
+    : undefined;
 };
 
 const estimatedCost = (output: unknown): number | undefined => {
@@ -76,6 +105,7 @@ export class AgentExtensionAuditService {
       `a${input.attempt}`,
       `e${input.activitySequence}`,
     ].join(":");
+    const inputSummary = summarizeInput(input.toolInput, input.toolName);
     try {
       await this.repository.start({
         id: randomUUID(),
@@ -91,14 +121,14 @@ export class AgentExtensionAuditService {
         extensionId,
         attempt: input.attempt,
         activitySequence: input.activitySequence,
-        inputSummary: summarizeInput(input.toolInput),
+        inputSummary,
       });
     } catch (error: unknown) {
       this.logger.warn(
         `Agent extension audit start failed requestId=${input.context.requestId} error=${error instanceof Error ? error.name : "unknown"}`,
       );
     }
-    return { callKey, startedAt: performance.now() };
+    return { callKey, startedAt: performance.now(), inputSummary };
   }
 
   async complete(handle: AgentExtensionAuditHandle, output: unknown): Promise<void> {
@@ -106,6 +136,9 @@ export class AgentExtensionAuditService {
       await this.repository.complete(handle.callKey, {
         durationMs: Math.max(0, Math.round(performance.now() - handle.startedAt)),
         estimatedCostUsd: estimatedCost(output),
+        inputSummary: [handle.inputSummary, summarizeOutput(output)]
+          .filter((value) => value !== undefined)
+          .join(" ") || undefined,
       });
     } catch (error: unknown) {
       this.logger.warn(`Agent extension audit completion failed error=${error instanceof Error ? error.name : "unknown"}`);

@@ -121,10 +121,13 @@ export const retryVideoWorkflow = async (
     jobId: job.id,
     storyboardVersion: job.storyboardVersion,
     videoModel,
+    outputResolution: job.outputResolution,
     cinematic: editArtifact?.stage === "edit" && sceneArtifact?.stage === "scene_plan"
       ? {
           rendererFamily: "ffmpeg",
           durationSeconds: workflow.durationSeconds,
+          outputResolution: job.outputResolution,
+          aspectRatio: sceneArtifact.data.aspectRatio,
           modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(videoModel),
           scenes: sceneArtifact.data.scenes.map((scene) => ({
             ...scene,

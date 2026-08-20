@@ -3,6 +3,7 @@ import { ObjectStorage } from "@chat-to-video/storage";
 
 import { DatabaseModule } from "../database.module.js";
 import { ModelGatewayModule } from "../model-gateway/model-gateway.module.js";
+import { ReferenceImageModule } from "../reference-image/reference-image.module.js";
 import { MastraRuntimeService } from "./mastra-runtime.service.js";
 import { VideoWorkflowController } from "./video-workflow.controller.js";
 import { loadStorageConfig } from "./video-workflow.config.js";
@@ -14,7 +15,7 @@ import { WorkflowRecoveryService } from "./workflow-recovery.service.js";
 import { UserIntentResolverService } from "./user-intent-resolver.service.js";
 
 @Module({
-  imports: [DatabaseModule, ModelGatewayModule],
+  imports: [DatabaseModule, ModelGatewayModule, ReferenceImageModule],
   controllers: [VideoWorkflowController],
   providers: [
     VideoWorkflowService,

@@ -157,6 +157,7 @@ export class ConversationRepository {
       jobId: videoJobs.id,
       storyboardVersion: videoJobs.storyboardVersion,
       initialPrompt: videoWorkflows.initialPrompt,
+      outputResolution: videoJobs.outputResolution,
       objectKey: videoOutputs.objectKey,
       createdAt: videoOutputs.createdAt,
     }).from(videoOutputs)

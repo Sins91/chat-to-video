@@ -61,7 +61,7 @@ export type ApimartVideoConfig = ApimartVideoCommonConfig & (
   | {
       model: "doubao-seedance-2.0";
       durationSeconds: number;
-      resolution: "720p";
+      resolution: "480p" | "720p" | "1080p";
       size: "16:9";
     }
 );
@@ -104,7 +104,7 @@ export const loadWorkerConfig = (): WorkerConfig => {
         ...commonApimartConfig,
         model,
         durationSeconds,
-        resolution: "720p",
+        resolution: "480p",
         size: "16:9",
       };
   return {
@@ -149,7 +149,7 @@ export const selectApimartVideoConfig = (
         ...common,
         model,
         durationSeconds: 15,
-        resolution: "720p",
+        resolution: "480p",
         size: "16:9",
       };
 };

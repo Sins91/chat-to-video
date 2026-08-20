@@ -11,14 +11,16 @@ import {
   CircleCheckIcon,
   CirclePauseIcon,
   LoaderCircleIcon,
+  ImagePlusIcon,
   PlusIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
 import type { UIMessage } from "ai";
 
 import { ApimartBalanceIndicator } from "@/components/chat/apimart-balance-indicator";
-import { ChatComposer, type QueuedChatInput } from "@/components/chat/chat-composer";
+import { ChatComposer, type ChatComposerHandle, type QueuedChatInput, type SubmittedChatInput } from "@/components/chat/chat-composer";
+import { abandonReferenceImage } from "@/lib/reference-image-client";
 import { ChatConversation } from "@/components/chat/chat-conversation";
 import { ChatHistorySidebar } from "@/components/chat/chat-history-sidebar";
 import { Button } from "@/components/ui/button";
@@ -69,11 +71,14 @@ export function ChatPanel() {
   const [isQueueDispatching, setIsQueueDispatching] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingActionPresentation | null>(null);
   const [queuedInputs, setQueuedInputs] = useState<QueuedChatInput[]>([]);
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
   const conversationIdRef = useRef(workflow.conversationId ?? undefined);
   const previousConversationIdRef = useRef(workflow.conversationId);
   const adoptedConversationIdRef = useRef<string | null>(null);
   const refreshConversationRef = useRef(workflow.refresh);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<ChatComposerHandle>(null);
+  const imageDragDepthRef = useRef(0);
   const queueDispatchInFlightRef = useRef(false);
   const activeSessionIdRef = useRef<string | null>(null);
   const sessionsRef = useRef(new Map<string, ChatSession>());
@@ -231,6 +236,11 @@ export function ChatPanel() {
     && workflowStatus !== "cancelled";
   const isReviewingStoryboard = workflowStatus === "awaiting_input";
   const pendingControl = workflow.snapshot?.pendingControl ?? null;
+  const hasPendingReferenceResolution = workflow.entries.some((entry) =>
+    entry.type === "text" && entry.referenceImages.some((image) =>
+      image.resolution?.status === "needs_clarification"
+    )
+  );
   const isGenerating = isChatGenerating || workflow.isSubmitting;
   const isAgentBusy = isGenerating || isQueueDispatching || workflowStatus === "drafting";
   const isAgentProcessing = isAgentBusy || isWorkflowProcessing;
@@ -244,8 +254,16 @@ export function ChatPanel() {
         ? "awaiting"
         : "ready";
 
-  const sendChatMessage = useCallback(async (text: string) => {
-    await sendMessage({ text });
+  const sendChatMessage = useCallback(async (message: SubmittedChatInput) => {
+    await sendMessage({
+      text: message.text,
+      files: message.referenceImages.flatMap((image) => image.previewUrl ? [{
+        type: "file" as const,
+        filename: image.fileName,
+        mediaType: image.mimeType,
+        url: image.previewUrl,
+      }] : []),
+    }, { body: { referenceImageIds: message.referenceImages.map((image) => image.id) } });
   }, [sendMessage]);
 
   const describePendingAction = useCallback((text: string): string => {
@@ -267,13 +285,15 @@ export function ChatPanel() {
     return "正在理解你的问题并组织回复。";
   }, [hasActiveWorkflow, isReviewingStoryboard, pendingControl, workflow.snapshot]);
 
-  const dispatchText = useCallback(async (text: string, sessionId: string) => {
+  const dispatchText = useCallback(async (message: SubmittedChatInput, sessionId: string) => {
+    const text = message.text;
     const messageId = crypto.randomUUID();
-    if (!shouldResolveVideoWorkflowInput({ snapshot: workflow.snapshot, text })) {
-      await sendChatMessage(text);
+    if (!hasPendingReferenceResolution && message.referenceImages.length === 0 &&
+        !shouldResolveVideoWorkflowInput({ snapshot: workflow.snapshot, text })) {
+      await sendChatMessage(message);
       return;
     }
-    const controlRoute = await workflow.resolveControlIntent(text, messageId);
+    const controlRoute = await workflow.resolveControlIntent(text, messageId, message.referenceImages);
     if (controlRoute.route === "workflow") {
       if (controlRoute.conversationId) {
         sessionCallbacksRef.current.onConversationId(sessionId, controlRoute.conversationId);
@@ -285,10 +305,11 @@ export function ChatPanel() {
       }
       return;
     }
-    await sendChatMessage(text);
-  }, [sendChatMessage, workflow.resolveControlIntent, workflow.snapshot]);
+    await sendChatMessage(message);
+  }, [hasPendingReferenceResolution, sendChatMessage, workflow.resolveControlIntent, workflow.snapshot]);
 
-  const runText = useCallback((text: string) => {
+  const runText = useCallback((message: SubmittedChatInput) => {
+    const text = message.text;
     const sessionId = activeSession.id;
     const actionId = crypto.randomUUID();
     activeSession.isDispatching = true;
@@ -296,7 +317,7 @@ export function ChatPanel() {
     setIsQueueDispatching(true);
     setPendingAction({ actionId, message: describePendingAction(text), sessionId });
     void waitForPendingActionPaint()
-      .then(() => dispatchText(text, sessionId))
+      .then(() => dispatchText(message, sessionId))
       .catch(() => undefined)
       .finally(() => {
         const session = sessionsRef.current.get(sessionId);
@@ -308,12 +329,13 @@ export function ChatPanel() {
       });
   }, [activeSession, describePendingAction, dispatchText]);
 
-  const sendText = useCallback((text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
+  const sendInput = useCallback((message: SubmittedChatInput) => {
+    const trimmed = message.text.trim();
+    if (!trimmed && message.referenceImages.length === 0) return;
+    const normalized = { ...message, text: trimmed };
     setInput("");
     if (!activeSession.conversationId && !activeSession.pendingHistoryId) {
-      activeSession.pendingHistoryId = notifyPendingConversationHistory(trimmed);
+      activeSession.pendingHistoryId = notifyPendingConversationHistory(trimmed || "参考图片");
     }
     const pipeline = workflow.snapshot
       ? findWorkflowPipelineDefinition(workflow.snapshot.pipeline) ?? CINEMATIC_PIPELINE_DEFINITION
@@ -321,22 +343,26 @@ export function ChatPanel() {
     const canInterruptWorkflow = hasActiveWorkflow &&
       parseWorkflowControlCommand(trimmed, pipeline) !== null;
     if ((!isAgentAvailable && !canInterruptWorkflow) || queueDispatchInFlightRef.current || queuedInputs.length > 0) {
-      setQueuedInputs((current) => [...current, { id: crypto.randomUUID(), text: trimmed }]);
+      setQueuedInputs((current) => [...current, { id: crypto.randomUUID(), ...normalized }]);
       return;
     }
-    runText(trimmed);
+    runText(normalized);
   }, [activeSession, hasActiveWorkflow, isAgentAvailable, queuedInputs.length, runText, workflow.snapshot]);
 
   useEffect(() => {
     const nextInput = queuedInputs[0];
     if (!nextInput || !isAgentAvailable || isQueueDispatching || queueDispatchInFlightRef.current) return;
     setQueuedInputs((current) => current[0]?.id === nextInput.id ? current.slice(1) : current);
-    runText(nextInput.text);
+    runText({ text: nextInput.text, referenceImages: nextInput.referenceImages });
   }, [isAgentAvailable, isQueueDispatching, queuedInputs, runText]);
 
   const cancelQueuedInput = useCallback((id: string) => {
+    const removed = queuedInputs.find((item) => item.id === id);
+    for (const image of removed?.referenceImages ?? []) {
+      void abandonReferenceImage(image.id).catch(() => undefined);
+    }
     setQueuedInputs((current) => current.filter((item) => item.id !== id));
-  }, []);
+  }, [queuedInputs]);
 
   const stopAgent = useCallback(() => {
     if (!isChatGenerating) return;
@@ -368,7 +394,51 @@ export function ChatPanel() {
         : { icon: CircleCheckIcon, label: "就绪", tone: "border-border bg-muted text-muted-foreground" };
   const PanelStateIcon = panelStatePresentation.icon;
 
-  return <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-background">
+  const hasImageFile = useCallback((event: DragEvent<HTMLDivElement>): boolean =>
+    [...event.dataTransfer.items].some((item) =>
+      item.kind === "file" && (!item.type || item.type.startsWith("image/"))
+    ), []);
+  const handleImageDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!hasImageFile(event)) return;
+    event.preventDefault();
+    imageDragDepthRef.current += 1;
+    setIsDraggingImage(true);
+  }, [hasImageFile]);
+  const handleImageDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!hasImageFile(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }, [hasImageFile]);
+  const handleImageDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (imageDragDepthRef.current === 0) return;
+    event.preventDefault();
+    imageDragDepthRef.current = Math.max(0, imageDragDepthRef.current - 1);
+    if (imageDragDepthRef.current === 0) setIsDraggingImage(false);
+  }, []);
+  const handleImageDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
+    const files = [...event.dataTransfer.files].filter((file) => file.type.startsWith("image/"));
+    imageDragDepthRef.current = 0;
+    setIsDraggingImage(false);
+    if (files.length === 0) return;
+    event.preventDefault();
+    composerRef.current?.addFiles(files);
+    composerTextareaRef.current?.focus();
+  }, []);
+
+  return <div
+    className="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-background"
+    onDragEnter={handleImageDragEnter}
+    onDragLeave={handleImageDragLeave}
+    onDragOver={handleImageDragOver}
+    onDrop={handleImageDrop}
+  >
+    {isDraggingImage ? <div aria-live="polite" className="pointer-events-none absolute inset-2 z-50 grid place-items-center rounded-2xl border-2 border-dashed border-primary/48 bg-background/48 p-6 shadow-2xl backdrop-blur-xs" role="status">
+      <div className="flex max-w-sm flex-col items-center text-center">
+        <span className="grid size-14 place-items-center rounded-2xl bg-primary/10 text-primary"><ImagePlusIcon className="size-7" /></span>
+        <strong className="mt-4 text-base font-semibold text-foreground">拖动到此上传参考图</strong>
+        <span className="mt-1 text-xs leading-5 text-muted-foreground">在聊天区任意位置松开即可上传，最多 4 张 JPEG、PNG 或 WebP。</span>
+      </div>
+    </div> : null}
     <header className="flex h-14 items-center border-b border-border bg-background/95 px-3 backdrop-blur-sm sm:px-5">
       <h1 className="min-w-0 truncate font-sans text-base font-semibold tracking-tight text-foreground">Chat to Video</h1>
       <div className="ml-auto flex items-center gap-2">
@@ -394,6 +464,12 @@ export function ChatPanel() {
           isWorkflowSubmitting={workflow.isSubmitting}
           messages={messages}
           onRecoverWorkflow={() => void workflow.recoverWorkflow()}
+          onResolveReferenceImagePurpose={(resolutionRequestId, referenceImageId, purpose) => {
+            void workflow.resolveReferenceImagePurpose(resolutionRequestId, referenceImageId, purpose);
+          }}
+          onUpdateReferenceImagePurpose={(referenceImageId, purpose) => {
+            void workflow.updateReferenceImagePurpose(referenceImageId, purpose);
+          }}
           snapshot={workflow.snapshot}
           status={status}
           videoFocusRequest={workflow.chatVideoFocusRequest}
@@ -405,6 +481,7 @@ export function ChatPanel() {
           workflowStepProgressHistory={workflow.stepProgressHistory}
         />
         <ChatComposer
+          ref={composerRef}
           canStop={isChatGenerating}
           input={input}
           isGenerating={isAgentBusy}
@@ -412,7 +489,7 @@ export function ChatPanel() {
           onCancelQueuedInput={cancelQueuedInput}
           onInputChange={setInput}
           onStop={stopAgent}
-          onSubmitText={sendText}
+          onSubmitMessage={sendInput}
           onVideoModelChange={workflow.setVideoModel}
           placeholder={isReviewingStoryboard ? "直接说明目标时长、场景时长或其他修改；确认请回复“确认生成”…" : "输入消息；明确要求生成视频时会自动进入工作流…"}
           queuedInputs={queuedInputs}

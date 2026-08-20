@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 
 import { retryTransientDatabaseRead } from "../infrastructure-error.js";
 import { VideoWorkflowService } from "../video-workflow/video-workflow.service.js";
+import { ReferenceImageService } from "../reference-image/reference-image.service.js";
 import { CONVERSATION_REPOSITORY } from "../video-workflow/video-workflow.tokens.js";
 import { buildGeneratedVideoPromptTrace } from "../video-workflow/video-prompt-trace.js";
 import { createConversationTitle } from "./conversation-title.js";
@@ -44,9 +45,10 @@ export class ConversationService {
   constructor(
     @Inject(CONVERSATION_REPOSITORY) private readonly repository: ConversationRepository,
     @Inject(VideoWorkflowService) private readonly workflows: VideoWorkflowService,
+    @Inject(ReferenceImageService) private readonly referenceImages: ReferenceImageService,
   ) {}
 
-  async ensureUserMessage(input: { conversationId?: string; messageId: string; content: string }): Promise<string> {
+  async ensureUserMessage(input: { conversationId?: string; messageId: string; content: string; referenceImageIds?: readonly string[] }): Promise<string> {
     if (input.conversationId) {
       const conversation = await this.repository.findActiveConversation(input.conversationId);
       if (!conversation) throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
@@ -56,15 +58,25 @@ export class ConversationService {
         role: "user",
         content: input.content,
       });
+      await this.referenceImages.bindToMessage({
+        ids: input.referenceImageIds ?? [],
+        conversationId: input.conversationId,
+        messageId: input.messageId,
+      });
       return input.conversationId;
     }
 
     const conversationId = randomUUID();
     await this.repository.createWithUserMessage({
       conversationId,
-      title: createConversationTitle(input.content),
+      title: createConversationTitle(input.content || "参考图片"),
       messageId: input.messageId,
       content: input.content,
+    });
+    await this.referenceImages.bindToMessage({
+      ids: input.referenceImageIds ?? [],
+      conversationId,
+      messageId: input.messageId,
     });
     return conversationId;
   }
@@ -88,8 +100,13 @@ export class ConversationService {
     };
   }
 
-  listModelMessages(conversationId: string) {
-    return this.repository.listModelMessages(conversationId);
+  async listModelMessages(conversationId: string) {
+    const rows = await this.repository.listMessages(conversationId);
+    return this.referenceImages.modelMessages(conversationId, rows.map((row) => ({
+      messageId: row.messageId,
+      role: parseMessageRole(row.role),
+      content: row.content,
+    })));
   }
 
   appendAssistantMessage(conversationId: string, messageId: string, content: string): Promise<void> {
@@ -125,8 +142,9 @@ export class ConversationService {
     const conversation = await this.repository.findActiveConversation(conversationId);
     if (!conversation) throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
     const workflow = await this.repository.findWorkflow(conversationId);
-    const [messages, storyboards, cinematicArtifacts, cinematicAssetBatches, archivedOutputs] = await Promise.all([
+    const [messages, referenceImageRows, storyboards, cinematicArtifacts, cinematicAssetBatches, archivedOutputs] = await Promise.all([
       this.repository.listMessages(conversationId),
+      this.referenceImages.listForConversation(conversationId),
       this.repository.listStoryboardVersions(conversationId),
       this.repository.listCinematicArtifacts(conversationId),
       this.repository.listCinematicAssetBatches(conversationId),
@@ -168,6 +186,7 @@ export class ConversationService {
           ).at(-1) ?? null,
         }),
         videoTitle: findVideoTitle(row.workflowId, row.storyboardVersion),
+        outputResolution: row.outputResolution,
         playbackUrl: await this.workflows.createArchivedPlaybackUrl(row.objectKey),
         createdAt: row.createdAt.toISOString(),
       })),
@@ -178,6 +197,7 @@ export class ConversationService {
         type: "text" as const,
         role: parseMessageRole(message.role),
         content: message.content,
+        referenceImages: referenceImageRows.get(message.messageId) ?? [],
         createdAt: message.createdAt.toISOString(),
       })),
       ...storyboards.map((row) => ({

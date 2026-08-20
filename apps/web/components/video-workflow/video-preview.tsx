@@ -298,6 +298,7 @@ export function VideoWorkflowVisualization() {
     snapshot?.durationSeconds,
     snapshot?.initialPrompt,
     entries.flatMap((entry) => entry.type === "text" && entry.role === "user" ? [entry.content] : []),
+    snapshot?.outputResolution,
   );
 
   if (historyWorkflowId && selectedHistoryNode) {

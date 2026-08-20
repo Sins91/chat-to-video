@@ -77,4 +77,12 @@ describe("composeCinematicVideo validation", () => {
       }],
     })).rejects.toThrow("invalid clip");
   });
+
+  it("rejects invalid output frame dimensions before starting FFmpeg", async () => {
+    await expect(composeCinematicVideo({
+      ffmpegPath: "ffmpeg",
+      clips: [{ body: new Uint8Array([1]), durationSeconds: 4 }],
+      frameDimensions: { width: 1921, height: 1080 },
+    })).rejects.toThrow("invalid frame dimensions");
+  });
 });

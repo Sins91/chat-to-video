@@ -2,6 +2,8 @@ import {
   CINEMATIC_PIPELINE_DEFINITION,
   findMissingWorkflowCapabilities,
   findWorkflowStage,
+  getVideoGenerationResolution,
+  getVideoFrameDimensions,
   RenderVideoJobPayloadSchema,
   type RenderVideoJobPayload,
   type VideoWorkflowEvent,
@@ -274,7 +276,12 @@ export class RenderProcessor {
             "正在提交镜头 " + scene.order + "/" + sceneCount + " 的视频模型任务。",
             "scene-" + scene.order + "-submit",
           );
-          providerTaskId = await videoClient.submit(prompt, scene.generationDurationSeconds);
+          providerTaskId = await videoClient.submit(
+            prompt,
+            scene.generationDurationSeconds,
+            [],
+            getVideoGenerationResolution(payload.videoModel, payload.outputResolution),
+          );
           sceneStage = `场景 ${scene.order} · 保存供应商任务 ID`;
           await this.repository.updateCinematicSceneJob(sceneJobId, { providerTaskId });
           if (sceneIndex === 0) {
@@ -341,6 +348,10 @@ export class RenderProcessor {
     await this.progress(payload, 85, "所有镜头已就绪，正在合成最终视频。", "compose");
     let body: Uint8Array;
     try {
+      const frameDimensions = getVideoFrameDimensions(
+        payload.cinematic.outputResolution,
+        payload.cinematic.aspectRatio,
+      );
       const music = payload.cinematic.music
         ? {
             body: await this.storage.getObject(payload.cinematic.music.objectKey),
@@ -352,6 +363,7 @@ export class RenderProcessor {
         ffmpegPath: this.config.ffmpegPath,
         clips,
         music,
+        frameDimensions,
         timeoutMs: Math.max(300_000, payload.cinematic.durationSeconds * 4_000),
       });
     } catch (error: unknown) {
@@ -393,7 +405,12 @@ export class RenderProcessor {
         let providerTaskId = existing?.providerTaskId;
         if (!providerTaskId) {
           activeStage = "提交视频模型任务";
-          providerTaskId = await videoClient.submit(payload.videoPrompt);
+          providerTaskId = await videoClient.submit(
+            payload.videoPrompt,
+            undefined,
+            [],
+            getVideoGenerationResolution(payload.videoModel, payload.outputResolution),
+          );
           activeStage = "保存供应商任务 ID";
           await this.repository.updateVideoJob(payload.jobId, { providerTaskId });
         }

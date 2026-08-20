@@ -144,11 +144,24 @@ describe("SeedanceClient", () => {
       image_urls: ["https://signed.example/character.png", "https://signed.example/environment.png"],
     });
   });
+
+  it("submits a task-level native 480p generation request", async () => {
+    const fetchMock = submissionFetch("task_480p");
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new SeedanceClient(seedanceConfig).submit(
+      "低成本预览镜头",
+      10,
+      [],
+      "480p",
+    )).resolves.toBe("task_480p");
+    expect(submittedBody(fetchMock)).toMatchObject({ resolution: "480p" });
+  });
   it("selects the requested job profile independently of the environment default", () => {
     expect(selectApimartVideoConfig(hailuoConfig, "doubao-seedance-2.0")).toMatchObject({
       model: "doubao-seedance-2.0",
       durationSeconds: 15,
-      resolution: "720p",
+      resolution: "480p",
       size: "16:9",
     });
     expect(selectApimartVideoConfig(seedanceConfig, "MiniMax-Hailuo-2.3")).toMatchObject({

@@ -8,6 +8,7 @@ import {
   type CinematicGenerativeStage,
   type Storyboard,
   type VideoModel,
+  type VideoOutputResolution,
   type VideoJobStatus,
   type VideoWorkflowEvent,
   type VideoWorkflowFailureCode,
@@ -62,6 +63,7 @@ type NewWorkflow = {
   initialPrompt: string;
   videoModel: VideoModel;
   durationSeconds: number;
+  outputResolution: VideoOutputResolution;
   message?: { messageId: string; content: string };
 };
 
@@ -292,6 +294,7 @@ export class VideoWorkflowRepository {
     initialPrompt: string;
     videoModel: VideoModel;
     durationSeconds: number;
+    outputResolution: VideoOutputResolution;
     candidate: WorkflowImportedArtifactCandidate;
   }): Promise<boolean> {
     return this.database.transaction(async (transaction) => {
@@ -320,6 +323,7 @@ export class VideoWorkflowRepository {
         initialPrompt: input.initialPrompt,
         videoModel: input.videoModel,
         durationSeconds: input.durationSeconds,
+        outputResolution: input.outputResolution,
         status: "drafting",
         pipelineDefinitionVersion: CINEMATIC_PIPELINE_DEFINITION.definitionVersion,
         sourceWorkflowId: control.sourceWorkflowId,
@@ -388,6 +392,7 @@ export class VideoWorkflowRepository {
         initialPrompt: input.initialPrompt,
         videoModel: input.videoModel,
         durationSeconds: input.durationSeconds,
+        outputResolution: input.outputResolution,
         status: "drafting",
         pipelineDefinitionVersion: CINEMATIC_PIPELINE_DEFINITION.definitionVersion,
         activeRunContext: ActiveWorkflowRunContextSchema.parse({ kind: "start", baseVersion: 0 }),
@@ -452,6 +457,7 @@ export class VideoWorkflowRepository {
         initialPrompt: input.initialPrompt,
         videoModel: input.videoModel,
         durationSeconds: input.durationSeconds,
+        outputResolution: input.outputResolution,
         status: "drafting",
         pipelineDefinitionVersion: CINEMATIC_PIPELINE_DEFINITION.definitionVersion,
         sourceWorkflowId: input.sourceWorkflowId,
@@ -795,14 +801,33 @@ export class VideoWorkflowRepository {
     workflowId: string,
     version: number,
     isApproved: boolean,
+    outputResolution?: VideoOutputResolution,
   ): Promise<ClaimedWorkflowInteraction | null> {
     return this.database.transaction(async (transaction) => {
       const pendingApprovals = await transaction.select().from(workflowApprovals).where(and(
         eq(workflowApprovals.workflowId, workflowId),
         eq(workflowApprovals.status, "pending"),
       )).for("update");
+      if (outputResolution) {
+        const [videoRows, assetRows] = await Promise.all([
+          transaction.select({ value: sql<number>`count(*)` }).from(videoJobs)
+            .where(and(eq(videoJobs.workflowId, workflowId), isNull(videoJobs.supersededAt))),
+          transaction.select({ value: sql<number>`count(*)` }).from(cinematicAssetJobs)
+            .where(and(
+              eq(cinematicAssetJobs.workflowId, workflowId),
+              isNull(cinematicAssetJobs.supersededAt),
+            )),
+        ]);
+        const createdJobs = Number(videoRows[0]?.value ?? 0) + Number(assetRows[0]?.value ?? 0);
+        if (createdJobs > 0) return null;
+      }
       const result: unknown = await transaction.update(videoWorkflows)
-        .set({ status: "drafting", stateVersion: sql`${videoWorkflows.stateVersion} + 1`, updatedAt: new Date() })
+        .set({
+          status: "drafting",
+          ...(outputResolution ? { outputResolution } : {}),
+          stateVersion: sql`${videoWorkflows.stateVersion} + 1`,
+          updatedAt: new Date(),
+        })
         .where(and(
           eq(videoWorkflows.id, workflowId),
           eq(videoWorkflows.status, "awaiting_input"),
@@ -911,6 +936,61 @@ export class VideoWorkflowRepository {
     ]);
     return Number(videoRows[0]?.value ?? 0) + Number(assetRows[0]?.value ?? 0) +
       Number(sceneRows[0]?.value ?? 0);
+  }
+
+  async updateOutputResolution(input: {
+    workflowId: string;
+    expectedStageId: WorkflowStageId;
+    expectedVersion: number;
+    outputResolution: VideoOutputResolution;
+  }): Promise<boolean> {
+    return this.database.transaction(async (transaction) => {
+      const rows = await transaction.select({ id: videoWorkflows.id }).from(videoWorkflows)
+        .where(and(
+          eq(videoWorkflows.id, input.workflowId),
+          eq(videoWorkflows.status, "awaiting_input"),
+          eq(videoWorkflows.currentStageId, input.expectedStageId),
+          eq(videoWorkflows.currentVersion, input.expectedVersion),
+        )).limit(1).for("update");
+      if (!rows[0]) return false;
+      const [videoRows, assetRows] = await Promise.all([
+        transaction.select({ value: sql<number>`count(*)` }).from(videoJobs)
+          .where(and(eq(videoJobs.workflowId, input.workflowId), isNull(videoJobs.supersededAt))),
+        transaction.select({ value: sql<number>`count(*)` }).from(cinematicAssetJobs)
+          .where(and(
+            eq(cinematicAssetJobs.workflowId, input.workflowId),
+            isNull(cinematicAssetJobs.supersededAt),
+          )),
+      ]);
+      const createdJobs = Number(videoRows[0]?.value ?? 0) + Number(assetRows[0]?.value ?? 0);
+      if (createdJobs > 0) return false;
+      const result: unknown = await transaction.update(videoWorkflows)
+        .set({
+          outputResolution: input.outputResolution,
+          stateVersion: sql`${videoWorkflows.stateVersion} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(videoWorkflows.id, input.workflowId),
+          eq(videoWorkflows.status, "awaiting_input"),
+          eq(videoWorkflows.currentStageId, input.expectedStageId),
+          eq(videoWorkflows.currentVersion, input.expectedVersion),
+        ));
+      return readAffectedRows(result) === 1;
+    });
+  }
+
+  async countCreatedGenerationJobs(workflowId: string): Promise<number> {
+    const [videoRows, assetRows] = await Promise.all([
+      this.database.select({ value: sql<number>`count(*)` }).from(videoJobs)
+        .where(and(eq(videoJobs.workflowId, workflowId), isNull(videoJobs.supersededAt))),
+      this.database.select({ value: sql<number>`count(*)` }).from(cinematicAssetJobs)
+        .where(and(
+          eq(cinematicAssetJobs.workflowId, workflowId),
+          isNull(cinematicAssetJobs.supersededAt),
+        )),
+    ]);
+    return Number(videoRows[0]?.value ?? 0) + Number(assetRows[0]?.value ?? 0);
   }
 
   async findWorkflowScope(workflowId: string) {
@@ -1287,6 +1367,7 @@ export class VideoWorkflowRepository {
     storyboardVersion: number;
     objectKey: string;
     capabilityResolutions: readonly WorkflowCapabilityResolution[];
+    outputResolution: VideoOutputResolution;
   }): Promise<void> {
     await this.database.insert(videoJobs).values({
       ...input,
@@ -1334,7 +1415,7 @@ export class VideoWorkflowRepository {
   }): Promise<void> {
     if (input.jobs.length < 1) throw new Error("Cinematic asset batch requires jobs.");
     await this.database.transaction(async (transaction) => {
-      const allReused = input.jobs.every((job) => job.reusedFromAssetId !== null);
+      const allReused = input.jobs.every((job) => job.reusedFromAssetId !== null || job.sourceReferenceImageId !== null);
       await transaction.insert(cinematicAssetBatches).values({
         id: input.batchId,
         workflowId: input.workflowId,
@@ -1368,12 +1449,14 @@ export class VideoWorkflowRepository {
           promptHash: job.promptHash,
           reusedFromAssetId: job.reusedFromAssetId,
           kind: job.kind,
-          status: reused ? "succeeded" : "queued",
-          progress: reused ? 100 : 0,
+          status: reused || job.sourceReferenceImageId ? "succeeded" : "queued",
+          progress: reused || job.sourceReferenceImageId ? 100 : 0,
           capabilityResolution: job.capabilityResolution,
+          outputResolution: "outputResolution" in job ? job.outputResolution : null,
+          generationResolution: job.kind === "video" ? job.generationResolution : null,
           objectKey: job.objectKey,
-          mimeType: reused?.mimeType ?? null,
-          sizeBytes: reused?.sizeBytes ?? null,
+          mimeType: reused?.mimeType ?? job.sourceMimeType,
+          sizeBytes: reused?.sizeBytes ?? job.sourceSizeBytes,
         }).onDuplicateKeyUpdate({ set: { updatedAt: new Date() } });
       }
       await transaction.update(videoWorkflows).set({

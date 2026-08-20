@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
+import { createHash } from "node:crypto";
 
 export {
   probeAudio,
@@ -89,6 +90,39 @@ export const resizeImageToVideoFrame = async (input: {
     .toBuffer();
   return new Uint8Array(output);
 };
+
+export type ReferenceImageInspection = {
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  sizeBytes: number;
+  width: number;
+  height: number;
+  sha256: string;
+};
+
+export const inspectReferenceImage = async (body: Uint8Array): Promise<ReferenceImageInspection> => {
+  if (body.byteLength === 0 || body.byteLength > 10 * 1024 * 1024) {
+    throw new Error("Reference image size is invalid.");
+  }
+  const metadata = await sharp(body, { failOn: "error", limitInputPixels: 100_000_000 }).metadata();
+  const mimeType = metadata.format === "jpeg"
+    ? "image/jpeg" as const
+    : metadata.format === "png"
+      ? "image/png" as const
+      : metadata.format === "webp"
+        ? "image/webp" as const
+        : null;
+  if (!mimeType || !metadata.width || !metadata.height ||
+      metadata.width > 16_384 || metadata.height > 16_384) {
+    throw new Error("Reference image format or dimensions are invalid.");
+  }
+  return {
+    mimeType,
+    sizeBytes: body.byteLength,
+    width: metadata.width,
+    height: metadata.height,
+    sha256: createHash("sha256").update(body).digest("hex"),
+  };
+};
 const runFfmpeg = (
   executablePath: string,
   args: readonly string[],
@@ -125,6 +159,7 @@ export const composeCinematicVideo = async (input: {
   ffmpegPath: string;
   clips: readonly CinematicClip[];
   music?: CinematicMusicTrack;
+  frameDimensions?: { width: number; height: number };
   timeoutMs?: number;
 }): Promise<Uint8Array> => {
   if (input.clips.length < 1 || input.clips.length > 60) {
@@ -150,6 +185,15 @@ export const composeCinematicVideo = async (input: {
   );
   if (totalDuration < 4 || totalDuration > 300) {
     throw new Error("Cinematic clips must total between 4 and 300 seconds.");
+  }
+  const frameDimensions = input.frameDimensions ?? { width: 1280, height: 720 };
+  if (
+    !Number.isInteger(frameDimensions.width) || !Number.isInteger(frameDimensions.height) ||
+    frameDimensions.width < 480 || frameDimensions.width > 3840 ||
+    frameDimensions.height < 480 || frameDimensions.height > 3840 ||
+    frameDimensions.width % 2 !== 0 || frameDimensions.height % 2 !== 0
+  ) {
+    throw new Error("Cinematic composition received invalid frame dimensions.");
   }
   const executablePath = input.ffmpegPath.trim();
   if (!executablePath || executablePath.includes("\0")) {
@@ -196,7 +240,7 @@ export const composeCinematicVideo = async (input: {
       }
     }
     const filterParts = input.clips.map((clip, index) =>
-      `[${videoInputIndices[index]}:v:0]trim=duration=${clip.durationSeconds},setpts=PTS-STARTPTS,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p[v${index}]`
+      `[${videoInputIndices[index]}:v:0]trim=duration=${clip.durationSeconds},setpts=PTS-STARTPTS,scale=${frameDimensions.width}:${frameDimensions.height}:force_original_aspect_ratio=decrease,pad=${frameDimensions.width}:${frameDimensions.height}:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p[v${index}]`
     );
     filterParts.push(...input.clips.map((clip, index) =>
       `[${audioInputIndices[index]}:a:0]atrim=duration=${clip.durationSeconds},` +

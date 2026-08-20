@@ -42,6 +42,7 @@ import {
   RESEARCH_TOOL_GATEWAY,
   type ResearchToolGateway,
 } from "./research-tool-gateway.js";
+import type { PromptCompressionRuntime } from "./prompt-compression.tool.js";
 import {
   EstimateCinematicCostInputSchema,
   EstimateCinematicCostOutputSchema,
@@ -146,6 +147,7 @@ const TOOL_CAPABILITIES: Partial<Record<WorkflowToolId, string>> = {
 
 const API_TOOL_RUNTIMES: Partial<Record<WorkflowToolId, ToolRuntime>> = {
   web_search: { executionBoundary: "api_readonly", adapterId: "apimart.responses-web-search", provider: "apimart", status: "available", reason: null },
+  prompt_compressor: { executionBoundary: "api_readonly", adapterId: "mastra.prompt-compressor", provider: "model-gateway", status: "available", reason: null },
   image_selector: { executionBoundary: "api_readonly", adapterId: "tools.image-selector", provider: "local", status: "available", reason: null },
   video_selector: { executionBoundary: "api_readonly", adapterId: "tools.video-selector", provider: "local", status: "available", reason: null },
   tts_selector: { executionBoundary: "api_readonly", adapterId: "tools.tts-selector", provider: "local", status: "available", reason: null },
@@ -206,6 +208,16 @@ const CAPABILITIES = Object.freeze([
     provider: "model-gateway",
     risk: "read_only",
     relatedSkillIds: [CHAT_CAPABILITIES_SKILL_ID, CINEMATIC_REVIEWER_SKILL_ID],
+  },
+  {
+    id: "prompt.compress",
+    description: "仅在生产提示词超过共享协议字符上限时，通过专用无工具 Agent 进行语义压缩。",
+    status: "available",
+    provider: "model-gateway",
+    risk: "paid",
+    relatedSkillIds: [CINEMATIC_REVIEWER_SKILL_ID],
+    adapterId: "mastra.prompt-compressor",
+    executionBoundary: "api_readonly",
   },
   {
     id: "video.model-constraints",
@@ -617,13 +629,25 @@ export class AgentToolRegistry implements OnModuleDestroy {
     };
   }
 
-  forCinematic(stage: CinematicGenerativeStage) {
+  forStoryboard(promptCompressor: PromptCompressionRuntime["tool"]) {
+    return { prompt_compressor: promptCompressor };
+  }
+
+  forCinematic(
+    stage: CinematicGenerativeStage,
+    promptCompressor?: PromptCompressionRuntime["tool"],
+  ) {
     const common = {
       get_agent_capabilities: this.getAgentCapabilities,
       get_workflow_tools: this.getWorkflowTools,
       get_video_model_constraints: this.getVideoModelConstraints,
       get_cinematic_context: this.getCinematicContext,
       estimate_cinematic_cost: this.estimateCinematicCost,
+      ...(promptCompressor && CINEMATIC_PIPELINE_DEFINITION.stages
+          .find((definition) => definition.id === stage)
+          ?.tools.optional.includes("prompt_compressor")
+        ? { prompt_compressor: promptCompressor }
+        : {}),
     };
     if (stage === "research") return { ...common, web_search: this.searchWeb };
     if (stage === "proposal" || stage === "assets") {

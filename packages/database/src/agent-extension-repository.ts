@@ -31,11 +31,13 @@ export class AgentExtensionRepository {
   async complete(callKey: string, values: {
     durationMs: number;
     estimatedCostUsd?: number;
+    inputSummary?: string;
   }): Promise<void> {
     await this.database.update(agentExtensionExecutions).set({
       status: "completed",
       durationMs: values.durationMs,
       estimatedCostUsd: values.estimatedCostUsd,
+      inputSummary: values.inputSummary,
       completedAt: new Date(),
     }).where(and(
       eq(agentExtensionExecutions.callKey, callKey),

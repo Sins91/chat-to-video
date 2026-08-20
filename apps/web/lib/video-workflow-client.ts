@@ -7,6 +7,9 @@ import {
   VideoWorkflowSnapshotSchema,
   ResolveWorkflowUserIntentResponseSchema,
   ResolveVideoWorkflowIntentResponseSchema,
+  ResolveReferenceImagesRequestSchema,
+  ReferenceImageViewSchema,
+  UpdateReferenceImagePurposeRequestSchema,
   type CreateVideoWorkflowResponse,
   type CreateVideoWorkflowRequest,
   type RecoverVideoWorkflowResponse,
@@ -17,8 +20,12 @@ import {
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
   type ResolveWorkflowUserIntentResponse,
+  type ResolveWorkflowUserIntentRequest,
   type ResolveVideoWorkflowIntentRequest,
   type ResolveVideoWorkflowIntentResponse,
+  type ResolveReferenceImagesRequest,
+  type ReferenceImageView,
+  type UpdateReferenceImagePurposeRequest,
 } from "@chat-to-video/contracts";
 import { createAlova } from "alova";
 import adapterFetch from "alova/fetch";
@@ -67,7 +74,7 @@ export const interactWithVideoWorkflow = async (workflowId: string, interaction:
 
 export const resolveWorkflowUserIntent = async (
   workflowId: string,
-  request: { messageId: string; text: string },
+  request: ResolveWorkflowUserIntentRequest,
 ): Promise<ResolveWorkflowUserIntentResponse> => ResolveWorkflowUserIntentResponseSchema.parse(
   await videoApi.Post(`/video-workflows/${encodeURIComponent(workflowId)}/intent`, request).send(),
 );
@@ -76,4 +83,23 @@ export const resolveVideoWorkflowIntent = async (
   request: ResolveVideoWorkflowIntentRequest,
 ): Promise<ResolveVideoWorkflowIntentResponse> => ResolveVideoWorkflowIntentResponseSchema.parse(
   await videoApi.Post("/video-workflows/intents/resolve", request).send(),
+);
+
+export const resolveReferenceImages = async (
+  request: ResolveReferenceImagesRequest,
+): Promise<ResolveVideoWorkflowIntentResponse> => ResolveVideoWorkflowIntentResponseSchema.parse(
+  await videoApi.Post(
+    "/video-workflows/reference-resolutions/resolve",
+    ResolveReferenceImagesRequestSchema.parse(request),
+  ).send(),
+);
+
+export const updateReferenceImagePurpose = async (
+  referenceImageId: string,
+  request: UpdateReferenceImagePurposeRequest,
+): Promise<ReferenceImageView> => ReferenceImageViewSchema.parse(
+  await videoApi.Patch(
+    `/video-workflows/reference-images/${encodeURIComponent(referenceImageId)}/purpose`,
+    UpdateReferenceImagePurposeRequestSchema.parse(request),
+  ).send(),
 );

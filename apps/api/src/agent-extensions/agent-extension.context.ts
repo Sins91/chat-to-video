@@ -45,7 +45,11 @@ export const WorkflowIntentAgentRequestContextSchema = z.object({
 
 export const AgentExtensionRequestContextSchema = z.discriminatedUnion(
   "agentId",
-  [ChatAgentRequestContextSchema, CinematicAgentRequestContextSchema],
+  [
+    ChatAgentRequestContextSchema,
+    StoryboardAgentRequestContextSchema,
+    CinematicAgentRequestContextSchema,
+  ],
 );
 
 export type ChatAgentRequestContext = z.infer<typeof ChatAgentRequestContextSchema>;

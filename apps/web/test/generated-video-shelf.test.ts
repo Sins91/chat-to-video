@@ -121,7 +121,8 @@ describe("generated video shelf", () => {
     expect(client).toContain("visitedCursors");
     expect(client).toContain("generatedVideosCache");
     expect(client).toContain("generatedVideosRequest");
-    expect(client).toContain('resolution: "720p"');
+    expect(client).toContain("resolution: entry.outputResolution");
+    expect(client).toContain("resolution: workflow.videoJob.outputResolution");
     expect(client).toContain("promptTrace: entry.promptTrace");
     expect(client).toContain("promptTrace: workflow.promptTrace");
     expect(client).toContain("storyboard.storyboard.title");

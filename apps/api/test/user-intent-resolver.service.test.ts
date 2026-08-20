@@ -65,6 +65,40 @@ describe("UserIntentResolverService", () => {
     expect(gateway.classifyWorkflowIntent).not.toHaveBeenCalled();
   });
 
+  it("routes a standalone resolution change without a paid model call", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn() };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolve({ ...context, text: "请把成片分辨率改为 1080p" })).resolves.toMatchObject({
+      source: "rule",
+      intent: { type: "update_output_resolution", resolution: "1080p" },
+    });
+    expect(gateway.classifyWorkflowIntent).not.toHaveBeenCalled();
+  });
+
+  it("atomically carries a compound resolution change into approval", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn() };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolve({ ...context, text: "改为480p并继续" })).resolves.toMatchObject({
+      source: "rule",
+      intent: { type: "approve", outputResolution: "480p" },
+    });
+    expect(gateway.classifyWorkflowIntent).not.toHaveBeenCalled();
+  });
+
+  it("carries a compound resolution change into the current-stage revision", async () => {
+    const gateway = { classifyWorkflowIntent: vi.fn() };
+    const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);
+    await expect(resolver.resolve({ ...context, currentStage: "script", text: "改成480p，同时优化脚本" })).resolves.toMatchObject({
+      source: "rule",
+      intent: {
+        type: "revise_current",
+        outputResolution: "480p",
+        feedback: "优化脚本",
+      },
+    });
+    expect(gateway.classifyWorkflowIntent).not.toHaveBeenCalled();
+  });
+
   it("asks for concrete revision details using the current stage label", async () => {
     const gateway = { classifyWorkflowIntent: vi.fn() };
     const resolver = new UserIntentResolverService(gateway as unknown as ModelGateway);

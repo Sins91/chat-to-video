@@ -25,6 +25,7 @@ describe("isVideoWorkflowIntent", () => {
     expect(getVideoWorkflowIntentHint("再来一个")).toBe("ambiguous");
     expect(getVideoWorkflowIntentHint("按刚才的风格再做一版")).toBe("ambiguous");
     expect(getVideoWorkflowIntentHint("再生成一段雨夜城市宣传片")).toBe("workflow");
+    expect(getVideoWorkflowIntentHint("生成480p，电影感雨夜街道运镜")).toBe("workflow");
     expect(getVideoWorkflowIntentHint("视频生成的原理是什么？")).toBe("chat");
   });
 });

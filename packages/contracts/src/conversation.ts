@@ -11,6 +11,8 @@ import {
   VideoWorkflowStatusSchema,
 } from "./video-workflow.js";
 import { GeneratedVideoPromptTraceSchema } from "./generated-video.js";
+import { VideoOutputResolutionSchema } from "./video-workflow-common.js";
+import { ReferenceImageListSchema } from "./reference-image.js";
 
 export const ConversationIdSchema = z.string().uuid();
 export const ConversationMessageIdSchema = z.string().trim().min(1).max(100);
@@ -19,9 +21,14 @@ export const ConversationTextEntrySchema = z.object({
   id: z.string().min(1).max(100),
   type: z.literal("text"),
   role: z.enum(["user", "assistant"]),
-  content: z.string().min(1).max(32_000),
+  content: z.string().max(32_000),
+  referenceImages: ReferenceImageListSchema.default([]),
   createdAt: z.string().datetime({ offset: true }),
-}).strict();
+}).strict().superRefine((entry, context) => {
+  if (!entry.content && entry.referenceImages.length === 0) {
+    context.addIssue({ code: "custom", message: "A conversation entry requires content or a reference image." });
+  }
+});
 
 export const ConversationStoryboardEntrySchema = z.object({
   id: z.string().min(1).max(100),
@@ -61,6 +68,7 @@ export const ConversationArchivedVideoEntrySchema = z.object({
   initialPrompt: z.string().trim().min(1).max(8_000),
   promptTrace: GeneratedVideoPromptTraceSchema.default([]),
   videoTitle: z.string().trim().min(1).max(120).nullable().default(null),
+  outputResolution: VideoOutputResolutionSchema.default("720p"),
   playbackUrl: z.string().url(),
   createdAt: z.string().datetime({ offset: true }),
 }).strict();

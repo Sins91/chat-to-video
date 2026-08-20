@@ -8,8 +8,9 @@ import {
   findMissingWorkflowCapabilities,
   findWorkflowStage,
   getCinematicConsistencyReferencePriority,
+  getVideoGenerationResolution,
   getRequiredWorkflowCapabilities,
-  getRequestedVideoOutputResolution,
+  VideoOutputResolutionSchema,
   type CinematicArtifact,
   type CinematicAssetJobPayload,
   type CinematicGenerativeStage,
@@ -18,6 +19,7 @@ import {
   type WorkflowCapabilityFacts,
   type WorkflowCapabilityResolution,
   WorkflowCapabilitySnapshotSchema,
+  WorkflowCapabilityResolutionSchema,
   WORKFLOW_CAPABILITY_SNAPSHOT_KEY,
 } from "@chat-to-video/contracts";
 import {
@@ -48,6 +50,7 @@ import { loadRedisUrl } from "./video-workflow.config.js";
 import { formatVideoWorkflowFailure } from "./video-workflow-error.js";
 import { VIDEO_WORKFLOW_REPOSITORY } from "./video-workflow.tokens.js";
 import { WorkflowEventService } from "./workflow-event.service.js";
+import { ReferenceImageService } from "../reference-image/reference-image.service.js";
 import { videoWorkflowStep, videoWorkflowStepLabel } from "./workflow-step.js";
 
 type WorkflowInput = {
@@ -109,6 +112,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     @Inject(VIDEO_WORKFLOW_REPOSITORY) private readonly repository: VideoWorkflowRepository,
     @Inject(MODEL_GATEWAY) private readonly modelGateway: ModelGateway,
     @Inject(WorkflowEventService) private readonly events: WorkflowEventService,
+    @Inject(ReferenceImageService) private readonly referenceImages: ReferenceImageService,
   ) {}
 
   private async capabilityResolutions(): Promise<WorkflowCapabilityResolution[]> {
@@ -265,12 +269,20 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     if (artifact.stage !== "consistency_reference") throw new Error("Consistency reference artifact is invalid.");
     if (artifact.data.status === "not_required") return "not_required";
     const resolution = (await this.capabilityResolutions()).find((candidate) =>
-      candidate.capabilityId === "image.generate" && candidate.status === "available"
+      candidate.capabilityId === "image.generate.reference" && candidate.status === "available"
     );
-    const [proposalRow, scenePlanRow] = await Promise.all([
+    const [proposalRow, scenePlanRow, uploadedReferenceRows, workflow] = await Promise.all([
       this.repository.findLatestCinematicArtifact(input.workflowId, "proposal"),
       this.repository.findLatestCinematicArtifact(input.workflowId, "scene_plan"),
+      this.referenceImages.listForWorkflow(input.workflowId),
+      this.repository.findWorkflow(input.workflowId),
     ]);
+    if (!workflow) throw new Error("Cinematic workflow is unavailable while queueing references.");
+    const uploadedReferences = new Map(uploadedReferenceRows.map((row) => [row.id, row]));
+    const invalidSourceGroup = artifact.data.groups.find((group) =>
+      group.sourceReferenceImageIds.some((id) => !uploadedReferences.has(id))
+    );
+    const generatedGroups = artifact.data.groups.filter((group) => group.sourceReferenceImageIds.length === 0);
     const proposal = proposalRow ? CinematicArtifactSchema.parse(proposalRow.artifact) : null;
     const scenePlan = scenePlanRow ? CinematicArtifactSchema.parse(scenePlanRow.artifact) : null;
     const generatedSceneOrders = new Set(scenePlan?.stage === "scene_plan"
@@ -281,15 +293,17 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     const invalidGroup = artifact.data.groups.find((group) =>
       group.sceneOrders.some((sceneOrder) => !generatedSceneOrders.has(sceneOrder))
     );
-    const realPersonGroup = artifact.data.groups.find((group) => group.identityMode === "real_person");
-    const referenceCost = artifact.data.groups.reduce((total, group) => total + group.estimatedCostUsd, 0);
+    const realPersonGroup = generatedGroups.find((group) => group.identityMode === "real_person");
+    const referenceCost = generatedGroups.reduce((total, group) => total + group.estimatedCostUsd, 0);
     const blocker = scenePlan?.stage !== "scene_plan"
       ? "缺少已批准的镜头计划。"
       : invalidGroup
         ? `连续性分组 ${invalidGroup.id} 只能关联存在的生成镜头。`
+        : invalidSourceGroup
+          ? `连续性分组 ${invalidSourceGroup.id} 引用了无效或未授权的上传参考图。`
         : realPersonGroup
           ? `连续性分组 ${realPersonGroup.id} 涉及真人身份参考；当前版本未接入经审核的 asset:// 人像素材能力。`
-          : !resolution
+          : generatedGroups.length > 0 && !resolution
             ? "参考图生成能力尚未通过真实 APIMart 验证；禁止降级为纯提示词生成。"
             : proposal?.stage !== "proposal"
             ? "缺少已批准的创意方案预算。"
@@ -317,18 +331,30 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       return "blocked";
     }
     const batchId = `${input.workflowId}-consistency-reference-v${input.version}`;
-    const outputResolution = getRequestedVideoOutputResolution(input.initialPrompt);
+    const outputResolution = VideoOutputResolutionSchema.parse(workflow.outputResolution);
+    const suppliedResolution = WorkflowCapabilityResolutionSchema.parse({
+      capabilityId: "image.reference.supplied",
+      status: "available",
+      executionBoundary: "media_probe_job",
+      adapterId: "storage.validated-reference-image",
+      provider: "local",
+      reason: null,
+    });
     const prioritizedGroups = [...artifact.data.groups].sort((left, right) =>
       getCinematicConsistencyReferencePriority(left.kind) -
       getCinematicConsistencyReferencePriority(right.kind)
     );
     const jobEntries = await Promise.all(prioritizedGroups.map(async (group) => {
+      const sourceId = group.sourceReferenceImageIds[0];
+      const source = sourceId ? uploadedReferences.get(sourceId) : undefined;
       const promptHash = createHash("sha256")
-        .update(JSON.stringify({ prompt: group.prompt, aspectRatio: group.aspectRatio, outputResolution }))
+        .update(JSON.stringify({ prompt: group.prompt, aspectRatio: group.aspectRatio, outputResolution, sourceId }))
         .digest("hex");
       const groupHash = createHash("sha256").update(group.id).digest("hex").slice(0, 12);
-      const assetId = `${input.workflowId}-ref-${groupHash}-${promptHash.slice(0, 12)}`;
-      const reusable = await this.repository.findReusableCinematicReferenceJob(
+      const assetId = source
+        ? `uploaded-ref-${source.id}`
+        : `${input.workflowId}-ref-${groupHash}-${promptHash.slice(0, 12)}`;
+      const reusable = source ? null : await this.repository.findReusableCinematicReferenceJob(
         input.workflowId,
         group.id,
         promptHash,
@@ -347,10 +373,13 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
           referenceBindings: [],
           promptHash,
           reusedFromAssetId: reusable?.id ?? null,
+          sourceReferenceImageId: source?.id ?? null,
+          sourceMimeType: source?.mimeType ?? null,
+          sourceSizeBytes: source?.sizeBytes ?? null,
           kind: "image",
           prompt: group.prompt,
-          objectKey: reusable?.objectKey ?? `tenant/demo/project/demo/derived/${batchId}/${assetId}.png`,
-          capabilityResolution: resolution,
+          objectKey: source?.objectKey ?? reusable?.objectKey ?? `tenant/demo/project/demo/derived/${batchId}/${assetId}.png`,
+          capabilityResolution: source ? suppliedResolution : resolution ?? suppliedResolution,
           aspectRatio: group.aspectRatio,
           outputResolution,
         }),
@@ -364,7 +393,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       stageId: "consistency_reference",
       jobs,
     });
-    if (jobs.every((job) => job.reusedFromAssetId !== null)) {
+    if (jobs.every((job) => job.reusedFromAssetId !== null || job.sourceReferenceImageId !== null)) {
       await this.events.append({
         eventId: `${batchId}:reused-awaiting-approval`,
         workflowId: input.workflowId,
@@ -378,7 +407,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       return "queued";
     }
     for (const { group, job } of jobEntries) {
-      if (job.reusedFromAssetId) continue;
+      if (job.reusedFromAssetId || job.sourceReferenceImageId) continue;
       try {
         await this.imageQueue.add("generate-cinematic-reference", job, {
           jobId: job.assetId,
@@ -413,7 +442,12 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
   async enqueueCinematicAssetBatch(input: WorkflowInput & {
     version: number;
   }): Promise<void> {
-    const { scenePlan, assets, facts } = await this.cinematicCapabilityContext(input.workflowId);
+    const [{ scenePlan, assets, facts }, workflow] = await Promise.all([
+      this.cinematicCapabilityContext(input.workflowId),
+      this.repository.findWorkflow(input.workflowId),
+    ]);
+    if (!workflow) throw new Error("Cinematic workflow is unavailable while queueing assets.");
+    const outputResolution = VideoOutputResolutionSchema.parse(workflow.outputResolution);
     if (assets.data.assets.some((asset) => asset.sourceMode !== "generate") ||
         assets.data.music.sourceMode !== "generate") {
       throw new Error(
@@ -453,11 +487,10 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       }
       if (approvedReferenceByGroup.size !== referenceArtifact.data.groups.length) throw new Error("An approved consistency reference is missing or superseded.");
     }
-    const referencePriority = ["character", "product", "environment", "style"] as const;
     const bindingsForScene = (sceneOrder: number) => referenceArtifact.data.status === "required"
       ? referenceArtifact.data.groups
         .filter((group) => group.sceneOrders.includes(sceneOrder))
-        .sort((left, right) => referencePriority.indexOf(left.kind) - referencePriority.indexOf(right.kind))
+        .sort((left, right) => getCinematicConsistencyReferencePriority(left.kind) - getCinematicConsistencyReferencePriority(right.kind))
         .slice(0, 3)
         .map((group) => {
           const approved = approvedReferenceByGroup.get(group.id);
@@ -505,6 +538,8 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
                 : "video.generate",
           ),
           videoModel: input.videoModel,
+          outputResolution,
+          generationResolution: getVideoGenerationResolution(input.videoModel, outputResolution),
           durationSeconds: scene.generationDurationSeconds ?? scene.durationSeconds,
         });
       }
@@ -527,8 +562,9 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         prompt: asset.prompt,
         objectKey: `tenant/demo/project/demo/derived/${batchId}/${assetId}.png`,
         capabilityResolution: resolutionFor(capabilityId),
-        aspectRatio: scenePlan.data.aspectRatio,
-      });
+          aspectRatio: scenePlan.data.aspectRatio,
+          outputResolution,
+        });
     });
     const musicId = `${batchId}-music`;
     jobs.push(CinematicAssetJobPayloadSchema.parse({
@@ -838,6 +874,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
           (artifact) => isUpstreamStage(artifact.stage, input.stage),
         ),
         revisionRequest: input.revisionRequest,
+        referenceImages: await this.referenceImages.workflowModelInputs(input.workflowId),
         onToolActivity,
       }),
     );
@@ -1026,11 +1063,14 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       jobId,
       storyboardVersion: input.version,
       videoModel: selectedVideoModel,
+      outputResolution: VideoOutputResolutionSchema.parse(workflow.outputResolution),
       videoPrompt: input.edit.data.renderPrompt,
       capabilityResolutions,
       cinematic: {
         rendererFamily: "ffmpeg",
         durationSeconds: input.durationSeconds,
+        outputResolution: VideoOutputResolutionSchema.parse(workflow.outputResolution),
+        aspectRatio: scenePlan.data.aspectRatio,
         modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(selectedVideoModel),
         scenes: scenePlan.data.scenes.map((scene) => ({
           ...scene,
@@ -1069,6 +1109,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       storyboardVersion: payload.storyboardVersion,
       objectKey: payload.objectKey,
       capabilityResolutions,
+      outputResolution: payload.outputResolution,
     });
     await this.repository.updateWorkflow(input.workflowId, {
       currentStageId: "compose" satisfies CinematicStage,
@@ -1208,6 +1249,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       jobId,
       storyboardVersion: input.version,
       videoModel: VideoModelSchema.parse(workflow.videoModel),
+      outputResolution: VideoOutputResolutionSchema.parse(workflow.outputResolution),
       videoPrompt: input.storyboard.videoPrompt,
       capabilityResolutions: resolutions.filter(
         (resolution) => required.includes(resolution.capabilityId as "video.generate"),
@@ -1220,6 +1262,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       storyboardVersion: payload.storyboardVersion,
       objectKey: payload.objectKey,
       capabilityResolutions: payload.capabilityResolutions,
+      outputResolution: payload.outputResolution,
     });
     await this.enqueueRenderJob("generate-video", payload);
     const queueAhead = await this.getRenderQueueAhead(payload.jobId);

@@ -74,6 +74,14 @@ export const resolveWorkerCapabilities = (
       reason: referenceInputsVerified ? null : "Set APIMART_REFERENCE_INPUTS_VERIFIED=true only after the opt-in integration contract passes.",
     }),
     resolution({
+      capabilityId: "image.reference.supplied",
+      status: "available",
+      executionBoundary: "media_probe_job",
+      adapterId: "storage.validated-reference-image",
+      provider: "local",
+      reason: null,
+    }),
+    resolution({
       capabilityId: "video.generate.reference",
       status: referenceInputsVerified ? "available" : "unconfigured",
       executionBoundary: "render_job",

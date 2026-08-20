@@ -38,8 +38,9 @@ describe("video workflow runtime boundary", () => {
       operations.indexOf("async enqueueConsistencyReferenceBatch"),
       operations.indexOf("async enqueueCinematicAssetBatch"),
     );
-    expect(referenceBatch).toContain('candidate.capabilityId === "image.generate"');
-    expect(referenceBatch).not.toContain('candidate.capabilityId === "image.generate.reference"');
+    expect(referenceBatch).toContain('candidate.capabilityId === "image.generate.reference"');
+    expect(referenceBatch).toContain('capabilityId: "image.reference.supplied"');
+    expect(referenceBatch).toContain("generatedGroups.length > 0 && !resolution");
     expect(referenceBatch).toContain("referenceBindings: []");
 
     expect(referenceBatch).toContain("getCinematicConsistencyReferencePriority(left.kind)");

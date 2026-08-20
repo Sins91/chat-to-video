@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { CinematicArtifactSchema } from "./cinematic.js";
+import { PendingReferenceResolutionSchema } from "./reference-image.js";
 import { WorkflowUserIntentSchema } from "./user-intent.js";
 import {
   getWorkflowStageIndex,
@@ -65,6 +66,7 @@ export const ResolveVideoWorkflowIntentResponseSchema = z.object({
   conversationId: z.string().uuid().nullable(),
   workflowId: z.string().uuid().nullable(),
   pendingAction: PendingWorkflowControlSchema.nullable(),
+  pendingReferenceResolution: PendingReferenceResolutionSchema.nullable().optional(),
 }).strict();
 
 export type WorkflowControlCommand =

@@ -2,6 +2,8 @@ import type {
   CinematicAssetJobPayload,
   RenderTimeoutCleanupJobPayload,
   RenderVideoJobPayload,
+  ReferenceImageProbeJobPayload,
+  ReferenceImageCleanupJobPayload,
 } from "@chat-to-video/contracts";
 import {
   WORKFLOW_CAPABILITY_SNAPSHOT_KEY,
@@ -15,6 +17,8 @@ import { CinematicAssetProcessor } from "./cinematic-asset-processor.js";
 import { loadRepositoryEnvironment } from "./environment.js";
 import { RenderProcessor } from "./render-processor.js";
 import { RenderTimeoutProcessor } from "./render-timeout-processor.js";
+import { ReferenceImageProbeProcessor } from "./reference-image-probe-processor.js";
+import { ReferenceImageCleanupProcessor } from "./reference-image-cleanup-processor.js";
 import {
   resolveWorkerCapabilities,
   workerCapabilityId,
@@ -44,9 +48,18 @@ const agentWorker = new Worker<CinematicAssetJobPayload>(
   { connection, concurrency: 1, lockDuration: 60_000 },
 );
 const timeoutProcessor = new RenderTimeoutProcessor(config);
-const timeoutWorker = new Worker<RenderTimeoutCleanupJobPayload>(
+const referenceImageProbeProcessor = new ReferenceImageProbeProcessor(config);
+const referenceImageCleanupProcessor = new ReferenceImageCleanupProcessor(config);
+const mediaProbeWorker = new Worker<ReferenceImageProbeJobPayload>(
+  "media-probe-jobs",
+  (job) => referenceImageProbeProcessor.process(job),
+  { connection, concurrency: 2, lockDuration: 60_000 },
+);
+const timeoutWorker = new Worker<RenderTimeoutCleanupJobPayload | ReferenceImageCleanupJobPayload>(
   "cleanup-jobs",
-  (job) => timeoutProcessor.process(job),
+  (job) => "kind" in job.data
+    ? referenceImageCleanupProcessor.process(job as Job<ReferenceImageCleanupJobPayload>)
+    : timeoutProcessor.process(job as Job<RenderTimeoutCleanupJobPayload>),
   {
     connection,
     concurrency: 1,
@@ -73,7 +86,7 @@ capabilityTimer.unref();
 const shutdown = async (): Promise<void> => {
   clearInterval(capabilityTimer);
   await connection.del(WORKFLOW_CAPABILITY_SNAPSHOT_KEY);
-  await Promise.all([worker.close(), imageWorker.close(), agentWorker.close(), timeoutWorker.close()]);
+  await Promise.all([worker.close(), imageWorker.close(), agentWorker.close(), mediaProbeWorker.close(), timeoutWorker.close()]);
   await Promise.all([processor.close(), assetProcessor.close(), timeoutProcessor.close()]);
   await connection.quit();
 };

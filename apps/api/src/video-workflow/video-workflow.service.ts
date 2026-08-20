@@ -6,6 +6,7 @@ import {
   CINEMATIC_PIPELINE_DEFINITION,
   findWorkflowPipelineDefinition,
   findWorkflowStage,
+  getRequestedVideoOutputResolution,
   getPreviousWorkflowStage,
   getWorkflowStageIndex,
   getWorkflowStagesFrom,
@@ -39,9 +40,11 @@ import {
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
   type VideoModel,
+  type VideoOutputResolution,
   type UpdateVideoWorkflowModelResponse,
   ResolveWorkflowUserIntentResponseSchema,
   type ResolveWorkflowUserIntentResponse,
+  type ResolveWorkflowUserIntentRequest,
   ResolveVideoWorkflowIntentResponseSchema,
   WorkflowIntentDecisionSchema,
   WorkflowImportedArtifactCandidateSchema,
@@ -49,6 +52,11 @@ import {
   type ResolveVideoWorkflowIntentResponse,
   type CinematicGenerativeStage,
   type WorkflowPipelineDefinition,
+  type PendingReferenceResolution,
+  type ReferenceImageResolution,
+  type ResolveReferenceImagesRequest,
+  type UpdateReferenceImagePurposeRequest,
+  type ReferenceImageView,
 } from "@chat-to-video/contracts";
 import {
   DEMO_PROJECT_ID,
@@ -70,6 +78,7 @@ import { VideoWorkflowOperations } from "./video-workflow.operations.js";
 import { buildVideoWorkflowSnapshot } from "./video-workflow-snapshot.js";
 import { videoWorkflowStep } from "./workflow-step.js";
 import { UserIntentResolverService } from "./user-intent-resolver.service.js";
+import { ReferenceImageService } from "../reference-image/reference-image.service.js";
 import { isCinematicCreationEnabled } from "./video-workflow.config.js";
 
 const APPROVAL_PHRASES = new Set([
@@ -102,6 +111,8 @@ const SERVICE_ERROR_REPLY = "当前服务出现错误，建议新建对话重新
 const TERMINAL_WORKFLOW_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
 const isTerminalWorkflowStatus = (status: string): boolean =>
   TERMINAL_WORKFLOW_STATUSES.has(status);
+const isResolvedReferenceImage = (resolution: ReferenceImageResolution | null | undefined): boolean =>
+  resolution?.status === "auto_resolved" || resolution?.status === "user_resolved";
 const DIRECT_ENTRY_PRODUCER: Record<string, CinematicGenerativeStage> = {
   proposal: "research",
   script: "proposal",
@@ -170,6 +181,7 @@ export class VideoWorkflowService {
     @Inject(VideoWorkflowOperations) private readonly operations: VideoWorkflowOperations,
     @Inject(WorkflowRecoveryService) private readonly recovery: WorkflowRecoveryService,
     @Inject(UserIntentResolverService) private readonly intentResolver: UserIntentResolverService,
+    @Inject(ReferenceImageService) private readonly referenceImages: ReferenceImageService,
   ) {}
 
   async resolveVideoIntent(
@@ -192,6 +204,18 @@ export class VideoWorkflowService {
       CINEMATIC_PIPELINE_DEFINITION;
     const command = parseWorkflowControlCommand(text, pipeline);
     const conversationId = activeWorkflow?.conversationId ?? input.conversationId ?? null;
+    if (conversationId && (input.referenceImageIds?.length ?? 0) === 0) {
+      const pendingResolution = await this.referenceImages.pendingResolutionFromText(conversationId, text);
+      if (pendingResolution) {
+        await this.conversations.appendMessage({
+          conversationId,
+          messageId: input.messageId,
+          role: "user",
+          content: input.text,
+        });
+        return this.resolveReferenceImages(pendingResolution);
+      }
+    }
     const replayedControl = await this.repository.findWorkflowControlRequestByMessage(input.messageId);
 
     if (replayedControl) {
@@ -378,9 +402,32 @@ export class VideoWorkflowService {
       );
     }
     if (activeWorkflow?.status === "awaiting_input") {
+      if ((input.referenceImageIds?.length ?? 0) > 0) {
+        const rows = await this.referenceImages.readyRows(input.referenceImageIds ?? []);
+        if (!rows.every((row) => isResolvedReferenceImage(row.resolution))) {
+          const prepared = await this.prepareReferenceImages({
+            request: input,
+            conversationId,
+            workflow: activeWorkflow,
+          });
+          if (prepared.question) {
+            return ResolveVideoWorkflowIntentResponseSchema.parse({
+              accepted: true,
+              route: "workflow",
+              applied: true,
+              intent: { type: "clarify", question: prepared.question },
+              conversationId: prepared.conversationId,
+              workflowId: activeWorkflow.id,
+              pendingAction: null,
+              pendingReferenceResolution: prepared.pendingReferenceResolution,
+            });
+          }
+        }
+      }
       const resolved = await this.resolveUserIntent(activeWorkflow.id, {
         messageId: input.messageId,
         text: input.text,
+        referenceImageIds: input.referenceImageIds ?? [],
       });
       return ResolveVideoWorkflowIntentResponseSchema.parse({
         accepted: true,
@@ -390,18 +437,73 @@ export class VideoWorkflowService {
         conversationId,
         workflowId: activeWorkflow.id,
         pendingAction: null,
+        pendingReferenceResolution: resolved.pendingReferenceResolution ?? null,
       });
     }
     if (activeWorkflow?.conversationId) {
       const resolved = await this.resolveActiveWorkflowDecision(activeWorkflow, input, pipeline);
       if (resolved) return resolved;
     }
-    if (!activeWorkflow && isVideoWorkflowIntent(text)) {
+    const startsVideoWorkflow = isVideoWorkflowIntent(text);
+    if (!activeWorkflow && (startsVideoWorkflow || (input.referenceImageIds?.length ?? 0) > 0)) {
+      const inheritedReferenceRows = startsVideoWorkflow && (input.referenceImageIds?.length ?? 0) === 0 &&
+          conversationId
+        ? await this.referenceImages.resolvedUnboundRowsForConversation(conversationId)
+        : [];
+      const effectiveReferenceImageIds = (input.referenceImageIds?.length ?? 0) > 0
+        ? input.referenceImageIds ?? []
+        : inheritedReferenceRows.slice(-4).map((row) => row.id);
+      const referenceRows = effectiveReferenceImageIds.length > 0
+        ? await this.referenceImages.readyRows(effectiveReferenceImageIds)
+        : [];
+      const prepared = referenceRows.length > 0 &&
+          !referenceRows.every((row) => isResolvedReferenceImage(row.resolution))
+        ? await this.prepareReferenceImages({ request: input, conversationId, workflow: null })
+        : null;
+      if (prepared?.question) {
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true,
+          route: "workflow",
+          applied: true,
+          intent: { type: "clarify", question: prepared.question },
+          conversationId: prepared.conversationId,
+          workflowId: null,
+          pendingAction: null,
+          pendingReferenceResolution: prepared.pendingReferenceResolution,
+        });
+      }
+      if (!startsVideoWorkflow) {
+        const resolvedConversationId = prepared?.conversationId ?? conversationId ??
+          referenceRows.find((row) => row.conversationId !== null)?.conversationId ??
+          await this.ensureReferenceMessage(input, null);
+        const labels = referenceRows.flatMap((row) => row.resolution?.effectiveLabel
+          ? [row.resolution.effectiveLabel]
+          : []);
+        const reply = labels.length > 0
+          ? `参考图已识别并保存：${labels.join("、")}。描述希望生成的视频时，我会按这些参考保持一致性。`
+          : "参考图已识别并保存。描述希望生成的视频时，我会按这些参考保持一致性。";
+        await this.appendAssistantReply(
+          resolvedConversationId,
+          `${input.messageId}:reference-resolved`,
+          reply,
+        );
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true,
+          route: "workflow",
+          applied: true,
+          intent: { type: "chat" },
+          conversationId: resolvedConversationId,
+          workflowId: null,
+          pendingAction: null,
+          pendingReferenceResolution: null,
+        });
+      }
       const created = await this.create({
-        conversationId: input.conversationId,
+        conversationId: prepared?.conversationId ?? input.conversationId,
         messageId: input.messageId,
         prompt: text,
         videoModel: input.videoModel ?? DEFAULT_VIDEO_MODEL,
+        referenceImageIds: effectiveReferenceImageIds,
       });
       return ResolveVideoWorkflowIntentResponseSchema.parse({
         accepted: true,
@@ -527,6 +629,7 @@ export class VideoWorkflowService {
       conversationId: workflow.conversationId,
       messageId: input.messageId,
       prompt: decision.intent.brief,
+      referenceImageIds: input.referenceImageIds ?? [],
       videoModel: input.videoModel ?? DEFAULT_VIDEO_MODEL,
     }, {
       initialPrompt: decision.intent.brief,
@@ -572,6 +675,91 @@ export class VideoWorkflowService {
     content: string,
   ): Promise<void> {
     await this.conversations.appendMessage({ conversationId, messageId, role: "assistant", content });
+  }
+
+  private async ensureReferenceMessage(
+    input: ResolveVideoWorkflowIntentRequest,
+    conversationId: string | null,
+  ): Promise<string> {
+    const resolvedConversationId = conversationId ?? randomUUID();
+    if (conversationId) {
+      await this.conversations.appendMessage({
+        conversationId,
+        messageId: input.messageId,
+        role: "user",
+        content: input.text,
+      });
+    } else {
+      await this.conversations.createWithUserMessage({
+        conversationId: resolvedConversationId,
+        title: createConversationTitle(input.text || "参考图片"),
+        messageId: input.messageId,
+        content: input.text,
+      });
+    }
+    await this.referenceImages.bindToMessage({
+      ids: input.referenceImageIds ?? [],
+      conversationId: resolvedConversationId,
+      messageId: input.messageId,
+    });
+    return resolvedConversationId;
+  }
+
+  private async prepareReferenceImages(input: {
+    request: ResolveVideoWorkflowIntentRequest;
+    conversationId: string | null;
+    workflow: { id: string; currentVersion: number; requestId: string } | null;
+  }): Promise<{
+    conversationId: string;
+    pendingReferenceResolution: PendingReferenceResolution | null;
+    question: string | null;
+  }> {
+    const conversationId = await this.ensureReferenceMessage(input.request, input.conversationId);
+    let resolutions: ReferenceImageResolution[];
+    try {
+      resolutions = await this.referenceImages.analyze({
+        ids: input.request.referenceImageIds ?? [],
+        requestId: input.workflow?.requestId ?? randomUUID(),
+        conversationId,
+        tenantId: DEMO_TENANT_ID,
+        projectId: DEMO_PROJECT_ID,
+        userText: input.request.text,
+      });
+    } catch {
+      resolutions = await this.referenceImages.markAnalysisFailed(input.request.referenceImageIds ?? []);
+    }
+    if (resolutions.some((resolution) => resolution.status === "blocked")) {
+      const question = "部分参考图包含敏感内容，已保留在聊天记录中，但不会用于生成。请移除或更换这些图片后重试。";
+      await this.appendAssistantReply(conversationId, `${input.request.messageId}:reference-blocked`, question);
+      return { conversationId, pendingReferenceResolution: null, question };
+    }
+    const unresolvedIds = resolutions
+      .filter((resolution) => resolution.status === "needs_clarification")
+      .map((resolution) => resolution.referenceImageId);
+    if (unresolvedIds.length === 0) {
+      return { conversationId, pendingReferenceResolution: null, question: null };
+    }
+    const pending = await this.referenceImages.createResolutionRequest({
+      conversationId,
+      messageId: input.request.messageId,
+      workflowId: input.workflow?.id ?? null,
+      workflowVersion: input.workflow?.currentVersion ?? null,
+      originalText: input.request.text,
+      referenceImageIds: input.request.referenceImageIds ?? [],
+      videoModel: input.request.videoModel ?? DEFAULT_VIDEO_MODEL,
+    });
+    const question = "请确认参考图用途。你可以选择人物、产品、场景、元素或风格；确认完成后我会继续原任务。";
+    await this.appendAssistantReply(conversationId, `${input.request.messageId}:reference-clarification`, question);
+    return {
+      conversationId,
+      question,
+      pendingReferenceResolution: {
+        resolutionRequestId: pending.request.id,
+        messageId: pending.request.messageId,
+        referenceImages: pending.referenceImages,
+        expiresAt: pending.request.expiresAt.toISOString(),
+      },
+    };
   }
 
   private async persistStandaloneGuidance(
@@ -1049,6 +1237,7 @@ export class VideoWorkflowService {
         initialPrompt: claimed.rawText,
         videoModel,
         durationSeconds,
+        outputResolution: getRequestedVideoOutputResolution(claimed.rawText),
         candidate,
       });
       if (!created) {
@@ -1264,7 +1453,7 @@ export class VideoWorkflowService {
 
   async resolveUserIntent(
     workflowId: string,
-    input: { messageId: string; text: string },
+    input: ResolveWorkflowUserIntentRequest,
   ): Promise<ResolveWorkflowUserIntentResponse> {
     const existing = await this.repository.findWorkflowUserDecision(input.messageId);
     if (existing) {
@@ -1328,6 +1517,41 @@ export class VideoWorkflowService {
       text: input.text,
     });
     const decisionId = randomUUID();
+    const referenceImageIds = input.referenceImageIds ?? [];
+    if (decision.intent.type !== "chat" && referenceImageIds.length > 0) {
+      const rows = await this.referenceImages.readyRows(referenceImageIds);
+      if (!rows.every((row) => isResolvedReferenceImage(row.resolution))) {
+        const prepared = await this.prepareReferenceImages({
+          request: {
+            messageId: input.messageId,
+            text: input.text,
+            referenceImageIds,
+            conversationId: workflow.conversationId,
+            workflowId,
+            videoModel: VideoModelSchema.parse(workflow.videoModel),
+          },
+          conversationId: workflow.conversationId,
+          workflow,
+        });
+        if (prepared.question) {
+          return ResolveWorkflowUserIntentResponseSchema.parse({
+            accepted: true,
+            applied: true,
+            intent: { type: "clarify", question: prepared.question },
+            source: "rule",
+            resolverVersion: "reference-v1",
+            requiresConfirmation: false,
+            pendingReferenceResolution: prepared.pendingReferenceResolution,
+          });
+        }
+      }
+      await this.referenceImages.bindToMessage({
+        ids: referenceImageIds,
+        conversationId: workflow.conversationId,
+        messageId: input.messageId,
+        workflowId,
+      });
+    }
     const saved = await this.repository.saveWorkflowUserDecision({
       id: decisionId,
       workflowId: workflow.id,
@@ -1358,12 +1582,53 @@ export class VideoWorkflowService {
     rawText: string,
     intent: ResolveWorkflowUserIntentResponse["intent"],
   ): Promise<boolean> {
+    if (intent.type === "update_output_resolution") {
+      const workflow = await this.repository.findWorkflow(workflowId);
+      if (!workflow?.conversationId) {
+        throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
+      }
+      const isUpdated = await this.repository.updateOutputResolution({
+        workflowId,
+        expectedStageId: workflow.currentStageId,
+        expectedVersion: workflow.currentVersion,
+        outputResolution: intent.resolution,
+      });
+      if (!isUpdated) {
+        throw new ConflictException({
+          code: "VIDEO_OUTPUT_RESOLUTION_LOCKED",
+          message: "Output resolution can only be changed while the workflow is awaiting review.",
+        });
+      }
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId,
+        role: "user",
+        content: rawText,
+      });
+      await this.conversations.appendMessage({
+        conversationId: workflow.conversationId,
+        messageId: decisionId,
+        role: "assistant",
+        content: `已将成片分辨率调整为 ${intent.resolution}，当前步骤无需重新生成。`,
+      });
+      return true;
+    }
     if (intent.type === "approve") {
-      await this.interact(workflowId, { type: "message", messageId, text: rawText });
+      await this.interact(
+        workflowId,
+        { type: "message", messageId, text: rawText },
+        intent.outputResolution,
+        "approve",
+      );
       return true;
     }
     if (intent.type === "revise_current") {
-      await this.interact(workflowId, { type: "message", messageId, text: intent.feedback });
+      await this.interact(
+        workflowId,
+        { type: "message", messageId, text: intent.feedback },
+        intent.outputResolution,
+        "revise",
+      );
       return true;
     }
     if (intent.type === "approve_with_changes") {
@@ -1372,7 +1637,7 @@ export class VideoWorkflowService {
         messageId,
         text: intent.feedback,
         advanceAfterChange: intent.advanceAfterChange,
-      });
+      }, intent.outputResolution, "revise");
       return true;
     }
     if (intent.type === "restart_from") {
@@ -1380,7 +1645,7 @@ export class VideoWorkflowService {
       const pipeline = workflow ? findWorkflowPipelineDefinition(workflow.pipelineId) : null;
       if (!workflow?.conversationId || !pipeline) return false;
       await this.requestRestartControl(
-        { messageId, text: rawText, conversationId: workflow.conversationId, workflowId },
+        { messageId, text: rawText, referenceImageIds: [], conversationId: workflow.conversationId, workflowId },
         workflow,
         pipeline,
         intent.stageId,
@@ -1462,6 +1727,24 @@ export class VideoWorkflowService {
     }
     const workflowId = randomUUID();
     const requestId = randomUUID();
+    const referenceImageIds = input.referenceImageIds ?? [];
+    const referenceRows = await this.referenceImages.readyRows(referenceImageIds);
+    if (referenceRows.length > 0 && !referenceRows.every((row) => isResolvedReferenceImage(row.resolution))) {
+      const resolutions = await this.referenceImages.analyze({
+        ids: referenceImageIds,
+        requestId,
+        conversationId,
+        tenantId: DEMO_TENANT_ID,
+        projectId: DEMO_PROJECT_ID,
+        userText: context.messageContent,
+      });
+      if (!resolutions.every(isResolvedReferenceImage)) {
+        throw new ConflictException({
+          code: "REFERENCE_IMAGE_RESOLUTION_PENDING",
+          message: "参考图用途尚未确认，请先完成聊天区中的用途确认。",
+        });
+      }
+    }
     let durationSeconds: number;
     try {
       durationSeconds = await this.modelGateway.inferCinematicDuration({
@@ -1471,7 +1754,12 @@ export class VideoWorkflowService {
         projectId: DEMO_PROJECT_ID,
         messages: [
           ...previousMessages.slice(-49),
-          { role: "user", content: context.initialPrompt },
+          { role: "user", content: referenceImageIds.length === 0
+            ? context.initialPrompt
+            : [
+                { type: "text", text: context.initialPrompt },
+                ...await this.referenceImages.modelParts(referenceImageIds),
+              ] },
         ],
         videoModel: input.videoModel,
       });
@@ -1498,6 +1786,7 @@ export class VideoWorkflowService {
       initialPrompt: context.initialPrompt,
       videoModel: input.videoModel,
       durationSeconds,
+      outputResolution: getRequestedVideoOutputResolution(context.initialPrompt),
       message: input.conversationId
         ? { messageId: input.messageId, content: context.messageContent }
         : undefined,
@@ -1552,7 +1841,101 @@ export class VideoWorkflowService {
         message: "The video workflow could not be started.",
       });
     }
+    const inheritedReferenceImageIds = referenceRows.flatMap((row) =>
+      row.messageId !== null && row.messageId !== input.messageId ? [row.id] : []
+    );
+    const currentMessageReferenceImageIds = referenceImageIds.filter((id) =>
+      !inheritedReferenceImageIds.includes(id)
+    );
+    await this.referenceImages.bindToMessage({
+      ids: currentMessageReferenceImageIds,
+      conversationId,
+      messageId: input.messageId,
+      workflowId: successor?.workflowId ?? workflowId,
+    });
+    await this.referenceImages.bindResolvedToWorkflow({
+      ids: inheritedReferenceImageIds,
+      conversationId,
+      workflowId: successor?.workflowId ?? workflowId,
+    });
     return CreateVideoWorkflowResponseSchema.parse({ conversationId, workflowId, requestId });
+  }
+
+  async resolveReferenceImages(
+    input: ResolveReferenceImagesRequest,
+  ): Promise<ResolveVideoWorkflowIntentResponse> {
+    const confirmed = await this.referenceImages.confirmResolutions(input);
+    const request = confirmed.request;
+    const unresolved = confirmed.referenceImages.filter((image) =>
+      image.resolution?.status === "needs_clarification"
+    );
+    if (!confirmed.isComplete) {
+      const question = "仍有参考图需要确认用途；完成全部选择后我会继续原任务。";
+      return ResolveVideoWorkflowIntentResponseSchema.parse({
+        accepted: true,
+        route: "workflow",
+        applied: true,
+        intent: { type: "clarify", question },
+        conversationId: request.conversationId,
+        workflowId: request.workflowId,
+        pendingAction: null,
+        pendingReferenceResolution: {
+          resolutionRequestId: request.id,
+          messageId: request.messageId,
+          referenceImages: unresolved,
+          expiresAt: request.expiresAt.toISOString(),
+        },
+      });
+    }
+    if (request.workflowId) {
+      const workflow = await this.repository.findWorkflow(request.workflowId);
+      if (!workflow || workflow.currentVersion !== request.workflowVersion) {
+        const question = "工作流状态已变化，本次参考图用途已保存；请重新发送希望执行的修改。";
+        await this.appendAssistantReply(
+          request.conversationId,
+          `${request.messageId}:reference-resolution-stale`,
+          question,
+        );
+        return ResolveVideoWorkflowIntentResponseSchema.parse({
+          accepted: true,
+          route: "workflow",
+          applied: true,
+          intent: { type: "clarify", question },
+          conversationId: request.conversationId,
+          workflowId: request.workflowId,
+          pendingAction: null,
+          pendingReferenceResolution: null,
+        });
+      }
+    }
+    await this.appendAssistantReply(
+      request.conversationId,
+      `${request.messageId}:reference-resolution-completed`,
+      "参考图用途已确认，正在继续原任务。",
+    );
+    return this.resolveVideoIntent({
+      messageId: request.messageId,
+      text: request.originalText,
+      referenceImageIds: request.referenceImageIds,
+      conversationId: request.conversationId,
+      workflowId: request.workflowId ?? undefined,
+      videoModel: request.videoModel,
+    });
+  }
+
+  async updateReferenceImagePurpose(
+    referenceImageId: string,
+    input: UpdateReferenceImagePurposeRequest,
+  ): Promise<ReferenceImageView> {
+    const row = await this.referenceImages.findRow(referenceImageId);
+    if (!row) throw new NotFoundException({ code: "REFERENCE_IMAGE_NOT_FOUND", message: "参考图不存在。" });
+    if (row.workflowId && await this.repository.countCreatedGenerationJobs(row.workflowId) > 0) {
+      throw new ConflictException({
+        code: "REFERENCE_PURPOSE_RESTART_REQUIRED",
+        message: "该参考图已进入媒体任务；修改用途需要从一致性参考阶段重新开始。",
+      });
+    }
+    return this.referenceImages.updatePurpose(referenceImageId, input);
   }
 
   async getSnapshot(workflowId: string): Promise<VideoWorkflowSnapshot> {
@@ -1621,7 +2004,12 @@ export class VideoWorkflowService {
     return RecoverVideoWorkflowResponseSchema.parse({ accepted: true, workflowId });
   }
 
-  async interact(workflowId: string, interaction: VideoWorkflowInteraction): Promise<VideoWorkflowInteractionResult> {
+  async interact(
+    workflowId: string,
+    interaction: VideoWorkflowInteraction,
+    outputResolution?: VideoOutputResolution,
+    resolvedIntent?: "approve" | "revise",
+  ): Promise<VideoWorkflowInteractionResult> {
     const workflow = await this.repository.findWorkflow(workflowId);
     if (!workflow) throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
     assertCurrentPipelineDefinition(workflow);
@@ -1631,11 +2019,17 @@ export class VideoWorkflowService {
     if (workflow.status !== "awaiting_input" || workflow.currentVersion < 1) {
       throw new ConflictException({ code: "VIDEO_WORKFLOW_NOT_WAITING", message: "The workflow is not waiting for review input." });
     }
-    const intent = interaction.type === "approve"
+    if (outputResolution && await this.repository.countCreatedGenerationJobs(workflowId) > 0) {
+      throw new ConflictException({
+        code: "VIDEO_OUTPUT_RESOLUTION_LOCKED",
+        message: "Output resolution cannot change after generation jobs have been created. Restart from an earlier stage.",
+      });
+    }
+    const intent = resolvedIntent ?? (interaction.type === "approve"
       ? "approve"
       : interaction.type === "message"
         ? messageIntent(interaction.text)
-        : "revise";
+        : "revise");
     if (workflow.currentStageId === "assets" || workflow.currentStageId === "consistency_reference") {
       const executionStage = workflow.currentStageId;
       const batch = await this.repository.findCinematicAssetBatch(
@@ -1730,11 +2124,18 @@ export class VideoWorkflowService {
         });
       }
     }
-    const isClaimed = await this.repository.claimInteraction(
-      workflowId,
-      workflow.currentVersion,
-      intent === "approve",
-    );
+    const isClaimed = outputResolution
+      ? await this.repository.claimInteraction(
+          workflowId,
+          workflow.currentVersion,
+          intent === "approve",
+          outputResolution,
+        )
+      : await this.repository.claimInteraction(
+          workflowId,
+          workflow.currentVersion,
+          intent === "approve",
+        );
     if (!isClaimed) {
       throw new ConflictException({
         code: "VIDEO_WORKFLOW_NOT_WAITING",

@@ -42,6 +42,7 @@ describe("VideoWorkflowService interactions", () => {
     findWorkflowControlRequest: vi.fn(),
     toPendingWorkflowControl: vi.fn(),
     countActiveWorkflowJobs: vi.fn(),
+    countCreatedGenerationJobs: vi.fn(),
     findPreviousWorkflow: vi.fn(),
     claimInteraction: vi.fn(),
     claimCinematicAssetBatchApproval: vi.fn(),
@@ -60,6 +61,7 @@ describe("VideoWorkflowService interactions", () => {
     claimVideoJobRetry: vi.fn(),
     updateVideoJob: vi.fn(),
     updateVideoModel: vi.fn(),
+    updateOutputResolution: vi.fn(),
     updateWorkflow: vi.fn(),
     findWorkflowUserDecision: vi.fn(),
     findWorkflowScope: vi.fn(),
@@ -80,6 +82,12 @@ describe("VideoWorkflowService interactions", () => {
   const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn(), cancelQueuedWork: vi.fn() };
   const recovery = { recoverAgentRun: vi.fn() };
   const intentResolver = { resolve: vi.fn(), resolveTerminal: vi.fn() };
+  const referenceImages = {
+    analyze: vi.fn().mockResolvedValue([]),
+    bindToMessage: vi.fn(),
+    modelParts: vi.fn().mockResolvedValue([]),
+    readyRows: vi.fn().mockResolvedValue([]),
+  };
   const service = new VideoWorkflowService(
     repository as unknown as VideoWorkflowRepository,
     conversations as unknown as ConversationRepository,
@@ -90,6 +98,7 @@ describe("VideoWorkflowService interactions", () => {
     operations as unknown as VideoWorkflowOperations,
     recovery as unknown as WorkflowRecoveryService,
     intentResolver as unknown as UserIntentResolverService,
+    referenceImages as never,
   );
 
   beforeEach(() => {
@@ -100,6 +109,7 @@ describe("VideoWorkflowService interactions", () => {
     repository.findPendingWorkflowControl.mockResolvedValue(null);
     repository.createWorkflowControlRequest.mockResolvedValue(true);
     repository.countActiveWorkflowJobs.mockResolvedValue(0);
+    repository.countCreatedGenerationJobs.mockResolvedValue(0);
     repository.findWorkflowUserDecision.mockResolvedValue(null);
     repository.findWorkflowScope.mockResolvedValue({
       workflow: waitingWorkflow,
@@ -138,6 +148,7 @@ describe("VideoWorkflowService interactions", () => {
       workflowId: input.id,
     }));
     repository.updateVideoModel.mockResolvedValue(true);
+    repository.updateOutputResolution.mockResolvedValue(true);
     repository.claimVideoJobRetry.mockResolvedValue(true);
     conversations.createWithUserMessage.mockResolvedValue(undefined);
     conversations.listModelMessages.mockResolvedValue([]);
@@ -553,6 +564,79 @@ describe("VideoWorkflowService interactions", () => {
     });
     expect(repository.saveWorkflowUserDecision).toHaveBeenCalledBefore(repository.claimInteraction);
     expect(repository.markWorkflowUserDecisionApplied).toHaveBeenCalledWith("intent-message-1");
+  });
+
+  it("updates only the persisted output resolution without resuming Mastra", async () => {
+    intentResolver.resolve.mockResolvedValue({
+      intent: { type: "update_output_resolution", resolution: "1080p" },
+      source: "rule",
+      resolverVersion: "v2",
+      requiresConfirmation: false,
+    });
+
+    await expect(service.resolveUserIntent(waitingWorkflow.id, {
+      messageId: "resolution-message-1",
+      text: "请把成片分辨率改为 1080p",
+    })).resolves.toMatchObject({
+      accepted: true,
+      applied: true,
+      intent: { type: "update_output_resolution", resolution: "1080p" },
+    });
+    expect(repository.updateOutputResolution).toHaveBeenCalledWith({
+      workflowId: waitingWorkflow.id,
+      expectedStageId: "proposal",
+      expectedVersion: 1,
+      outputResolution: "1080p",
+    });
+    expect(runtime.resume).not.toHaveBeenCalled();
+    expect(repository.claimInteraction).not.toHaveBeenCalled();
+    expect(conversations.appendMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      role: "assistant",
+      content: "已将成片分辨率调整为 1080p，当前步骤无需重新生成。",
+    }));
+  });
+
+  it("claims a compound resolution change and approval in one repository transaction", async () => {
+    intentResolver.resolve.mockResolvedValue({
+      intent: { type: "approve", stageId: "proposal", outputResolution: "480p" },
+      source: "rule",
+      resolverVersion: "v2",
+      requiresConfirmation: false,
+    });
+
+    await expect(service.resolveUserIntent(waitingWorkflow.id, {
+      messageId: "resolution-approve-message",
+      text: "改为480p并继续",
+    })).resolves.toMatchObject({ applied: true });
+    expect(repository.claimInteraction).toHaveBeenCalledWith(
+      waitingWorkflow.id,
+      1,
+      true,
+      "480p",
+    );
+    expect(runtime.resume).toHaveBeenCalledWith(
+      "run-1",
+      { type: "approve" },
+      { workflowId: waitingWorkflow.id, stage: "proposal", version: 1 },
+    );
+  });
+
+  it("rejects a resolution update that loses the workflow state comparison", async () => {
+    repository.updateOutputResolution.mockResolvedValue(false);
+    intentResolver.resolve.mockResolvedValue({
+      intent: { type: "update_output_resolution", resolution: "1080p" },
+      source: "rule",
+      resolverVersion: "v2",
+      requiresConfirmation: false,
+    });
+
+    await expect(service.resolveUserIntent(waitingWorkflow.id, {
+      messageId: "resolution-message-stale",
+      text: "改为1080p",
+    })).rejects.toMatchObject({
+      response: { code: "VIDEO_OUTPUT_RESOLUTION_LOCKED" },
+    });
+    expect(runtime.resume).not.toHaveBeenCalled();
   });
 
   it("preserves an explicit proposal selection-and-advance instruction through resume", async () => {

@@ -120,6 +120,34 @@
       "when": 1787654400000,
       "tag": "0016_consistency_reference",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787817600000,
+      "tag": "0017_reference_images",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787904000000,
+      "tag": "0018_reference_image_resolution",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787990400000,
+      "tag": "0019_video_output_resolution",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788076800000,
+      "tag": "0020_unify_video_resolution",
+      "breakpoints": true
     }
   ]
 }

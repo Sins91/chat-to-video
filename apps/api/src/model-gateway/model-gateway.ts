@@ -7,6 +7,8 @@ import type {
   WorkflowToolActivity,
   WorkflowUserIntent,
   WorkflowStageId,
+  ReferenceImageAnalysis,
+  ReferenceImageDeclaration,
 } from "@chat-to-video/contracts";
 import type { UIMessageChunk } from "ai";
 
@@ -25,6 +27,19 @@ export type ModelToolActivityCallback =
   (activity: ModelToolActivity) => void | Promise<void>;
 
 export interface ModelGateway {
+  analyzeReferenceImages(request: {
+    requestId: string;
+    conversationId: string;
+    tenantId: string;
+    projectId: string;
+    images: ReadonlyArray<{
+      id: string;
+      url: string;
+      mimeType: "image/jpeg" | "image/png" | "image/webp";
+      declaration: ReferenceImageDeclaration | null;
+    }>;
+    userText: string;
+  }): Promise<ReferenceImageAnalysis[]>;
   classifyWorkflowIntent(request: {
     requestId: string;
     workflowId: string;
@@ -83,6 +98,11 @@ export interface ModelGateway {
     previousArtifact?: CinematicArtifact;
     approvedArtifacts: CinematicArtifact[];
     revisionRequest?: string;
+    referenceImages?: ReadonlyArray<{
+      id: string;
+      analysis: ReferenceImageAnalysis;
+      declaration: ReferenceImageDeclaration | null;
+    }>;
     onToolActivity?: ModelToolActivityCallback;
   }): Promise<CinematicArtifact>;
 }

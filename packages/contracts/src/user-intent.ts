@@ -1,7 +1,11 @@
 import { z } from "zod";
+import {
+  PendingReferenceResolutionSchema,
+  ReferenceImageIdsSchema,
+} from "./reference-image.js";
 
 import { WorkflowPipelineIdSchema, WorkflowStageIdSchema } from "./workflow-pipeline.js";
-import { VideoModelSchema } from "./video-workflow-common.js";
+import { VideoModelSchema, VideoOutputResolutionSchema } from "./video-workflow-common.js";
 
 const FeedbackSchema = z.string().trim().min(1).max(2_000);
 
@@ -37,17 +41,27 @@ export const WorkflowUserIntentSchema = z.discriminatedUnion("type", [
     type: z.literal("cancel_pending_action"),
     controlRequestId: z.string().uuid().optional(),
   }).strict(),
-  z.object({ type: z.literal("approve"), stageId: WorkflowStageIdSchema }).strict(),
+  z.object({
+    type: z.literal("approve"),
+    stageId: WorkflowStageIdSchema,
+    outputResolution: VideoOutputResolutionSchema.optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("update_output_resolution"),
+    resolution: VideoOutputResolutionSchema,
+  }).strict(),
   z.object({
     type: z.literal("approve_with_changes"),
     stageId: WorkflowStageIdSchema,
     feedback: FeedbackSchema,
     advanceAfterChange: z.boolean(),
+    outputResolution: VideoOutputResolutionSchema.optional(),
   }).strict(),
   z.object({
     type: z.literal("revise_current"),
     stageId: WorkflowStageIdSchema,
     feedback: FeedbackSchema,
+    outputResolution: VideoOutputResolutionSchema.optional(),
   }).strict(),
   z.object({
     type: z.literal("restart_from"),
@@ -70,8 +84,13 @@ export const WorkflowIntentDecisionSchema = z.object({
 
 export const ResolveWorkflowUserIntentRequestSchema = z.object({
   messageId: z.string().trim().min(1).max(100),
-  text: z.string().trim().min(1).max(2_000),
-}).strict();
+  text: z.string().trim().max(2_000),
+  referenceImageIds: ReferenceImageIdsSchema,
+}).strict().superRefine((request, context) => {
+  if (!request.text && request.referenceImageIds.length === 0) {
+    context.addIssue({ code: "custom", message: "Workflow intent requires text or a reference image." });
+  }
+});
 
 export const ResolveVideoWorkflowIntentRequestSchema = ResolveWorkflowUserIntentRequestSchema.extend({
   conversationId: z.string().uuid().optional(),
@@ -83,11 +102,12 @@ export const ResolveVideoWorkflowIntentRequestSchema = ResolveWorkflowUserIntent
 export const ResolveWorkflowUserIntentResponseSchema = WorkflowIntentDecisionSchema.extend({
   accepted: z.literal(true),
   applied: z.boolean(),
+  pendingReferenceResolution: PendingReferenceResolutionSchema.nullable().optional(),
 }).strict();
 
 export type WorkflowUserIntent = z.infer<typeof WorkflowUserIntentSchema>;
 export type WorkflowIntentDecision = z.infer<typeof WorkflowIntentDecisionSchema>;
 export type WorkflowIntentResolverSource = z.infer<typeof WorkflowIntentResolverSourceSchema>;
-export type ResolveWorkflowUserIntentRequest = z.infer<typeof ResolveWorkflowUserIntentRequestSchema>;
+export type ResolveWorkflowUserIntentRequest = z.input<typeof ResolveWorkflowUserIntentRequestSchema>;
 export type ResolveWorkflowUserIntentResponse = z.infer<typeof ResolveWorkflowUserIntentResponseSchema>;
-export type ResolveVideoWorkflowIntentRequest = z.infer<typeof ResolveVideoWorkflowIntentRequestSchema>;
+export type ResolveVideoWorkflowIntentRequest = z.input<typeof ResolveVideoWorkflowIntentRequestSchema>;

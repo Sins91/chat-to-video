@@ -27,6 +27,7 @@ import {
   CINEMATIC_REFERENCE_ANALYST_SKILL_ID,
   resolveAgentSkillRoot,
 } from "../src/agent-extensions/agent-skill.catalog.js";
+import { createPromptCompressionRuntime } from "../src/agent-extensions/prompt-compression.tool.js";
 
 const requestId = "00000000-0000-4000-8000-000000000001";
 const conversationId = "00000000-0000-4000-8000-000000000002";
@@ -139,6 +140,14 @@ describe("agent extension boundaries", () => {
       "image_selector",
       "video_selector",
     ]));
+    const promptCompression = createPromptCompressionRuntime(() =>
+      Promise.resolve({ prompt: "压缩结果" }));
+    expect(Object.keys(registry.forCinematic("scene_plan", promptCompression.tool)))
+      .toContain("prompt_compressor");
+    expect(Object.keys(registry.forCinematic("proposal", promptCompression.tool)))
+      .not.toContain("prompt_compressor");
+    expect(Object.keys(registry.forStoryboard(promptCompression.tool)))
+      .toEqual(["prompt_compressor"]);
   });
 
   it("returns shared model constraints", () => {

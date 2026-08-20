@@ -1,5 +1,7 @@
 import {
+  extractVideoOutputResolutionUpdate,
   getWorkflowStageIndex,
+  getStandaloneVideoOutputResolutionUpdate,
   getVideoWorkflowIntentHint,
   findWorkflowStage,
   parseWorkflowRestartTarget,
@@ -76,6 +78,7 @@ export class UserIntentResolverService {
   private revisionRuleDecision(
     context: ResolveContext,
     text: string,
+    outputResolution?: ReturnType<typeof getStandaloneVideoOutputResolutionUpdate>,
   ): WorkflowIntentDecision | null {
     const currentStage = findWorkflowStage(context.pipeline, context.currentStage);
     if (!currentStage?.allowsRevision || this.mentionsEarlierStage(context, text)) return null;
@@ -92,7 +95,12 @@ export class UserIntentResolverService {
     }
     if (!REVISION_ACTION_PATTERN.test(text)) return null;
     return WorkflowIntentDecisionSchema.parse({
-      intent: { type: "revise_current", stageId: context.currentStage, feedback: text },
+      intent: {
+        type: "revise_current",
+        stageId: context.currentStage,
+        feedback: text,
+        ...(outputResolution ? { outputResolution } : {}),
+      },
       source: "rule",
       resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION,
       requiresConfirmation: false,
@@ -100,7 +108,18 @@ export class UserIntentResolverService {
   }
 
   private ruleDecision(context: ResolveContext): WorkflowIntentDecision | null {
-    const text = context.text.normalize("NFKC").trim();
+    const originalText = context.text.normalize("NFKC").trim();
+    const extractedResolution = extractVideoOutputResolutionUpdate(originalText);
+    const text = extractedResolution?.remainingText || originalText;
+    const outputResolution = getStandaloneVideoOutputResolutionUpdate(originalText);
+    if (context.workflowStatus === "awaiting_input" && outputResolution) {
+      return WorkflowIntentDecisionSchema.parse({
+        intent: { type: "update_output_resolution", resolution: outputResolution },
+        source: "rule",
+        resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION,
+        requiresConfirmation: false,
+      });
+    }
     if (QUESTION_PATTERN.test(text)) {
       return WorkflowIntentDecisionSchema.parse({
         intent: { type: "chat" }, source: "rule",
@@ -118,6 +137,7 @@ export class UserIntentResolverService {
         intent: {
           type: "approve_with_changes", stageId: context.currentStage,
           feedback: text, advanceAfterChange: true,
+          ...(extractedResolution ? { outputResolution: extractedResolution.resolution } : {}),
         },
         source: "rule", resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION,
         requiresConfirmation: false,
@@ -129,6 +149,7 @@ export class UserIntentResolverService {
         intent: {
           type: "approve_with_changes", stageId: context.currentStage,
           feedback: text, advanceAfterChange: false,
+          ...(extractedResolution ? { outputResolution: extractedResolution.resolution } : {}),
         },
         source: "rule", resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION,
         requiresConfirmation: false,
@@ -136,24 +157,35 @@ export class UserIntentResolverService {
     }
     if (classifyApprovalIntent(text) === "approve") {
       return WorkflowIntentDecisionSchema.parse({
-        intent: { type: "approve", stageId: context.currentStage }, source: "rule",
+        intent: {
+          type: "approve",
+          stageId: context.currentStage,
+          ...(extractedResolution ? { outputResolution: extractedResolution.resolution } : {}),
+        }, source: "rule",
         resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION, requiresConfirmation: false,
       });
     }
     if (findWorkflowStage(context.pipeline, context.currentStage)?.allowsRevision === true &&
         DIRECTION_SELECTION_PATTERN.test(text)) {
       return WorkflowIntentDecisionSchema.parse({
-        intent: { type: "revise_current", stageId: context.currentStage, feedback: text },
+        intent: {
+          type: "revise_current",
+          stageId: context.currentStage,
+          feedback: text,
+          ...(extractedResolution ? { outputResolution: extractedResolution.resolution } : {}),
+        },
         source: "rule", resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION,
         requiresConfirmation: false,
       });
     }
-    return this.revisionRuleDecision(context, text);
+    return this.revisionRuleDecision(context, text, extractedResolution?.resolution);
   }
 
   async resolve(context: ResolveContext): Promise<WorkflowIntentDecision> {
     const rule = this.ruleDecision(context);
     if (rule) return rule;
+    const extractedResolution = extractVideoOutputResolutionUpdate(context.text);
+    const effectiveText = extractedResolution?.remainingText || context.text;
     try {
       const classified = await this.modelGateway.classifyWorkflowIntent({
         requestId: context.requestId,
@@ -161,7 +193,7 @@ export class UserIntentResolverService {
         conversationId: context.conversationId,
         tenantId: context.tenantId,
         projectId: context.projectId,
-        userMessage: context.text,
+        userMessage: effectiveText,
         workflowStatus: context.workflowStatus,
         currentStage: context.currentStage,
         currentVersion: context.currentVersion,
@@ -201,9 +233,13 @@ export class UserIntentResolverService {
         }
         return classified;
       })();
-      const guidedIntent = intent.type === "clarify"
-        ? { ...intent, question: addClarificationGuidance(intent.question, context) }
+      const intentWithResolution = extractedResolution &&
+          (intent.type === "approve" || intent.type === "revise_current" || intent.type === "approve_with_changes")
+        ? { ...intent, outputResolution: extractedResolution.resolution }
         : intent;
+      const guidedIntent = intentWithResolution.type === "clarify"
+        ? { ...intentWithResolution, question: addClarificationGuidance(intentWithResolution.question, context) }
+        : intentWithResolution;
       return WorkflowIntentDecisionSchema.parse({
         intent: guidedIntent,
         source: "model",

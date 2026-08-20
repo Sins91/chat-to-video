@@ -7,10 +7,11 @@ import { ChatAgentService } from "./chat-agent.service.js";
 import { ConversationModule } from "./conversation/conversation.module.js";
 import { DatabaseSchemaExceptionFilter } from "./database-schema-exception.filter.js";
 import { ModelGatewayModule } from "./model-gateway/model-gateway.module.js";
+import { ReferenceImageModule } from "./reference-image/reference-image.module.js";
 import { VideoWorkflowModule } from "./video-workflow/video-workflow.module.js";
 
 @Module({
-  imports: [ConversationModule, ModelGatewayModule, VideoWorkflowModule],
+  imports: [ConversationModule, ModelGatewayModule, ReferenceImageModule, VideoWorkflowModule],
   controllers: [
     AppController,
     ChatAgentController,

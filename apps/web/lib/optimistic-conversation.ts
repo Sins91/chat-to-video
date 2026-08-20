@@ -1,12 +1,14 @@
 import {
   ConversationTextEntrySchema,
   type ConversationEntry,
+  type ReferenceImageView,
 } from "@chat-to-video/contracts";
 
 type OptimisticUserEntryInput = {
   messageId: string;
   text: string;
   createdAt: string;
+  referenceImages?: readonly ReferenceImageView[];
 };
 
 export const appendOptimisticUserEntry = (
@@ -14,7 +16,8 @@ export const appendOptimisticUserEntry = (
   input: OptimisticUserEntryInput,
 ): ConversationEntry[] => {
   const content = input.text.trim();
-  if (!content || entries.some((entry) => entry.type === "text" && entry.id === input.messageId)) {
+  const referenceImages = input.referenceImages ?? [];
+  if ((!content && referenceImages.length === 0) || entries.some((entry) => entry.type === "text" && entry.id === input.messageId)) {
     return entries;
   }
   return [
@@ -24,6 +27,7 @@ export const appendOptimisticUserEntry = (
       type: "text",
       role: "user",
       content,
+      referenceImages,
       createdAt: input.createdAt,
     }),
   ];

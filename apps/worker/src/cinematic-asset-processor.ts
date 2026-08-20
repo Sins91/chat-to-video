@@ -204,11 +204,13 @@ export class CinematicAssetProcessor {
   }> {
     if (payload.kind === "title_card") {
       await reportProgress?.(25, "正在渲染标题卡。", "render-title-card");
+      const dimensions = getVideoFrameDimensions(payload.outputResolution, payload.aspectRatio);
+      const titleCard = await renderTitleCard({
+        title: payload.prompt,
+        aspectRatio: payload.aspectRatio,
+      });
       return {
-        body: await renderTitleCard({
-          title: payload.prompt,
-          aspectRatio: payload.aspectRatio,
-        }),
+        body: await resizeImageToVideoFrame({ body: titleCard, ...dimensions }),
         contentType: "image/png",
       };
     }
@@ -226,6 +228,7 @@ export class CinematicAssetProcessor {
         payload.prompt,
         payload.durationSeconds,
         await this.referenceUrls(payload),
+        payload.generationResolution,
       );
       if (!existingProviderTaskId) {
         await this.repository.updateCinematicAssetJob(payload.assetId, { providerTaskId });
@@ -259,16 +262,10 @@ export class CinematicAssetProcessor {
       });
       await reportProgress?.(90, `镜头 ${payload.sceneOrder ?? "—"} 图片已生成，正在下载。`, "download");
       const image = await client.download(client.imageUrl(task), "image/");
-      if (payload.stageId === "consistency_reference") {
-        const dimensions = getVideoFrameDimensions(payload.outputResolution, payload.aspectRatio);
-        return {
-          body: await resizeImageToVideoFrame({ body: image.body, ...dimensions }),
-          contentType: "image/png",
-          providerTaskId,
-        };
-      }
+      const dimensions = getVideoFrameDimensions(payload.outputResolution, payload.aspectRatio);
       return {
-        ...image,
+        body: await resizeImageToVideoFrame({ body: image.body, ...dimensions }),
+        contentType: "image/png",
         providerTaskId,
       };
     }

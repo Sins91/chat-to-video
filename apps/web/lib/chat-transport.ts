@@ -4,11 +4,11 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 const messageText = (message: UIMessage): string =>
   message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
 
-export const toChatAgentRequest = (messages: UIMessage[], conversationId?: string): ChatAgentRequest => {
+export const toChatAgentRequest = (messages: UIMessage[], conversationId?: string, referenceImageIds: string[] = []): ChatAgentRequest => {
   const message = messages.findLast((candidate) => candidate.role === "user");
   return ChatAgentRequestSchema.parse({
     conversationId,
-    message: message ? { id: message.id, content: messageText(message) } : undefined,
+    message: message ? { id: message.id, content: messageText(message), referenceImageIds } : undefined,
   });
 };
 
@@ -24,6 +24,11 @@ export const createChatTransport = (options: {
       if (conversationId) options.onConversationId(conversationId);
       return response;
     },
-    prepareSendMessagesRequest: ({ messages }) => ({ body: toChatAgentRequest(messages, options.getConversationId()) }),
+    prepareSendMessagesRequest: ({ messages, body }) => {
+      const ids = typeof body === "object" && body !== null && "referenceImageIds" in body && Array.isArray(body.referenceImageIds)
+        ? body.referenceImageIds.filter((id): id is string => typeof id === "string")
+        : [];
+      return { body: toChatAgentRequest(messages, options.getConversationId(), ids) };
+    },
   });
 };

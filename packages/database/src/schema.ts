@@ -14,6 +14,14 @@ import type {
   WorkflowControlStatus,
   WorkflowImportedArtifactCandidate,
 } from "@chat-to-video/contracts";
+import type {
+  ReferenceImageAnalysis,
+  ReferenceImageDeclaration,
+  ReferenceImageResolution,
+  VideoGenerationResolution,
+  VideoModel,
+  VideoOutputResolution,
+} from "@chat-to-video/contracts";
 import type { Storyboard, VideoWorkflowEvent, WorkflowUserIntent } from "@chat-to-video/contracts";
 import {
   decimal,
@@ -36,6 +44,8 @@ export const videoWorkflows = mysqlTable("video_workflows", {
   pipelineId: varchar("pipeline_id", { length: 64 }).notNull().default("cinematic"),
   videoModel: varchar("video_model", { length: 64 }).notNull(),
   durationSeconds: int("duration_seconds").notNull().default(10),
+  outputResolution: varchar("output_resolution", { length: 16 })
+    .$type<VideoOutputResolution>().notNull().default("480p"),
   initialPrompt: text("initial_prompt").notNull(),
   status: varchar("status", { length: 32 }).notNull(),
   cinematicStage: varchar("cinematic_stage", { length: 32 }).notNull().default("research"),
@@ -105,6 +115,54 @@ export const conversationMessages = mysqlTable("conversation_messages", {
   index("conversation_messages_order_idx").on(table.conversationId, table.id),
 ]);
 
+export const referenceImages = mysqlTable("reference_images", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  tenantId: varchar("tenant_id", { length: 64 }).notNull(),
+  projectId: varchar("project_id", { length: 64 }).notNull(),
+  conversationId: varchar("conversation_id", { length: 36 }),
+  messageId: varchar("message_id", { length: 100 }),
+  workflowId: varchar("workflow_id", { length: 36 }),
+  objectKey: varchar("object_key", { length: 512 }).notNull(),
+  fileName: varchar("file_name", { length: 255 }).notNull(),
+  declaredMimeType: varchar("declared_mime_type", { length: 100 }).notNull(),
+  mimeType: varchar("mime_type", { length: 100 }),
+  declaredSizeBytes: int("declared_size_bytes").notNull(),
+  sizeBytes: int("size_bytes"),
+  width: int("width"),
+  height: int("height"),
+  sha256: varchar("sha256", { length: 64 }),
+  status: varchar("status", { length: 32 }).notNull(),
+  declaration: json("declaration_json").$type<ReferenceImageDeclaration>(),
+  analysis: json("analysis_json").$type<ReferenceImageAnalysis>(),
+  resolution: json("resolution_json").$type<ReferenceImageResolution>(),
+  errorCode: varchar("error_code", { length: 64 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("reference_images_object_key_uq").on(table.objectKey),
+  index("reference_images_scope_status_idx").on(table.tenantId, table.projectId, table.status),
+  index("reference_images_message_idx").on(table.conversationId, table.messageId),
+  index("reference_images_workflow_idx").on(table.workflowId),
+]);
+
+export const referenceImageResolutionRequests = mysqlTable("reference_image_resolution_requests", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  conversationId: varchar("conversation_id", { length: 36 }).notNull(),
+  messageId: varchar("message_id", { length: 100 }).notNull(),
+  workflowId: varchar("workflow_id", { length: 36 }),
+  workflowVersion: int("workflow_version"),
+  originalText: text("original_text").notNull(),
+  referenceImageIds: json("reference_image_ids_json").$type<string[]>().notNull(),
+  videoModel: varchar("video_model", { length: 64 }).$type<VideoModel>().notNull(),
+  status: varchar("status", { length: 16 }).$type<"pending" | "resolved" | "expired">().notNull(),
+  expiresAt: timestamp("expires_at", { mode: "date", fsp: 3 }).notNull(),
+  resolvedAt: timestamp("resolved_at", { mode: "date", fsp: 3 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("reference_resolution_message_uq").on(table.conversationId, table.messageId),
+  index("reference_resolution_pending_idx").on(table.conversationId, table.status, table.expiresAt),
+]);
+
 export const storyboardVersions = mysqlTable("storyboard_versions", {
   id: varchar("id", { length: 36 }).primaryKey(),
   workflowId: varchar("workflow_id", { length: 36 }).notNull(),
@@ -155,6 +213,8 @@ export const videoJobs = mysqlTable("video_jobs", {
   progress: int("progress").notNull().default(0),
   providerTaskId: varchar("provider_task_id", { length: 200 }),
   capabilityResolutions: json("capability_resolutions").$type<WorkflowCapabilityResolution[]>(),
+  outputResolution: varchar("output_resolution", { length: 16 })
+    .$type<VideoOutputResolution>().notNull().default("720p"),
   objectKey: varchar("object_key", { length: 512 }).notNull(),
   errorMessage: text("error_message"),
   supersededAt: timestamp("superseded_at", { mode: "date", fsp: 3 }),
@@ -336,6 +396,9 @@ export const cinematicAssetJobs = mysqlTable("cinematic_asset_jobs", {
   status: varchar("status", { length: 32 }).notNull(),
   progress: int("progress").notNull().default(0),
   capabilityResolution: json("capability_resolution").$type<WorkflowCapabilityResolution>().notNull(),
+  outputResolution: varchar("output_resolution", { length: 16 }).$type<VideoOutputResolution>(),
+  generationResolution: varchar("generation_resolution", { length: 16 })
+    .$type<VideoGenerationResolution>(),
   providerTaskId: varchar("provider_task_id", { length: 200 }),
   objectKey: varchar("object_key", { length: 512 }).notNull(),
   mimeType: varchar("mime_type", { length: 100 }),
@@ -442,6 +505,8 @@ export const agentExtensionExecutions = mysqlTable("agent_extension_executions",
 export type VideoWorkflowRow = typeof videoWorkflows.$inferSelect;
 export type ConversationRow = typeof conversations.$inferSelect;
 export type ConversationMessageRow = typeof conversationMessages.$inferSelect;
+export type ReferenceImageRow = typeof referenceImages.$inferSelect;
+export type ReferenceImageResolutionRequestRow = typeof referenceImageResolutionRequests.$inferSelect;
 export type StoryboardVersionRow = typeof storyboardVersions.$inferSelect;
 export type CinematicArtifactVersionRow = typeof cinematicArtifactVersions.$inferSelect;
 export type WorkflowArtifactVersionRow = typeof workflowArtifactVersions.$inferSelect;

@@ -201,7 +201,7 @@ describe("two-step video workflow UI", () => {
       readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
     ]);
-    expect(panel).toContain("await workflow.resolveControlIntent(text, messageId)");
+    expect(panel).toContain("await workflow.resolveControlIntent(text, messageId, message.referenceImages)");
     expect(panel).not.toContain("await workflow.startWorkflow(text, crypto.randomUUID())");
     expect(panel).toContain('controlRoute.route === "workflow"');
     expect(panel).not.toContain('workflowStatus === "failed" && workflow.snapshot?.videoJob');
@@ -291,8 +291,8 @@ describe("two-step video workflow UI", () => {
     expect(conversation).not.toContain("ChainOfThought");
     expect(conversation).toContain("progressHistory.map");
     expect(conversation).toContain("workflowStepProgressHistory");
-    expect(conversation).toContain("progress.toolActivity.toolLabel");
     expect(conversation).toContain("progress.toolActivity.summary");
+    expect(conversation).not.toContain("`${progress.toolActivity.toolLabel} · ${progress.toolActivity.summary}`");
     expect(conversation).toContain("progress.toolActivity ? activeActivityDetail : progress.stepLabel");
     expect(provider).toContain("appendWorkflowStepProgress");
     expect(provider).toContain("stepProgressHistory");

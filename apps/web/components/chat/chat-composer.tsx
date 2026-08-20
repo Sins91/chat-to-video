@@ -1,10 +1,12 @@
 "use client";
 
-import type { VideoModel } from "@chat-to-video/contracts";
-import { ChevronDownIcon, Clock3Icon, VideoIcon, XIcon } from "lucide-react";
-import { useCallback, useState, type Ref } from "react";
+import { MAX_REFERENCE_IMAGE_BYTES, MAX_REFERENCE_IMAGES_PER_MESSAGE, type ReferenceImageView, type VideoModel } from "@chat-to-video/contracts";
+import { ChevronDownIcon, Clock3Icon, ImagePlusIcon, VideoIcon, XIcon } from "lucide-react";
+import { forwardRef, useCallback, useImperativeHandle, useRef, useState, type ChangeEvent, type ClipboardEvent, type Ref } from "react";
 
 import { Button } from "@/components/ui/button";
+import { abandonReferenceImage, uploadReferenceImage } from "@/lib/reference-image-client";
+import { Attachment, AttachmentFallback, AttachmentImage, AttachmentInfo, AttachmentPreview, AttachmentRemove, Attachments, AttachmentStatus, type AttachmentData } from "@/src/components/ai-elements/attachments";
 import { getVideoModelPresentation, VIDEO_MODELS } from "@/lib/video-models";
 import {
   ModelSelector,
@@ -20,6 +22,7 @@ import {
 import {
   PromptInput,
   PromptInputBody,
+  PromptInputHeader,
   PromptInputFooter,
   type PromptInputMessage,
   PromptInputSubmit,
@@ -43,7 +46,15 @@ import {
 export interface QueuedChatInput {
   readonly id: string;
   readonly text: string;
+  readonly referenceImages: readonly ReferenceImageView[];
 }
+
+export interface SubmittedChatInput {
+  readonly text: string;
+  readonly referenceImages: readonly ReferenceImageView[];
+}
+
+type PendingReferenceImage = AttachmentData & { referenceImage: ReferenceImageView | null };
 
 interface ChatComposerProps {
   canStop: boolean;
@@ -53,7 +64,7 @@ interface ChatComposerProps {
   onCancelQueuedInput: (id: string) => void;
   onInputChange: (input: string) => void;
   onStop: () => void;
-  onSubmitText: (text: string) => void;
+  onSubmitMessage: (message: SubmittedChatInput) => void;
   onVideoModelChange: (model: VideoModel) => void;
   placeholder?: string;
   queuedInputs: readonly QueuedChatInput[];
@@ -62,7 +73,11 @@ interface ChatComposerProps {
   willQueueInput: boolean;
 }
 
-export function ChatComposer({
+export interface ChatComposerHandle {
+  addFiles: (files: File[]) => void;
+}
+
+export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer({
   canStop,
   input,
   isGenerating,
@@ -70,16 +85,84 @@ export function ChatComposer({
   onCancelQueuedInput,
   onInputChange,
   onStop,
-  onSubmitText,
+  onSubmitMessage,
   onVideoModelChange,
   placeholder = "输入消息…",
   queuedInputs,
   textareaRef,
   videoModel,
   willQueueInput,
-}: ChatComposerProps) {
+}: ChatComposerProps, ref) {
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
-  const handleSubmit = useCallback((message: PromptInputMessage) => onSubmitText(message.text), [onSubmitText]);
+  const [pendingImages, setPendingImages] = useState<PendingReferenceImage[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const removedUploadIdsRef = useRef(new Set<string>());
+  const readyImages = pendingImages.flatMap((image) => image.referenceImage ? [image.referenceImage] : []);
+  const isUploading = pendingImages.some((image) => image.status !== "ready" && image.status !== "rejected");
+  const handleSubmit = useCallback((message: PromptInputMessage) => {
+    if (isUploading || (!message.text.trim() && readyImages.length === 0)) return;
+    onSubmitMessage({ text: message.text, referenceImages: readyImages });
+    setPendingImages([]);
+    setUploadError(null);
+  }, [isUploading, onSubmitMessage, readyImages]);
+  const addFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return;
+    const remaining = MAX_REFERENCE_IMAGES_PER_MESSAGE - pendingImages.length;
+    const selected = files.slice(0, Math.max(0, remaining));
+    const invalid = selected.find((file) =>
+      !["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > MAX_REFERENCE_IMAGE_BYTES
+    );
+    if (invalid || selected.length !== files.length) {
+      setUploadError(`最多上传 ${MAX_REFERENCE_IMAGES_PER_MESSAGE} 张 JPEG、PNG 或 WebP，每张不超过 10 MB。`);
+      return;
+    }
+    setUploadError(null);
+    for (const file of selected) {
+      const localId = crypto.randomUUID();
+      const localUrl = URL.createObjectURL(file);
+      setPendingImages((current) => [...current, {
+        id: localId,
+        filename: file.name,
+        mediaType: file.type,
+        url: localUrl,
+        status: "uploading",
+        referenceImage: null,
+      }]);
+      void uploadReferenceImage(file).then((referenceImage) => {
+        URL.revokeObjectURL(localUrl);
+        if (removedUploadIdsRef.current.delete(localId)) {
+          void abandonReferenceImage(referenceImage.id).catch(() => undefined);
+          return;
+        }
+        setPendingImages((current) => current.map((item) => item.id === localId
+          ? { ...item, id: referenceImage.id, url: referenceImage.previewUrl, status: "ready", referenceImage }
+          : item));
+      }).catch((error: unknown) => {
+        setPendingImages((current) => current.map((item) => item.id === localId ? { ...item, status: "rejected" } : item));
+        setUploadError(error instanceof Error ? error.message : "参考图上传失败。");
+      });
+    }
+  }, [pendingImages.length]);
+  const handleFiles = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(event.currentTarget.files ?? [])];
+    event.currentTarget.value = "";
+    addFiles(files);
+  }, [addFiles]);
+  useImperativeHandle(ref, () => ({ addFiles }), [addFiles]);
+  const handlePaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+    if (files.length === 0) return;
+    event.preventDefault();
+    addFiles(files);
+  }, [addFiles]);
+  const removeImage = useCallback((id: string) => {
+    const removed = pendingImages.find((item) => item.id === id);
+    if (removed?.url?.startsWith("blob:")) URL.revokeObjectURL(removed.url);
+    if (removed?.referenceImage) void abandonReferenceImage(removed.referenceImage.id).catch(() => undefined);
+    else if (removed) removedUploadIdsRef.current.add(removed.id);
+    setPendingImages((current) => current.filter((item) => item.id !== id));
+  }, [pendingImages]);
   const selectedModel = getVideoModelPresentation(videoModel);
 
   return <div className="border-t border-border bg-background/95 px-4 py-3 backdrop-blur-sm">
@@ -115,12 +198,25 @@ export function ChatComposer({
       </Queue>
     ) : null}
     <PromptInput className="mx-auto w-full max-w-3xl rounded-2xl border border-border bg-card shadow-sm transition-shadow focus-within:ring-2 focus-within:ring-foreground/15" onSubmit={handleSubmit}>
+      {pendingImages.length > 0 ? <PromptInputHeader>
+        <Attachments aria-label="待发送参考图" className="w-full" variant="inline">
+          {pendingImages.map((image) => <Attachment className="w-24" data={image} key={image.id}>
+            <AttachmentPreview className="aspect-video">
+              {image.url ? <AttachmentImage alt={image.filename} src={image.url} /> : <AttachmentFallback />}
+            </AttachmentPreview>
+            <AttachmentInfo title={image.filename}>{image.filename}{image.referenceImage?.declaration ? ` · ${image.referenceImage.declaration.purpose}` : ""}</AttachmentInfo>
+            <AttachmentStatus status={image.status} />
+            <AttachmentRemove onClick={() => removeImage(image.id)} />
+          </Attachment>)}
+        </Attachments>
+      </PromptInputHeader> : null}
       <PromptInputBody>
         <PromptInputTextarea
           aria-label="聊天或视频创意输入"
           className="min-h-16 max-h-44 text-[13px] text-foreground placeholder:text-muted-foreground"
           maxLength={8_000}
           onChange={(event) => onInputChange(event.currentTarget.value)}
+          onPaste={handlePaste}
           placeholder={placeholder}
           ref={textareaRef}
           value={input}
@@ -128,6 +224,10 @@ export function ChatComposer({
       </PromptInputBody>
       <PromptInputFooter className="font-sans">
         <PromptInputTools>
+          <input accept="image/jpeg,image/png,image/webp" className="sr-only" multiple onChange={handleFiles} ref={fileInputRef} type="file" />
+          <Button aria-label="添加参考图" className="size-7" disabled={pendingImages.length >= MAX_REFERENCE_IMAGES_PER_MESSAGE} onClick={() => fileInputRef.current?.click()} size="icon" type="button" variant="ghost">
+            <ImagePlusIcon className="size-4" />
+          </Button>
           <ModelSelector onOpenChange={setIsModelSelectorOpen} open={isModelSelectorOpen}>
             <ModelSelectorTrigger
               disabled={isVideoModelLocked || isGenerating}
@@ -167,12 +267,13 @@ export function ChatComposer({
         </PromptInputTools>
         <PromptInputSubmit
           aria-label={canStop ? "停止当前 Agent" : willQueueInput ? "加入发送队列" : "发送消息"}
-          disabled={!canStop && !input.trim()}
+          disabled={!canStop && (isUploading || (!input.trim() && readyImages.length === 0))}
           onStop={onStop}
           status={canStop ? "streaming" : "ready"}
         />
       </PromptInputFooter>
     </PromptInput>
+    {uploadError ? <p className="mx-auto mt-2 max-w-3xl text-xs text-destructive" role="alert">{uploadError}</p> : null}
     <p className="mt-2 text-center text-[10px] text-muted-foreground">
       {queuedInputs.length > 0
         ? `已有 ${queuedInputs.length} 条消息排队，将在 Agent 完成当前回复后按序发送。`
@@ -181,4 +282,4 @@ export function ChatComposer({
           : "工作流运行期间仍可聊天；只有明确的确认或修改指令才会推进当前视频任务。"}
     </p>
   </div>;
-}
+});

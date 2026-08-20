@@ -4,6 +4,8 @@ import {
   CINEMATIC_PIPELINE_DEFINITION,
   findWorkflowStage,
   type ConversationEntry,
+  type ReferenceImagePurpose,
+  type ReferenceImageView,
   type StoryboardVersion,
   type VideoWorkflowSnapshot,
   type WorkflowStepProgress,
@@ -41,6 +43,15 @@ import {
 } from "@/components/video-workflow/cinematic-artifact-presentation";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/src/components/ai-elements/conversation";
 import {
+  Attachment,
+  AttachmentFallback,
+  AttachmentImage,
+  AttachmentImageLightbox,
+  AttachmentInfo,
+  AttachmentPreview,
+  Attachments,
+} from "@/src/components/ai-elements/attachments";
+import {
   Confirmation,
   ConfirmationAction,
   ConfirmationActions,
@@ -59,6 +70,12 @@ interface ChatConversationProps {
   isWorkflowSubmitting: boolean;
   messages: UIMessage[];
   onRecoverWorkflow: () => void;
+  onResolveReferenceImagePurpose: (
+    resolutionRequestId: string,
+    referenceImageId: string,
+    purpose: ReferenceImagePurpose,
+  ) => void;
+  onUpdateReferenceImagePurpose: (referenceImageId: string, purpose: ReferenceImagePurpose) => void;
   snapshot: VideoWorkflowSnapshot | null;
   status: ChatStatus;
   videoFocusRequest: { requestId: number; videoId: string } | null;
@@ -109,13 +126,20 @@ const splitRestartConfirmationMessage = (text: string): { notice?: string; text:
     : { text };
 };
 
-const TextMessage = memo(function TextMessage({ copyFeedback, id, isAnimating = false, notice, onCopy, processingSeconds = 0, role, text }: {
+type MessageReferenceImage = Pick<ReferenceImageView, "fileName" | "id" | "previewUrl"> & {
+  mimeType: string;
+  label?: string | null;
+  purpose?: string | null;
+};
+
+const TextMessage = memo(function TextMessage({ copyFeedback, id, isAnimating = false, notice, onCopy, processingSeconds = 0, referenceImages = [], role, text }: {
   copyFeedback: CopyFeedback;
   id: string;
   isAnimating?: boolean;
   notice?: string;
   onCopy: (id: string, text: string) => void;
   processingSeconds?: number;
+  referenceImages?: readonly MessageReferenceImage[];
   role: UIMessage["role"];
   text: string;
 }) {
@@ -124,7 +148,17 @@ const TextMessage = memo(function TextMessage({ copyFeedback, id, isAnimating = 
   const copyLabel = isCopied ? "已复制" : hasCopyFailed ? "复制失败" : "复制";
   const copyText = notice ? `${text}\n\n${notice}` : text;
   return <Message className={role === "assistant" ? "max-w-full" : undefined} from={role}>
-    <MessageContent className={role === "assistant" ? "w-full" : undefined}>{role === "assistant" ? <><ProcessingTimeHeader seconds={processingSeconds} /><MessageResponse className="cursor-text" isAnimating={isAnimating}>{text}</MessageResponse>{notice ? <WorkflowReviewNotice text={notice} /> : null}</> : <span className="cursor-text whitespace-pre-wrap">{text}</span>}</MessageContent>
+    <MessageContent className={role === "assistant" ? "w-full" : undefined}>{role === "assistant" ? <><ProcessingTimeHeader seconds={processingSeconds} /><MessageResponse className="cursor-text" isAnimating={isAnimating}>{text}</MessageResponse>{notice ? <WorkflowReviewNotice text={notice} /> : null}</> : <>
+      {referenceImages.length > 0 ? <Attachments className="mb-2" variant="grid">
+        {referenceImages.map((image) => <Attachment data={{ id: image.id, filename: image.fileName, mediaType: image.mimeType, url: image.previewUrl }} key={image.id}>
+          {image.previewUrl ? <AttachmentImageLightbox alt={image.label ?? image.fileName} src={image.previewUrl}>
+            <AttachmentPreview><AttachmentImage alt={image.label ?? image.fileName} src={image.previewUrl} /></AttachmentPreview>
+          </AttachmentImageLightbox> : <AttachmentPreview><AttachmentFallback /></AttachmentPreview>}
+          <AttachmentInfo>{image.label ?? image.fileName}{image.purpose ? ` · ${image.purpose}` : ""}</AttachmentInfo>
+        </Attachment>)}
+      </Attachments> : null}
+      {text ? <span className="cursor-text whitespace-pre-wrap">{text}</span> : null}
+    </>}</MessageContent>
     {text ? <MessageActions className={`opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${role === "user" ? "self-end" : ""} ${copyFeedback?.id === id ? "opacity-100" : ""}`}>
       <MessageAction aria-live="polite" label={copyLabel} onClick={() => onCopy(id, copyText)} tooltip={copyLabel}>
         {isCopied ? <CheckIcon className="size-3.5 text-success" /> : <CopyIcon className="size-3.5" />}
@@ -135,6 +169,69 @@ const TextMessage = memo(function TextMessage({ copyFeedback, id, isAnimating = 
 
 const AssistantSurface = ({ children, processingSeconds = 0 }: { children: ReactNode; processingSeconds?: number }) =>
   <Message className="max-w-full" from="assistant"><MessageContent className="w-full"><ProcessingTimeHeader seconds={processingSeconds} />{children}</MessageContent></Message>;
+
+const REFERENCE_PURPOSE_OPTIONS: ReadonlyArray<readonly [ReferenceImagePurpose, string]> = [
+  ["character", "人物"],
+  ["product", "产品"],
+  ["environment", "场景"],
+  ["element", "元素"],
+  ["style", "风格"],
+];
+
+const ReferenceImageResolutionCard = memo(function ReferenceImageResolutionCard({
+  image,
+  isSubmitting,
+  onResolve,
+}: {
+  image: ReferenceImageView;
+  isSubmitting: boolean;
+  onResolve: (resolutionRequestId: string, referenceImageId: string, purpose: ReferenceImagePurpose) => void;
+}) {
+  const requestId = image.resolution?.resolutionRequestId;
+  if (image.resolution?.status !== "needs_clarification" || !requestId) return null;
+  return <AssistantSurface>
+    <Confirmation approval={{ id: requestId }} state="approval-requested">
+      <ConfirmationRequest>
+        <ConfirmationTitle>请选择“{image.analysis?.label ?? image.fileName}”在视频中的参考用途。</ConfirmationTitle>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">确认后会继续原任务，不会重新上传图片。</p>
+      </ConfirmationRequest>
+      <ConfirmationActions className="mt-2 flex-wrap justify-start self-start">
+        {REFERENCE_PURPOSE_OPTIONS.map(([purpose, label]) => <ConfirmationAction
+          disabled={isSubmitting}
+          key={purpose}
+          onClick={() => onResolve(requestId, image.id, purpose)}
+          variant="outline"
+        >{label}</ConfirmationAction>)}
+      </ConfirmationActions>
+    </Confirmation>
+  </AssistantSurface>;
+});
+
+const ReferenceImagePurposeEditor = memo(function ReferenceImagePurposeEditor({
+  image,
+  isSubmitting,
+  onUpdate,
+}: {
+  image: ReferenceImageView;
+  isSubmitting: boolean;
+  onUpdate: (referenceImageId: string, purpose: ReferenceImagePurpose) => void;
+}) {
+  if (image.resolution?.status !== "auto_resolved" && image.resolution?.status !== "user_resolved") {
+    return null;
+  }
+  return <details className="group ml-auto max-w-sm text-xs text-muted-foreground">
+    <summary className="cursor-pointer list-none text-right hover:text-foreground">修改“{image.resolution.effectiveLabel ?? image.fileName}”的用途</summary>
+    <div className="mt-2 flex flex-wrap justify-end gap-1.5">
+      {REFERENCE_PURPOSE_OPTIONS.map(([purpose, label]) => <button
+        className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+        disabled={isSubmitting || purpose === image.resolution?.effectivePurpose}
+        key={purpose}
+        onClick={() => onUpdate(image.id, purpose)}
+        type="button"
+      >{label}</button>)}
+    </div>
+  </details>;
+});
 
 const WORKFLOW_PROGRESS_STALL_THRESHOLD_MS = 90_000;
 const WORKFLOW_PROGRESS_CLOCK_INTERVAL_MS = 5_000;
@@ -176,7 +273,7 @@ const ArchivedVideoMessage = ({
 
 const workflowActivityDetail = (progress: WorkflowStepProgress): string =>
   progress.toolActivity
-    ? `${progress.toolActivity.toolLabel} · ${progress.toolActivity.summary}`
+    ? progress.toolActivity.summary
     : progress.message;
 
 const WorkflowActivityText = ({
@@ -327,12 +424,18 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
   copyFeedback,
   entries,
   onCopy,
+  onResolveReferenceImagePurpose,
+  onUpdateReferenceImagePurpose,
+  isWorkflowSubmitting,
   snapshot,
   workflowReviewNotice,
 }: {
   copyFeedback: CopyFeedback;
   entries: ConversationEntry[];
   onCopy: (id: string, text: string) => void;
+  onResolveReferenceImagePurpose: (resolutionRequestId: string, referenceImageId: string, purpose: ReferenceImagePurpose) => void;
+  onUpdateReferenceImagePurpose: (referenceImageId: string, purpose: ReferenceImagePurpose) => void;
+  isWorkflowSubmitting: boolean;
   snapshot: VideoWorkflowSnapshot | null;
   workflowReviewNotice: string;
 }) {
@@ -403,7 +506,11 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
         const message = entry.role === "assistant"
           ? splitRestartConfirmationMessage(entry.content)
           : { text: entry.content };
-        return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={message.notice} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role={entry.role} text={message.text} />;
+        return <div className="contents" key={entry.id}>
+          <TextMessage copyFeedback={copyFeedback} id={entry.id} notice={message.notice} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} referenceImages={entry.referenceImages.map((image) => ({ ...image, label: image.resolution?.effectiveLabel ?? image.declaration?.label ?? image.analysis?.label, purpose: image.resolution?.effectivePurpose ?? image.declaration?.purpose ?? image.analysis?.purpose }))} role={entry.role} text={message.text} />
+          {entry.role === "user" ? entry.referenceImages.map((image) => <ReferenceImageResolutionCard image={image} isSubmitting={isWorkflowSubmitting} key={`${entry.id}:${image.id}:resolution`} onResolve={onResolveReferenceImagePurpose} />) : null}
+          {entry.role === "user" ? entry.referenceImages.map((image) => <ReferenceImagePurposeEditor image={image} isSubmitting={isWorkflowSubmitting} key={`${entry.id}:${image.id}:purpose-editor`} onUpdate={onUpdateReferenceImagePurpose} />) : null}
+        </div>;
       }
       if (entry.type === "cinematic_artifact") {
         const canReview = reviewableAssetBatch === null &&
@@ -444,6 +551,8 @@ export const ChatConversation = memo(function ChatConversation({
   isWorkflowSubmitting,
   messages,
   onRecoverWorkflow,
+  onResolveReferenceImagePurpose,
+  onUpdateReferenceImagePurpose,
   snapshot,
   status,
   videoFocusRequest,
@@ -699,20 +808,29 @@ export const ChatConversation = memo(function ChatConversation({
       <PersistedConversationTimeline
         copyFeedback={copyFeedback}
         entries={entries}
+        isWorkflowSubmitting={isWorkflowSubmitting}
         onCopy={handleCopy}
+        onResolveReferenceImagePurpose={onResolveReferenceImagePurpose}
+        onUpdateReferenceImagePurpose={onUpdateReferenceImagePurpose}
         snapshot={snapshot}
         workflowReviewNotice={workflowReviewNotice}
       />
 
       {liveMessages.map((message) => {
         const text = message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+        const referenceImages = message.parts.filter((part) => part.type === "file").map((part, index) => ({
+          id: `${message.id}:file:${index}`,
+          fileName: part.filename ?? `参考图 ${index + 1}`,
+          mimeType: part.mediaType,
+          previewUrl: part.url,
+        }));
         const messageProcessingSeconds = message.role === "assistant"
           ? message.id === lastLiveAssistantId && isAgentProcessing
             ? processingSeconds
             : completedLiveDurations[message.id] ?? processingSeconds
           : undefined;
         const isAnimating = status === "streaming" && message.role === "assistant" && message.id === lastLiveAssistantId;
-        return text ? <TextMessage copyFeedback={copyFeedback} id={message.id} isAnimating={isAnimating} key={message.id} onCopy={handleCopy} processingSeconds={messageProcessingSeconds} role={message.role} text={text} /> : null;
+        return text || referenceImages.length > 0 ? <TextMessage copyFeedback={copyFeedback} id={message.id} isAnimating={isAnimating} key={message.id} onCopy={handleCopy} processingSeconds={messageProcessingSeconds} referenceImages={referenceImages} role={message.role} text={text} /> : null;
       })}
 
       {temporaryProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={temporaryProgress} progressHistory={[temporaryProgress]} showProgressMeta={false} /> : visibleWorkflowStepProgress ? <WorkflowActivityText key="workflow-activity" processingSeconds={processingSeconds} progress={visibleWorkflowStepProgress} progressHistory={visibleWorkflowStepProgressHistory} /> : null}

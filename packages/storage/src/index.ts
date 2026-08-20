@@ -73,4 +73,31 @@ export class ObjectStorage {
       { expiresIn: expiresInSeconds },
     );
   }
+
+  async createUploadUrl(
+    objectKey: string,
+    contentType: string,
+    expiresInSeconds = 600,
+  ): Promise<string> {
+    return getSignedUrl(
+      this.client,
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        Key: assertSafeObjectKey(objectKey),
+        ContentType: contentType,
+      }),
+      { expiresIn: expiresInSeconds },
+    );
+  }
+
+  async statObject(objectKey: string): Promise<{ contentLength: number; contentType: string | null }> {
+    const response = await this.client.send(new HeadObjectCommand({
+      Bucket: this.config.bucket,
+      Key: assertSafeObjectKey(objectKey),
+    }));
+    return {
+      contentLength: response.ContentLength ?? 0,
+      contentType: response.ContentType ?? null,
+    };
+  }
 }

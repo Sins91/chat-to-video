@@ -77,6 +77,7 @@ export class MastraRuntimeService implements OnModuleDestroy {
         cinematicStageStructurer: agents.cinematicStructurer,
         cinematicDurationPlanner: agents.durationPlanner,
         workflowIntentRouter: agents.intentRouter,
+        referenceImageAnalyst: agents.referenceImageAnalyst,
       },
       workflows: {
         cinematicProduction: this.workflow,
