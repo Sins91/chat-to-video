@@ -43,7 +43,7 @@ type VideoWorkflowContextValue = {
   isSubmitting: boolean;
   stepProgress: WorkflowStepProgress | null;
   stepProgressHistory: readonly WorkflowStepProgress[];
-  previewVideo: { id: string; playbackUrl: string; promptTrace: GeneratedVideoPromptTrace; title: string } | null;
+  previewVideo: PreviewVideo | null;
   chatVideoFocusRequest: { requestId: number; videoId: string } | null;
   chatScrollRestoreRequest: ChatScrollRestoreRequest | null;
   openGeneratedVideo: (video: GeneratedVideoSelection) => Promise<boolean>;
@@ -87,6 +87,11 @@ type GeneratedVideoSelection = {
   playbackUrl: string;
   promptTrace: GeneratedVideoPromptTrace;
   title: string;
+  workflowId: string;
+};
+
+type PreviewVideo = Omit<GeneratedVideoSelection, "conversationId"> & {
+  workflowSnapshot: VideoWorkflowSnapshot;
 };
 
 const VideoWorkflowContext = createContext<VideoWorkflowContextValue | null>(null);
@@ -191,7 +196,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [stepView, setStepView] = useState<WorkflowStepView | null>(null);
-  const [previewVideo, setPreviewVideo] = useState<{ id: string; playbackUrl: string; promptTrace: GeneratedVideoPromptTrace; title: string } | null>(null);
+  const [previewVideo, setPreviewVideo] = useState<PreviewVideo | null>(null);
   const [chatVideoFocusRequest, setChatVideoFocusRequest] = useState<{ requestId: number; videoId: string } | null>(null);
   const [chatScrollRestoreRequest, setChatScrollRestoreRequest] = useState<ChatScrollRestoreRequest | null>(null);
   const snapshotRef = useRef<VideoWorkflowSnapshot | null>(null);
@@ -879,7 +884,29 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       return false;
     }
 
-    setPreviewVideo({ id: video.id, playbackUrl: video.playbackUrl, promptTrace: video.promptTrace, title: video.title });
+    let workflowSnapshot = snapshotRef.current;
+    if (video.conversationId !== loadedConversationId || workflowSnapshot?.workflowId !== video.workflowId) {
+      try {
+        workflowSnapshot = await getVideoWorkflow(video.workflowId);
+      } catch (error: unknown) {
+        setErrorMessage(formatVideoWorkflowError(error, { operation: "load" }));
+        if (isStartingPreviewNavigation) previewReturnLocationRef.current = null;
+        return false;
+      }
+    }
+    if (!workflowSnapshot || workflowSnapshot.workflowId !== video.workflowId) {
+      if (isStartingPreviewNavigation) previewReturnLocationRef.current = null;
+      return false;
+    }
+
+    setPreviewVideo({
+      id: video.id,
+      playbackUrl: video.playbackUrl,
+      promptTrace: video.promptTrace,
+      title: video.title,
+      workflowId: video.workflowId,
+      workflowSnapshot,
+    });
     requestChatVideoFocus(video.id);
     if (video.conversationId !== requestedConversationId) {
       router.push(`/studio/agent?conversationId=${encodeURIComponent(video.conversationId)}`);

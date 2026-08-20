@@ -15,8 +15,8 @@ const binding = (purpose: "character" | "product" | "environment" | "style", ind
 });
 
 describe("cinematic consistency-reference contracts", () => {
-  it("registers the v3 stage between scene plan and assets", () => {
-    expect(CINEMATIC_PIPELINE_DEFINITION.definitionVersion).toBe(3);
+  it("registers the v4 stage between scene plan and assets", () => {
+    expect(CINEMATIC_PIPELINE_DEFINITION.definitionVersion).toBe(4);
     expect(CINEMATIC_PIPELINE_DEFINITION.stages.map((stage) => stage.id)).toEqual([
       "research", "proposal", "script", "scene_plan", "consistency_reference", "assets", "edit", "compose",
     ]);

@@ -1,4 +1,5 @@
 import {
+  CINEMATIC_PIPELINE_DEFINITION,
   CinematicArtifactSchema,
   getVideoModelMaxDurationSeconds,
   RenderVideoJobPayloadSchema,
@@ -43,6 +44,12 @@ export const retryVideoWorkflow = async (
     throw new NotFoundException({
       code: "CONVERSATION_NOT_FOUND",
       message: "Conversation not found.",
+    });
+  }
+  if (workflow.pipelineDefinitionVersion !== CINEMATIC_PIPELINE_DEFINITION.definitionVersion) {
+    throw new ConflictException({
+      code: "VIDEO_WORKFLOW_LEGACY_READ_ONLY",
+      message: "This legacy workflow is available for history only and cannot be retried.",
     });
   }
   const job = await repository.findWorkflowVideoJob(workflowId);
@@ -121,6 +128,9 @@ export const retryVideoWorkflow = async (
           modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(videoModel),
           scenes: sceneArtifact.data.scenes.map((scene) => ({
             ...scene,
+            audioGainDb: editArtifact.data.timeline.find(
+              (item) => item.sceneOrder === scene.order,
+            )?.audioGainDb ?? 0,
             ...(() => {
               const asset = executedAssets.find((candidate) =>
                 candidate.sceneOrder === scene.order && candidate.kind !== "music"
@@ -138,6 +148,7 @@ export const retryVideoWorkflow = async (
               scene.durationSeconds,
             ),
           })),
+          usesEmbeddedSceneAudio: true,
           ...(music?.mimeType ? {
             music: { objectKey: music.objectKey, mimeType: music.mimeType, gainDb: -12 },
           } : {}),

@@ -53,44 +53,54 @@ const SectionTitle = ({ children }: {
 const InfoPanel = ({ children, title }: {
   readonly children: ReactNode;
   readonly title: string;
-}) => (
-  <section className="rounded-lg border border-white/8 bg-black/15 p-4">
-    <SectionTitle>{title}</SectionTitle>
-    <div className="mt-2 text-xs leading-6 text-zinc-400">{children}</div>
-  </section>
-);
+}) => {
+  const areSectionsExpanded = useContext(PlanningSectionsExpandedContext);
+
+  return <details className="group rounded-lg border border-white/8 bg-black/15" open={areSectionsExpanded}>
+    <summary className="cursor-pointer list-none p-4 [&::-webkit-details-marker]:hidden">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1"><SectionTitle>{title}</SectionTitle></span>
+        <ChevronDownIcon className="size-3.5 shrink-0 text-zinc-600 transition-transform group-open:rotate-180" />
+      </div>
+    </summary>
+    <div className="cursor-pointer border-t border-white/8 px-4 pb-4 pt-3 text-xs leading-6 text-zinc-400" onClick={collapseExpandedDetails}>{children}</div>
+  </details>;
+};
 
 const Metric = ({ label, value }: {
   readonly label: string;
   readonly value: ReactNode;
-}) => (
-  <div className="rounded-md border border-white/8 bg-white/[0.025] px-3 py-2.5">
-    <dt className="text-[10px] uppercase tracking-[0.12em] text-zinc-600">{label}</dt>
-    <dd className="mt-1 font-numeric text-xs font-medium tabular-nums text-zinc-200">{value}</dd>
-  </div>
-);
+}) => {
+  const areSectionsExpanded = useContext(PlanningSectionsExpandedContext);
 
-const CollapsiblePlanningBlock = ({ children, meta, summary, title }: {
+  return <details className="group rounded-md border border-white/8 bg-white/[0.025]" open={areSectionsExpanded}>
+    <summary className="cursor-pointer list-none px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+      <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-zinc-600">
+        <span className="min-w-0 flex-1">{label}</span>
+        <ChevronDownIcon className="size-3 shrink-0 transition-transform group-open:rotate-180" />
+      </span>
+    </summary>
+    <div className="cursor-pointer border-t border-white/8 px-3 py-2.5 font-numeric text-xs font-medium tabular-nums text-zinc-200" onClick={collapseExpandedDetails}>{value}</div>
+  </details>;
+};
+
+const CollapsiblePlanningBlock = ({ children, meta, title }: {
   readonly children: ReactNode;
   readonly meta?: ReactNode;
-  readonly summary: ReactNode;
   readonly title: ReactNode;
 }) => {
   const areSectionsExpanded = useContext(PlanningSectionsExpandedContext);
 
-  return (
-    <details className="group rounded-lg border border-white/8 bg-black/15" open={areSectionsExpanded}>
-      <summary className="cursor-pointer list-none p-4 [&::-webkit-details-marker]:hidden">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 flex-1 font-sans text-xs font-semibold text-zinc-200">{title}</span>
-          {meta ? <span className="shrink-0 font-numeric text-[11px] tabular-nums text-zinc-500">{meta}</span> : null}
-          <ChevronDownIcon className="size-3.5 shrink-0 text-zinc-600 transition-transform group-open:rotate-180" />
-        </div>
-        <div className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-400 group-open:hidden">{summary}</div>
-      </summary>
-      <div className="cursor-pointer border-t border-white/8 px-4 pb-4 pt-3" onClick={collapseExpandedDetails}>{children}</div>
-    </details>
-  );
+  return <details className="group rounded-lg border border-white/8 bg-black/15" open={areSectionsExpanded}>
+    <summary className="cursor-pointer list-none p-4 [&::-webkit-details-marker]:hidden">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="min-w-0 flex-1 font-sans text-xs font-semibold text-zinc-200">{title}</span>
+        {meta ? <span className="shrink-0 font-numeric text-[11px] tabular-nums text-zinc-500">{meta}</span> : null}
+        <ChevronDownIcon className="size-3.5 shrink-0 text-zinc-600 transition-transform group-open:rotate-180" />
+      </div>
+    </summary>
+    <div className="cursor-pointer border-t border-white/8 px-4 pb-4 pt-3" onClick={collapseExpandedDetails}>{children}</div>
+  </details>;
 };
 
 const ResearchView = ({ data }: { readonly data: ArtifactData<"research"> }) => (
@@ -108,7 +118,6 @@ const ResearchView = ({ data }: { readonly data: ArtifactData<"research"> }) => 
             <CollapsiblePlanningBlock
               key={`${index}-${reference.title}`}
               meta={url ? <ExternalLinkIcon className="size-3.5" /> : null}
-              summary={reference.description}
               title={reference.title}
             >
               <p className="text-xs leading-5 text-zinc-500">{reference.description}</p>
@@ -118,8 +127,9 @@ const ResearchView = ({ data }: { readonly data: ArtifactData<"research"> }) => 
         })}
       </div>
     </section>
-    <div className="grid gap-3 sm:grid-cols-2">
-      <InfoPanel title="音乐方向">{data.musicDirection}</InfoPanel>
+    <div className="grid gap-3 sm:grid-cols-3">
+      <InfoPanel title="全片背景音乐">{data.musicDirection}</InfoPanel>
+      <InfoPanel title="Seedance 场景声音">{data.soundDirection}</InfoPanel>
       <InfoPanel title="制作约束">
         <ul className="space-y-1.5">
           {data.productionConstraints.map((constraint) => <li key={constraint}>• {constraint}</li>)}
@@ -131,18 +141,17 @@ const ResearchView = ({ data }: { readonly data: ArtifactData<"research"> }) => 
 
 const ProposalView = ({ data }: { readonly data: ArtifactData<"proposal"> }) => (
   <div className="space-y-4">
-    <dl className="grid grid-cols-3 gap-2">
+    <div className="grid grid-cols-3 gap-2">
       <Metric label="时长" value={`${data.durationSeconds} 秒`} />
       <Metric label="预计成本" value={currency.format(data.estimatedCostUsd)} />
       <Metric label="渲染方式" value="FFmpeg" />
-    </dl>
+    </div>
     <div className="grid gap-3">
       {data.directions.map((direction, index) => {
         return (
           <CollapsiblePlanningBlock
             key={direction.id}
             meta={`方向 ${index + 1}`}
-            summary={direction.logline}
             title={direction.title}
           >
             <p className="text-xs leading-5 text-zinc-400">{direction.logline}</p>
@@ -169,9 +178,10 @@ const ProposalView = ({ data }: { readonly data: ArtifactData<"proposal"> }) => 
                     </div>
                   </div>
             </div>
-            <div className="mt-3 grid gap-2 border-t border-white/8 pt-3 text-xs leading-5 text-zinc-500 sm:grid-cols-2">
+            <div className="mt-3 grid gap-2 border-t border-white/8 pt-3 text-xs leading-5 text-zinc-500 sm:grid-cols-3">
               <p><span className="text-zinc-400">视觉：</span>{direction.visualTreatment}</p>
-              <p><span className="text-zinc-400">音乐：</span>{direction.musicDirection}</p>
+              <p><span className="text-zinc-400">全片背景音乐：</span>{direction.musicDirection}</p>
+              <p><span className="text-zinc-400">场景声音：</span>{direction.soundDirection}</p>
             </div>
           </CollapsiblePlanningBlock>
         );
@@ -192,7 +202,7 @@ const ScriptView = ({ data }: { readonly data: ArtifactData<"script"> }) => (
         <li className="relative flex gap-3" key={beat.order}>
           <span className="z-10 grid size-8 shrink-0 place-items-center rounded-full border border-violet-400/20 bg-[#17131f] font-numeric text-xs font-semibold tabular-nums text-violet-300">{beat.order}</span>
           <div className="min-w-0 flex-1">
-            <CollapsiblePlanningBlock meta={`${beat.durationSeconds}s`} summary={beat.visual} title={beat.purpose}>
+            <CollapsiblePlanningBlock meta={`${beat.durationSeconds}s`} title={beat.purpose}>
               <p className="text-xs leading-5 text-zinc-400"><span className="text-zinc-600">画面：</span>{beat.visual}</p>
               <p className="mt-1 text-xs leading-5 text-zinc-500"><span className="text-zinc-600">声音：</span>{beat.audio}</p>
             </CollapsiblePlanningBlock>
@@ -211,11 +221,11 @@ const ScriptView = ({ data }: { readonly data: ArtifactData<"script"> }) => (
 
 const ScenePlanView = ({ data }: { readonly data: ArtifactData<"scene_plan"> }) => (
   <div className="space-y-4">
-    <dl className="grid grid-cols-3 gap-2">
+    <div className="grid grid-cols-3 gap-2">
       <Metric label="画面比例" value={data.aspectRatio} />
       <Metric label="总时长" value={`${data.durationSeconds} 秒`} />
       <Metric label="场景数量" value={`${data.scenes.length} 个`} />
-    </dl>
+    </div>
     <ol className="grid gap-3">
       {data.scenes.map((scene) => (
         <li key={scene.order}>
@@ -227,14 +237,13 @@ const ScenePlanView = ({ data }: { readonly data: ArtifactData<"scene_plan"> }) 
                 : ""}
               {" · "}{transitionLabel[scene.transition]}
             </>}
-            summary={scene.narrativeBeat}
             title={`场景 ${scene.order}`}
           >
             <p className="text-sm leading-6 text-zinc-300">{scene.narrativeBeat}</p>
             <div className="mt-3 rounded-md border border-white/5 bg-white/[0.025] p-3 text-xs leading-5 text-zinc-500">
               <p><span className="text-zinc-400">视觉提示：</span>{scene.visualPrompt}</p>
               <p className="mt-1"><span className="text-zinc-400">运镜：</span>{scene.camera}</p>
-              <p className="mt-1"><span className="text-zinc-400">声音：</span>{scene.audio}</p>
+              <p className="mt-1"><span className="text-zinc-400">场景声音：</span>{scene.audioMode === "seedance" ? scene.audio : "无声（仅保留全片背景音乐）"}</p>
             </div>
           </CollapsiblePlanningBlock>
         </li>
@@ -247,7 +256,8 @@ const ConsistencyReferenceView = ({ data }: { readonly data: ArtifactData<"consi
   <div className="space-y-3">
     <InfoPanel title={data.status === "required" ? "需要一致性参考图" : "无需一致性参考图"}>{data.reason}</InfoPanel>
     {data.groups.map((group) => (
-      <CollapsiblePlanningBlock key={group.id} meta={`镜头 ${group.sceneOrders.join("、")} · ${currency.format(group.estimatedCostUsd)}`} summary={group.canonicalDescription} title={group.label}>
+      <CollapsiblePlanningBlock key={group.id} meta={`镜头 ${group.sceneOrders.join("、")} · ${currency.format(group.estimatedCostUsd)}`} title={group.label}>
+        <p className="text-xs leading-5 text-zinc-400">{group.canonicalDescription}</p>
         <p className="text-xs leading-5 text-zinc-500">{group.kind} · {group.aspectRatio}</p>
         <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-zinc-500">{group.prompt}</p>
       </CollapsiblePlanningBlock>
@@ -258,11 +268,11 @@ const AssetsView = ({ data }: { readonly data: ArtifactData<"assets"> }) => {
   const riskTone = data.slideshowRisk >= 7 ? "bg-red-400" : data.slideshowRisk >= 4 ? "bg-amber-300" : "bg-emerald-400";
   return (
     <div className="space-y-4">
-      <dl className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <Metric label="素材数量" value={`${data.assets.length} 项`} />
         <Metric label="预计成本" value={currency.format(data.totalEstimatedCostUsd)} />
         <Metric label="幻灯片风险" value={`${data.slideshowRisk} / 10`} />
-      </dl>
+      </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-white/5" aria-label={`幻灯片风险 ${data.slideshowRisk} / 10`} role="img">
         <div className={`h-full rounded-full ${riskTone}`} style={{ width: `${data.slideshowRisk * 10}%` }} />
       </div>
@@ -271,25 +281,27 @@ const AssetsView = ({ data }: { readonly data: ArtifactData<"assets"> }) => {
           <CollapsiblePlanningBlock
             key={`${asset.sceneOrder}-${asset.kind}-${index}`}
             meta={currency.format(asset.estimatedCostUsd)}
-            summary={asset.prompt}
             title={`场景 ${asset.sceneOrder}`}
           >
             <p className="text-xs leading-5 text-zinc-400">{asset.prompt}</p>
           </CollapsiblePlanningBlock>
         ))}
       </div>
-      <InfoPanel title="音乐素材">{data.music.direction}</InfoPanel>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <InfoPanel title="Seedance 场景声音">{data.seedanceAudioDirection}</InfoPanel>
+        <InfoPanel title="全片背景音乐">{data.music.direction}</InfoPanel>
+      </div>
     </div>
   );
 };
 
 const EditView = ({ data }: { readonly data: ArtifactData<"edit"> }) => (
   <div className="space-y-4">
-    <dl className="grid grid-cols-3 gap-2">
+    <div className="grid grid-cols-3 gap-2">
       <Metric label="总时长" value={`${data.durationSeconds} 秒`} />
       <Metric label="渲染方式" value="FFmpeg" />
       <Metric label="剪辑片段" value={`${data.timeline.length} 段`} />
-    </dl>
+    </div>
     <section>
       <SectionTitle>剪辑时间线</SectionTitle>
       <div className="mt-3 flex h-9 gap-1 rounded-lg bg-black/20 p-1">
@@ -304,7 +316,6 @@ const EditView = ({ data }: { readonly data: ArtifactData<"edit"> }) => (
           <CollapsiblePlanningBlock
             key={`detail-${clip.sceneOrder}-${clip.startSeconds}`}
             meta={`${clip.startSeconds}s → ${clip.startSeconds + clip.durationSeconds}s`}
-            summary={transitionLabel[clip.transition]}
             title={`场景 ${clip.sceneOrder}`}
           >
             <p className="text-xs leading-5 text-zinc-500">{transitionLabel[clip.transition]} · 音量 {clip.audioGainDb} dB</p>
@@ -316,13 +327,12 @@ const EditView = ({ data }: { readonly data: ArtifactData<"edit"> }) => (
       <InfoPanel title="调色方案"><span className="inline-flex items-start gap-2"><PaletteIcon className="mt-1 size-3.5 shrink-0 text-amber-300" />{data.colorGrade}</span></InfoPanel>
       <InfoPanel title="声音混合"><span className="inline-flex items-start gap-2"><Volume2Icon className="mt-1 size-3.5 shrink-0 text-amber-300" />{data.audioMix}</span></InfoPanel>
     </div>
-    <section className="rounded-lg border border-emerald-400/15 bg-emerald-400/[0.04] p-4">
-      <SectionTitle>质量检查</SectionTitle>
-      <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+    <CollapsiblePlanningBlock title="质量检查">
+      <ul className="grid gap-2 sm:grid-cols-2">
         {data.qualityChecks.map((check) => <li className="flex gap-2 text-xs leading-5 text-zinc-400" key={check}><CheckCircle2Icon className="mt-0.5 size-3.5 shrink-0 text-emerald-400/70" />{check}</li>)}
       </ul>
-    </section>
-    <CollapsiblePlanningBlock summary={data.renderPrompt} title="最终渲染提示词">
+    </CollapsiblePlanningBlock>
+    <CollapsiblePlanningBlock title="最终渲染提示词">
       <p className="mt-3 whitespace-pre-wrap text-xs leading-6 text-zinc-500">{data.renderPrompt}</p>
     </CollapsiblePlanningBlock>
   </div>

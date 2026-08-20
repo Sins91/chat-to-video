@@ -40,7 +40,6 @@ export function StoryboardArtifactCard({ canReview, version }: {
                   <span className="ml-auto inline-flex items-center gap-1 font-numeric text-[11px] tabular-nums text-muted-foreground"><Clock3Icon className="size-3" />{shot.durationSeconds}s</span>
                   <ChevronDownIcon className="size-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
                 </div>
-                <p className="mt-2 line-clamp-2 text-sm leading-6 text-foreground group-open:hidden">{shot.scene}：{shot.subjectAction}</p>
               </summary>
               <div className="cursor-pointer border-t border-border px-4 pb-4 pt-3" onClick={collapseExpandedDetails}>
                 <p className="text-sm leading-6 text-foreground">{shot.scene}：{shot.subjectAction}</p>

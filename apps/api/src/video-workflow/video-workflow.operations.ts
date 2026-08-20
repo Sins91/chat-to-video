@@ -36,8 +36,8 @@ import {
 import type { VideoWorkflowRepository } from "@chat-to-video/database";
 import { Queue } from "bullmq";
 import { createHash } from "node:crypto";
-import { Redis } from "ioredis";
 
+import { createObservedRedisClient } from "../redis-client.js";
 import {
   MODEL_GATEWAY,
   ModelGatewayError,
@@ -86,7 +86,12 @@ const CINEMATIC_AWAITING_MESSAGE: Record<CinematicGenerativeStage, string> = {
 
 @Injectable()
 export class VideoWorkflowOperations implements OnModuleDestroy {
-  private readonly queueConnection = new Redis(loadRedisUrl(), { maxRetriesPerRequest: 1 });
+  private readonly queueConnection = createObservedRedisClient(
+    loadRedisUrl(),
+    VideoWorkflowOperations.name,
+    "api-workflow-queues",
+    { maxRetriesPerRequest: 1 },
+  );
   private readonly renderQueue = new Queue<RenderVideoJobPayload | CinematicAssetJobPayload>("render-jobs", {
     connection: this.queueConnection,
   });
@@ -152,7 +157,10 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         generatesMusic: assets.data.music.sourceMode === "generate",
         requiresConsistencyReference: false,
         hasAudioAsset: assets.data.music.sourceMode !== "supplied" ||
-          assets.data.assets.some((asset) => asset.kind === "audio"),
+          scenePlan.data.scenes.some((scene) => scene.audioMode === "seedance"),
+        hasSeedanceAudio: scenePlan.data.scenes.some(
+          (scene) => scene.audioMode === "seedance",
+        ),
       },
     };
   }
@@ -192,15 +200,11 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     if (!definition) throw new Error(`Cinematic stage ${input.stage} is not registered.`);
     const { facts, scenePlan, assets } = await this.cinematicCapabilityContext(input.workflowId);
     const sceneOrders = new Set(scenePlan.data.scenes.map((scene) => scene.order));
-    const plannedOrders = assets.data.assets
-      .filter((asset) => asset.kind !== "audio")
-      .map((asset) => asset.sceneOrder);
+    const plannedOrders = assets.data.assets.map((asset) => asset.sceneOrder);
     const structuralIssue = assets.data.assets.some((asset) => asset.sourceMode !== "generate") ||
       assets.data.music.sourceMode !== "generate"
       ? "当前部署只允许执行已声明为 generate 的素材和音乐；library/supplied 必须先提供已授权对象键。"
-      : assets.data.assets.some((asset) => asset.kind === "audio")
-        ? "当前素材执行器不支持逐镜音效生成，请只保留一条背景音乐。"
-        : assets.data.slideshowRisk >= 4
+      : assets.data.slideshowRisk >= 4
           ? "素材规划的幻灯片风险过高，请先调整镜头素材。"
           : plannedOrders.length !== sceneOrders.size ||
               new Set(plannedOrders).size !== plannedOrders.length ||
@@ -210,7 +214,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
                 const scene = scenePlan.data.scenes.find(
                   (candidate) => candidate.order === asset.sceneOrder,
                 );
-                if (!scene || asset.kind === "audio") return false;
+                if (!scene) return false;
                 return (scene.sourceType === "generated_video" && asset.kind !== "video") ||
                   (scene.sourceType === "generated_image" && asset.kind !== "image") ||
                   (scene.sourceType === "title_card" && asset.kind !== "title_card");
@@ -416,9 +420,6 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         "Current cinematic execution requires generated assets; supplied and library assets need verified object keys.",
       );
     }
-    if (assets.data.assets.some((asset) => asset.kind === "audio")) {
-      throw new Error("Per-scene generated audio is not supported; use the approved music track.");
-    }
     const definition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "assets");
     if (!definition) throw new Error("Cinematic assets stage is not registered.");
     const resolutions = await this.capabilityResolutions();
@@ -474,6 +475,14 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         if (referenceBindings.length > 0 && input.videoModel !== "doubao-seedance-2.0") {
           throw new Error("The selected video model cannot consume approved reference images; no prompt-only fallback is allowed.");
         }
+        const prompt = [
+          asset.prompt,
+          `Shared Seedance scene-sound direction: ${assets.data.seedanceAudioDirection}.`,
+          scene.audioMode === "seedance"
+            ? `Scene sound: ${scene.audio}. Generate synchronized dialogue, narration, ambience, and sound effects only.`
+            : "Scene sound: intentional silence. Do not generate dialogue, narration, ambience, or sound effects.",
+          "No background music. No score. The full-length background track is generated separately.",
+        ].join(" ").slice(0, 1_000);
         return CinematicAssetJobPayloadSchema.parse({
           workflowId: input.workflowId,
           requestId: input.requestId,
@@ -483,12 +492,18 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
           stageId: "assets",
           referenceGroupId: null,
           referenceBindings,
-          promptHash: createHash("sha256").update(asset.prompt).digest("hex"),
+          promptHash: createHash("sha256").update(prompt).digest("hex"),
           sceneOrder: asset.sceneOrder,
           kind: "video",
-          prompt: asset.prompt,
+          prompt,
           objectKey: `tenant/demo/project/demo/derived/${batchId}/${assetId}.mp4`,
-          capabilityResolution: resolutionFor(referenceBindings.length > 0 ? "video.generate.reference" : "video.generate"),
+          capabilityResolution: resolutionFor(
+            referenceBindings.length > 0
+              ? "video.generate.reference"
+              : scene.audioMode === "seedance"
+                ? "video.generate.audio"
+                : "video.generate",
+          ),
           videoModel: input.videoModel,
           durationSeconds: scene.generationDurationSeconds ?? scene.durationSeconds,
         });
@@ -1019,6 +1034,9 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(selectedVideoModel),
         scenes: scenePlan.data.scenes.map((scene) => ({
           ...scene,
+          audioGainDb: input.edit.data.timeline.find(
+            (item) => item.sceneOrder === scene.order,
+          )?.audioGainDb ?? 0,
           ...(() => {
             const asset = executedAssets.find((candidate) =>
               candidate.sceneOrder === scene.order && candidate.kind !== "music"
@@ -1036,6 +1054,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
             scene.durationSeconds,
           ),
         })),
+        usesEmbeddedSceneAudio: true,
         music: {
           objectKey: music.objectKey,
           mimeType: music.mimeType,

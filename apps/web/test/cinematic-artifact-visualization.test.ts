@@ -42,11 +42,15 @@ describe("cinematic artifact visualization", () => {
     expect(source).not.toContain("静态可用");
     expect(source).toContain("CollapsiblePlanningBlock");
     expect(source).toContain("group-open:hidden");
-    expect(source).toContain("whitespace-pre-wrap break-words");
+    expect(source).not.toContain("{summary}");
     expect(source).not.toContain("line-clamp-2");
     expect(source).toContain("group-open:rotate-180");
     expect(source).toContain("PlanningSectionsExpandedContext");
     expect(source).toContain("open={areSectionsExpanded}");
+    expect(source.match(/open=\{areSectionsExpanded\}/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(source).toContain('const InfoPanel =');
+    expect(source).toContain('const Metric =');
+    expect(source).toContain('<CollapsiblePlanningBlock title="质量检查">');
     expect(source).toContain("onClick={collapseExpandedDetails}");
     expect(source).toContain('from "@/lib/collapsible-details"');
     expect(source).not.toContain("SectionTitle icon=");
@@ -66,6 +70,7 @@ describe("cinematic artifact visualization", () => {
     expect(card).toContain("CinematicArtifactVisualization");
     expect(card).toContain("areSectionsExpanded");
     expect(card).toContain("aria-expanded={areSectionsExpanded}");
+    expect(card).not.toContain("hidden={!isCardExpanded}");
     expect(card).toContain("查看原始 JSON");
   });
 });

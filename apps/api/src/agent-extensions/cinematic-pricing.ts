@@ -236,9 +236,6 @@ export const applyReviewedCinematicPricing = (
         estimatedCostUsd: generatedImageCost(referenceCountForScene(asset.sceneOrder)),
       };
     }
-    if (asset.kind === "audio") {
-      return { ...asset, estimatedCostUsd: REVIEWED_MEDIA_PRICING.usdPerMusicGeneration };
-    }
     const scene = scenesByOrder.get(asset.sceneOrder);
     if (!scene) {
       throw new Error(`Asset scene ${asset.sceneOrder} is missing from the approved scene plan.`);

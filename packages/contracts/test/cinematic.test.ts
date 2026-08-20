@@ -22,6 +22,7 @@ const scenes = [
     camera: "Tracking",
     transition: "cut" as const,
     audio: "Rain",
+    audioMode: "seedance" as const,
   },
   {
     order: 2,
@@ -34,6 +35,7 @@ const scenes = [
     camera: "Macro push",
     transition: "crossfade" as const,
     audio: "Heartbeat",
+    audioMode: "seedance" as const,
   },
 ];
 
@@ -70,6 +72,27 @@ describe("cinematic contracts", () => {
     }).scenes).toHaveLength(2);
   });
 
+  it("allows Seedance scene sound only on generated video", () => {
+    expect(CinematicScenePlanSchema.safeParse({
+      durationSeconds: 10,
+      aspectRatio: "16:9",
+      scenes: scenes.map((scene, index) => index === 0 ? {
+        ...scene,
+        sourceType: "generated_image",
+      } : scene),
+    }).success).toBe(false);
+    expect(CinematicScenePlanSchema.parse({
+      durationSeconds: 10,
+      aspectRatio: "16:9",
+      scenes: scenes.map((scene, index) => index === 0 ? {
+        ...scene,
+        sourceType: "generated_image",
+        motionRequired: false,
+        audioMode: "silence",
+      } : scene),
+    }).scenes[0]?.audioMode).toBe("silence");
+  });
+
   it("rejects a scene plan with a mismatched duration", () => {
     expect(CinematicScenePlanSchema.safeParse({
       durationSeconds: 10,
@@ -90,6 +113,7 @@ describe("cinematic contracts", () => {
           visualTreatment: "Controlled cinematic imagery.",
           colorPalette: ["black", "amber", "blue"],
           musicDirection: "Low strings.",
+          soundDirection: "Rain, dialogue, and synchronized effects; no score.",
         })),
         recommendedDirectionId: "a",
         rendererFamily: "ffmpeg",
@@ -113,10 +137,12 @@ describe("cinematic contracts", () => {
         durationSeconds: 10,
         modelMaxDurationSeconds: 10,
         scenes,
+        usesEmbeddedSceneAudio: true,
       },
       objectKey: "tenant/demo/project/demo/render/cinematic-job-1/video.mp4",
     });
     expect(payload.cinematic?.rendererFamily).toBe("ffmpeg");
+    expect(payload.cinematic?.usesEmbeddedSceneAudio).toBe(true);
   });
 
   it("rejects a render duration tier unsupported by the selected model", () => {

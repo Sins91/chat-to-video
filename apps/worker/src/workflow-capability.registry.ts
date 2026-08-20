@@ -34,6 +34,14 @@ export const resolveWorkerCapabilities = (
       reason: null,
     }),
     resolution({
+      capabilityId: "video.generate.audio",
+      status: "available",
+      executionBoundary: "render_job",
+      adapterId: "apimart.seedance-2-audio",
+      provider: "apimart",
+      reason: null,
+    }),
+    resolution({
       capabilityId: "video.compose.ffmpeg",
       status: "available",
       executionBoundary: "render_job",

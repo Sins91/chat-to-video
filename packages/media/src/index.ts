@@ -30,6 +30,8 @@ export type CinematicClip = {
   body: Uint8Array;
   durationSeconds: number;
   mimeType?: "video/mp4" | "image/png" | "image/jpeg";
+  audioMode?: "embedded" | "silence";
+  audioGainDb?: number;
 };
 
 export type CinematicMusicTrack = {
@@ -133,7 +135,12 @@ export const composeCinematicVideo = async (input: {
     clip.body.byteLength > 250 * 1024 * 1024 ||
     !Number.isInteger(clip.durationSeconds) ||
     clip.durationSeconds < 1 ||
-    clip.durationSeconds > 15
+    clip.durationSeconds > 15 ||
+    !Number.isFinite(clip.audioGainDb ?? 0) ||
+    (clip.audioGainDb ?? 0) < -60 ||
+    (clip.audioGainDb ?? 0) > 12 ||
+    ((clip.audioMode ?? "silence") === "embedded" &&
+      (clip.mimeType ?? "video/mp4") !== "video/mp4")
   )) {
     throw new Error("Cinematic composition received an invalid clip.");
   }
@@ -153,6 +160,9 @@ export const composeCinematicVideo = async (input: {
   const outputPath = join(directory, "output.mp4");
   try {
     const inputArgs: string[] = [];
+    const videoInputIndices: number[] = [];
+    const audioInputIndices: number[] = [];
+    let nextInputIndex = 0;
     for (const [index, clip] of input.clips.entries()) {
       const mimeType = clip.mimeType ?? "video/mp4";
       const suffix = mimeType === "image/png"
@@ -162,20 +172,43 @@ export const composeCinematicVideo = async (input: {
           : "mp4";
       const inputPath = join(directory, `scene-${index + 1}.${suffix}`);
       await writeFile(inputPath, clip.body);
+      videoInputIndices.push(nextInputIndex);
       if (mimeType.startsWith("image/")) {
         inputArgs.push("-loop", "1", "-t", String(clip.durationSeconds), "-i", inputPath);
       } else {
         inputArgs.push("-i", inputPath);
       }
+      const videoInputIndex = nextInputIndex;
+      nextInputIndex += 1;
+      if ((clip.audioMode ?? "silence") === "embedded") {
+        audioInputIndices.push(videoInputIndex);
+      } else {
+        inputArgs.push(
+          "-f",
+          "lavfi",
+          "-t",
+          String(clip.durationSeconds),
+          "-i",
+          "anullsrc=channel_layout=stereo:sample_rate=48000",
+        );
+        audioInputIndices.push(nextInputIndex);
+        nextInputIndex += 1;
+      }
     }
     const filterParts = input.clips.map((clip, index) =>
-      `[${index}:v:0]trim=duration=${clip.durationSeconds},setpts=PTS-STARTPTS,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p[v${index}]`
+      `[${videoInputIndices[index]}:v:0]trim=duration=${clip.durationSeconds},setpts=PTS-STARTPTS,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p[v${index}]`
     );
+    filterParts.push(...input.clips.map((clip, index) =>
+      `[${audioInputIndices[index]}:a:0]atrim=duration=${clip.durationSeconds},` +
+      `asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,` +
+      `volume=${clip.audioGainDb ?? 0}dB[a${index}]`
+    ));
     const concatInputs = input.clips.map((_, index) => `[v${index}]`).join("");
     filterParts.push(`${concatInputs}concat=n=${input.clips.length}:v=1:a=0[outv]`);
-    const audioInputIndex = input.clips.length;
-    let audioInputArgs: string[];
-    let audioMap: string;
+    const audioConcatInputs = input.clips.map((_, index) => `[a${index}]`).join("");
+    filterParts.push(`${audioConcatInputs}concat=n=${input.clips.length}:v=0:a=1[sceneaudio]`);
+    let musicInputArgs: string[] = [];
+    let audioMap = "[sceneaudio]";
     if (input.music) {
       if (
         input.music.body.byteLength === 0 ||
@@ -193,24 +226,19 @@ export const composeCinematicVideo = async (input: {
           : "m4a";
       const musicPath = join(directory, `music.${suffix}`);
       await writeFile(musicPath, input.music.body);
-      audioInputArgs = ["-stream_loop", "-1", "-i", musicPath];
+      const musicInputIndex = nextInputIndex;
+      musicInputArgs = ["-stream_loop", "-1", "-i", musicPath];
       const fadeOutStart = Math.max(0, totalDuration - 1);
       filterParts.push(
-        `[${audioInputIndex}:a:0]atrim=duration=${totalDuration},asetpts=PTS-STARTPTS,` +
+        `[${musicInputIndex}:a:0]atrim=duration=${totalDuration},asetpts=PTS-STARTPTS,` +
         `volume=${input.music.gainDb ?? -12}dB,afade=t=in:st=0:d=1,` +
-        `afade=t=out:st=${fadeOutStart}:d=1[aout]`,
+        `afade=t=out:st=${fadeOutStart}:d=1,aformat=sample_rates=48000:channel_layouts=stereo[music]`,
+      );
+      filterParts.push(
+        "[sceneaudio][music]amix=inputs=2:duration=first:dropout_transition=0," +
+        "alimiter=limit=0.95:attack=5:release=50[aout]",
       );
       audioMap = "[aout]";
-    } else {
-      audioInputArgs = [
-        "-f",
-        "lavfi",
-        "-t",
-        String(totalDuration),
-        "-i",
-        "anullsrc=channel_layout=stereo:sample_rate=48000",
-      ];
-      audioMap = `${audioInputIndex}:a:0`;
     }
     const args = [
       "-hide_banner",
@@ -218,7 +246,7 @@ export const composeCinematicVideo = async (input: {
       "error",
       "-y",
       ...inputArgs,
-      ...audioInputArgs,
+      ...musicInputArgs,
       "-filter_complex",
       filterParts.join(";"),
       "-map",

@@ -77,7 +77,9 @@ export class RenderProcessor {
               ? "image.generate" as const
               : scene.sourceType === "title_card"
                 ? "image.render.title-card" as const
-                : "video.generate" as const
+                : scene.audioMode === "seedance"
+                  ? "video.generate.audio" as const
+                  : "video.generate" as const
           ),
         ])]
       : ["video.generate" as const];
@@ -212,6 +214,8 @@ export class RenderProcessor {
           body: await this.storage.getObject(scene.assetObjectKey),
           durationSeconds: scene.durationSeconds,
           mimeType: scene.assetMimeType,
+          audioMode: scene.audioMode === "seedance" ? "embedded" : "silence",
+          audioGainDb: scene.audioGainDb,
         });
         await this.progress(
           payload,
@@ -238,6 +242,8 @@ export class RenderProcessor {
         clips.push({
           body: await this.storage.getObject(sceneJob.objectKey),
           durationSeconds: scene.durationSeconds,
+          audioMode: scene.audioMode === "seedance" ? "embedded" : "silence",
+          audioGainDb: scene.audioGainDb,
         });
         continue;
       }
@@ -255,7 +261,10 @@ export class RenderProcessor {
             scene.visualPrompt,
             `Narrative beat: ${scene.narrativeBeat}.`,
             `Camera: ${scene.camera}.`,
-            `Audio direction: ${scene.audio}.`,
+            scene.audioMode === "seedance"
+              ? `Scene sound: ${scene.audio}. Generate synchronized dialogue, narration, ambience, and sound effects only.`
+              : "Scene sound: intentional silence. Do not generate dialogue, narration, ambience, or sound effects.",
+            "No background music. No score. The full-length background track is generated separately.",
             `Create one continuous cinematic shot suitable for trimming to ${scene.durationSeconds} seconds.`,
           ].join(" ");
           sceneStage = `场景 ${scene.order} · 提交视频模型任务`;
@@ -312,7 +321,12 @@ export class RenderProcessor {
           errorMessage: null,
         });
         await this.assertActive(payload);
-        clips.push({ body: video.body, durationSeconds: scene.durationSeconds });
+        clips.push({
+          body: video.body,
+          durationSeconds: scene.durationSeconds,
+          audioMode: scene.audioMode === "seedance" ? "embedded" : "silence",
+          audioGainDb: scene.audioGainDb,
+        });
       } catch (error: unknown) {
         const stagedError = renderStageError(sceneStage, error);
         await this.repository.updateCinematicSceneJob(sceneJobId, {

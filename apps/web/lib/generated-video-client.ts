@@ -12,6 +12,7 @@ export type GeneratedVideoItem = {
   resolution: string;
   themeName: string;
   title: string;
+  workflowId: string;
 };
 
 let generatedVideosCache: GeneratedVideoItem[] = [];
@@ -72,6 +73,7 @@ export const generatedVideosFromConversation = (
         resolution: "720p",
         themeName: metadata.themeName,
         title: entry.videoTitle ?? metadata.title,
+        workflowId: entry.workflowId,
       }];
   });
   const workflow = conversation.videoWorkflow;
@@ -95,6 +97,7 @@ export const generatedVideosFromConversation = (
       resolution: "720p",
       themeName: metadata.themeName,
       title: workflow.videoJob.videoTitle ?? metadata.title,
+      workflowId: workflow.workflowId,
     });
   }
   return videos;

@@ -1,6 +1,8 @@
 import { Catch, HttpStatus, Inject, Injectable, Logger, type ArgumentsHost } from "@nestjs/common";
 import { BaseExceptionFilter, HttpAdapterHost } from "@nestjs/core";
 
+import { findTransientDatabaseErrorCode } from "./infrastructure-error.js";
+
 const DATABASE_SCHEMA_ERROR_CODES = new Set([
   "ER_BAD_FIELD_ERROR",
   "ER_NO_SUCH_TABLE",
@@ -37,6 +39,15 @@ export class DatabaseSchemaExceptionFilter extends BaseExceptionFilter {
 
   override catch(exception: unknown, host: ArgumentsHost): void {
     const databaseErrorCode = findDatabaseSchemaErrorCode(exception);
+    const connectionErrorCode = findTransientDatabaseErrorCode(exception);
+    if (connectionErrorCode) {
+      this.logger.warn(`Database connection interrupted (${connectionErrorCode}).`);
+      this.adapterHost.httpAdapter.reply(host.switchToHttp().getResponse(), {
+        code: "DATABASE_TEMPORARILY_UNAVAILABLE",
+        message: "服务器连接错误，请稍后重试。",
+      }, HttpStatus.SERVICE_UNAVAILABLE);
+      return;
+    }
     if (!databaseErrorCode) {
       super.catch(exception, host);
       return;

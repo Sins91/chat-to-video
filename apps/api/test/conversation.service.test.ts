@@ -231,4 +231,23 @@ describe("ConversationService", () => {
     });
     expect(cursor).not.toHaveProperty("updatedAt");
   });
+
+  it("retries conversation listing after a transient connection loss", async () => {
+    const repository = createRepository();
+    repository.list
+      .mockRejectedValueOnce(Object.assign(new Error("Connection lost"), {
+        code: "PROTOCOL_CONNECTION_LOST",
+      }))
+      .mockResolvedValueOnce([]);
+    const service = new ConversationService(
+      repository as unknown as ConversationRepository,
+      {} as VideoWorkflowService,
+    );
+
+    await expect(service.list(undefined, 30)).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect(repository.list).toHaveBeenCalledTimes(2);
+  });
 });

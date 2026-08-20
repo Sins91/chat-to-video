@@ -24,8 +24,9 @@ import {
 } from "@chat-to-video/tools";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { Redis } from "ioredis";
+import type { Redis } from "ioredis";
 
+import { createObservedRedisClient } from "../redis-client.js";
 import { VIDEO_WORKFLOW_REPOSITORY } from "../video-workflow/video-workflow.tokens.js";
 import {
   AgentExtensionRequestContextSchema,
@@ -290,10 +291,15 @@ export class AgentToolRegistry implements OnModuleDestroy {
   private async listRuntimeCapabilities(filter?: string) {
     const redisUrl = process.env.REDIS_URL?.trim();
     if (!redisUrl) return listAgentCapabilities(filter);
-    this.capabilityRedis ??= new Redis(redisUrl, {
-      maxRetriesPerRequest: 1,
-      lazyConnect: true,
-    });
+    this.capabilityRedis ??= createObservedRedisClient(
+      redisUrl,
+      AgentToolRegistry.name,
+      "api-agent-capabilities",
+      {
+        maxRetriesPerRequest: 1,
+        lazyConnect: true,
+      },
+    );
     let runtime: ReturnType<typeof listAgentCapabilities>["capabilities"] = [];
     try {
       if (this.capabilityRedis.status === "wait") await this.capabilityRedis.connect();
@@ -339,10 +345,15 @@ export class AgentToolRegistry implements OnModuleDestroy {
   private async listRuntimeToolResolutions() {
     const redisUrl = process.env.REDIS_URL?.trim();
     if (!redisUrl) return [];
-    this.capabilityRedis ??= new Redis(redisUrl, {
-      maxRetriesPerRequest: 1,
-      lazyConnect: true,
-    });
+    this.capabilityRedis ??= createObservedRedisClient(
+      redisUrl,
+      AgentToolRegistry.name,
+      "api-agent-capabilities",
+      {
+        maxRetriesPerRequest: 1,
+        lazyConnect: true,
+      },
+    );
     try {
       if (this.capabilityRedis.status === "wait") await this.capabilityRedis.connect();
       const raw = await this.capabilityRedis.get(WORKFLOW_CAPABILITY_SNAPSHOT_KEY);

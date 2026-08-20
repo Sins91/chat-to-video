@@ -127,6 +127,8 @@ describe("generated video shelf", () => {
     expect(client).toContain("storyboard.storyboard.title");
     expect(client).toContain("entry.artifact.version > version");
     expect(client).toContain("title: workflow.videoJob.videoTitle ?? metadata.title");
+    expect(client).toContain("workflowId: entry.workflowId");
+    expect(client).toContain("workflowId: workflow.workflowId");
   });
 
   it("shows and copies the originating prompt while reviewing a completed video", async () => {

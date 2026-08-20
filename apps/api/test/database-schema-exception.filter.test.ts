@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { findDatabaseSchemaErrorCode } from "../src/database-schema-exception.filter.js";
+import { findTransientDatabaseErrorCode } from "../src/infrastructure-error.js";
 
 describe("database schema exception detection", () => {
   it("detects a missing table nested in a Drizzle query error", () => {
@@ -18,5 +19,14 @@ describe("database schema exception detection", () => {
     expect(findDatabaseSchemaErrorCode({
       cause: { code: "ER_ACCESS_DENIED_ERROR" },
     })).toBeNull();
+  });
+
+  it("detects transient connection failures nested in Drizzle errors", () => {
+    expect(findTransientDatabaseErrorCode(new Error("Failed query", {
+      cause: Object.assign(new Error("Connection lost"), {
+        code: "PROTOCOL_CONNECTION_LOST",
+      }),
+    }))).toBe("PROTOCOL_CONNECTION_LOST");
+    expect(findTransientDatabaseErrorCode({ code: "ER_ACCESS_DENIED_ERROR" })).toBeNull();
   });
 });

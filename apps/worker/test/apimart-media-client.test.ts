@@ -13,7 +13,6 @@ const config: WorkerConfig["apimart"] = {
   durationSeconds: 10,
   resolution: "720p",
   size: "16:9",
-  seedanceGenerateAudio: true,
 };
 
 const mediaResponse = (body: Uint8Array, contentType: string, url: string): Response => {

@@ -1,8 +1,9 @@
-import { Inject, Injectable, type OnModuleDestroy } from "@nestjs/common";
+import { Inject, Injectable, Logger, type OnModuleDestroy } from "@nestjs/common";
 import { VideoWorkflowEventSchema, type VideoWorkflowEvent } from "@chat-to-video/contracts";
 import type { VideoWorkflowRepository } from "@chat-to-video/database";
-import { Redis } from "ioredis";
 
+import { findInfrastructureErrorCode } from "../infrastructure-error.js";
+import { createObservedRedisClient } from "../redis-client.js";
 import { loadRedisUrl } from "./video-workflow.config.js";
 import { VIDEO_WORKFLOW_REPOSITORY } from "./video-workflow.tokens.js";
 
@@ -10,8 +11,19 @@ type EventListener = (event: VideoWorkflowEvent) => void;
 
 @Injectable()
 export class WorkflowEventService implements OnModuleDestroy {
-  private readonly publisher = new Redis(loadRedisUrl(), { maxRetriesPerRequest: 1 });
-  private readonly subscriber = new Redis(loadRedisUrl(), { maxRetriesPerRequest: 1 });
+  private readonly logger = new Logger(WorkflowEventService.name);
+  private readonly publisher = createObservedRedisClient(
+    loadRedisUrl(),
+    WorkflowEventService.name,
+    "api-workflow-events-publisher",
+    { maxRetriesPerRequest: 1 },
+  );
+  private readonly subscriber = createObservedRedisClient(
+    loadRedisUrl(),
+    WorkflowEventService.name,
+    "api-workflow-events-subscriber",
+    { maxRetriesPerRequest: 1 },
+  );
   private readonly listeners = new Map<string, Set<EventListener>>();
 
   constructor(@Inject(VIDEO_WORKFLOW_REPOSITORY) private readonly repository: VideoWorkflowRepository) {
@@ -37,7 +49,15 @@ export class WorkflowEventService implements OnModuleDestroy {
     data: VideoWorkflowEvent["data"];
   }): Promise<VideoWorkflowEvent> {
     const event = await this.repository.appendEvent(input);
-    await this.publisher.publish(`video-workflow:${input.workflowId}`, JSON.stringify(event));
+    try {
+      await this.publisher.publish(`video-workflow:${input.workflowId}`, JSON.stringify(event));
+    } catch (error: unknown) {
+      this.logger.warn({
+        message: "Workflow event was persisted but live Redis publication failed.",
+        workflowId: input.workflowId,
+        code: findInfrastructureErrorCode(error) ?? "UNKNOWN",
+      });
+    }
     return event;
   }
 

@@ -10,7 +10,6 @@ const commonConfig = {
   pollIntervalMs: 1_000,
   resultHosts: ["apimart.ai", "getapib.org"],
   taskTimeoutMs: 60_000,
-  seedanceGenerateAudio: true,
 } as const;
 
 const seedanceConfig: WorkerConfig["apimart"] = {
@@ -151,7 +150,6 @@ describe("SeedanceClient", () => {
       durationSeconds: 15,
       resolution: "720p",
       size: "16:9",
-      seedanceGenerateAudio: true,
     });
     expect(selectApimartVideoConfig(seedanceConfig, "MiniMax-Hailuo-2.3")).toMatchObject({
       model: "MiniMax-Hailuo-2.3",

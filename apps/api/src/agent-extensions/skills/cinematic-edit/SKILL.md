@@ -19,9 +19,11 @@ Create editorial decisions; do not execute FFmpeg or enqueue the render job.
 
 ## Make the timeline deterministic
 
-Keep `sceneOrder` contiguous, `startSeconds` monotonic, and timeline durations equal exactly `durationSeconds`. Keep audio gain within schema bounds. Use `audioMix` to state hierarchy among dialogue or narration, music, ambience, and effects, including ducking and peak-control intent.
+Keep `sceneOrder` contiguous, `startSeconds` monotonic, and timeline durations equal exactly `durationSeconds`. Keep audio gain within schema bounds. Use `audioMix` to require this deterministic order: concatenate Seedance embedded dialogue, narration, ambience, and synchronized effects; insert silence for static scenes; then mix the one full-length FlowMusic background track underneath with peak control.
 
 Describe one coherent `colorGrade` tied to the approved palette and lighting rather than a generic “cinematic” preset. Make `renderPrompt` summarize the approved scene, pacing, grade, audio, aspect-ratio, and motion commitments without adding creative scope.
+
+Preserve the approved Chinese setting in `renderPrompt` and quality checks. Treat foreign-location drift, mixed regional cues, and inappropriate non-Chinese visible text as continuity failures unless the approved subject requires them as factual exceptions.
 
 Include quality checks for timeline arithmetic, source coverage, continuity, motion-promise preservation, subtitle intent, audio intelligibility, peak control, output duration, and playability.
 

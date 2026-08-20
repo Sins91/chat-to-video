@@ -56,7 +56,7 @@ export function CinematicAssetReviewCard({
               </div>
             )}
             <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-muted-foreground">
-              <span>{asset.kind === "music" ? "背景音乐" : `镜头 ${asset.sceneOrder ?? "—"}`}</span>
+              <span>{asset.kind === "music" ? "全片背景音乐" : asset.kind === "video" ? `镜头 ${asset.sceneOrder ?? "—"} · 可试听场景声音` : `镜头 ${asset.sceneOrder ?? "—"} · 无声素材`}</span>
               <span>{asset.status === "running" ? `${assetStatusText(asset.status)} ${asset.progress}%` : assetStatusText(asset.status)}</span>
             </div>
           </section>

@@ -18,6 +18,10 @@ describe("consistency reference review", () => {
     expect(card).toContain("全部批准");
     expect(card).toContain("不会降级为重复提示词");
     expect(preview).toContain("snapshot.consistencyReferenceBatch");
+    expect(preview).toContain("previewVideo?.workflowSnapshot ?? snapshot");
+    expect(preview).toContain("historySnapshot.consistencyReferenceBatch");
     expect(provider).toContain("current.consistencyReferenceBatch");
+    expect(provider).toContain("await getVideoWorkflow(video.workflowId)");
+    expect(provider).toContain("workflowSnapshot");
   });
 });

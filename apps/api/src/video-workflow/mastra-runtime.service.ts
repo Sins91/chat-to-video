@@ -74,6 +74,7 @@ export class MastraRuntimeService implements OnModuleDestroy {
         chatDefault: agents.chat,
         storyboardAgent: agents.storyboard,
         cinematicStageAgent: agents.cinematic,
+        cinematicStageStructurer: agents.cinematicStructurer,
         cinematicDurationPlanner: agents.durationPlanner,
         workflowIntentRouter: agents.intentRouter,
       },

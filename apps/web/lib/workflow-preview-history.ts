@@ -14,6 +14,13 @@ export type WorkflowPreviewHistoryNode = {
   readonly version: CinematicArtifactVersion;
 };
 
+export type WorkflowPreviewHistoryContext = Pick<
+  VideoWorkflowSnapshot,
+  "pipeline" | "workflowId"
+> & {
+  readonly currentStage: VideoWorkflowSnapshot["currentStage"] | null;
+};
+
 export const getCurrentWorkflowNodeLabel = (
   snapshot: VideoWorkflowSnapshot,
 ): string => {
@@ -25,14 +32,13 @@ export const getCurrentWorkflowNodeLabel = (
 
 export const getWorkflowPreviewHistoryNodes = (
   entries: readonly ConversationEntry[],
-  snapshot: Pick<
-    VideoWorkflowSnapshot,
-    "currentStage" | "pipeline" | "workflowId"
-  >,
+  snapshot: WorkflowPreviewHistoryContext,
 ): WorkflowPreviewHistoryNode[] => {
   const pipeline = findWorkflowPipelineDefinition(snapshot.pipeline);
   if (!pipeline) return [];
-  const currentStageIndex = getWorkflowStageIndex(pipeline, snapshot.currentStage);
+  const currentStageIndex = snapshot.currentStage === null
+    ? pipeline.stages.length
+    : getWorkflowStageIndex(pipeline, snapshot.currentStage);
   if (currentStageIndex < 0) return [];
 
   const latestByStage = new Map<

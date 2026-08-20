@@ -13,7 +13,7 @@ Build one prompt per continuous shot in this order:
 3. Setting, time, atmosphere, and environmental motion.
 4. Framing, depth, camera height, lens character, and camera movement.
 5. Lighting, palette, texture, and continuity anchors.
-6. Narrative beat and audio intent when the selected profile supports it.
+6. Narrative beat and Seedance scene-sound intent: exact dialogue or narration, ambience, and synchronized effects. Explicitly request `no background music / no score`; the separate FlowMusic track covers the full film.
 7. State that the result must be one continuous shot suitable for trimming to the requested final scene duration.
 
 Use concrete observable motion. Avoid contradictory camera instructions, unexplained scene changes, multiple unrelated actions, provider marketing phrases, or continuity details that differ from adjacent scenes. Split a complex beat instead of compressing several shots into one generation.

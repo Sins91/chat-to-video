@@ -68,7 +68,7 @@ export class SeedanceClient {
       resolution: this.config.resolution,
       size: this.config.size,
       duration: durationSeconds,
-      generate_audio: this.config.seedanceGenerateAudio,
+      generate_audio: true,
       ...(referenceImageUrls.length ? { image_urls: referenceImageUrls.slice(0, 3) } : {}),
     };
   }

@@ -14,9 +14,11 @@ Convert approved research into exactly three emotionally distinct, reviewable di
 
 Use `get_workflow_tools`, provider selectors, model constraints, and reviewed pricing when the proposal depends on them. Treat `unconfigured` as unavailable for the promise. The only registered renderer family is `ffmpeg`; do not offer Remotion, HyperFrames, or an unregistered fallback.
 
-Resolve the music plan at proposal time. State whether music is generated, supplied, selected from a configured library, or intentionally omitted. Do not defer a known music blocker to assets.
+Resolve the music plan at proposal time as one full-length FlowMusic background track. Separately define Seedance scene sound for dialogue, narration, ambience, and synchronized effects, and explicitly exclude background score from Seedance output. Do not defer a known music blocker to assets.
 
 ## Design three differentiated directions
+
+Set all three directions in credible Chinese regional contexts. Replace generic foreign institutions, streets, homes, transport, currency, holidays, and everyday behavior with Chinese counterparts; make the directions distinct through filmmaking choices rather than superficial cultural decoration.
 
 Give every direction:
 
@@ -24,7 +26,7 @@ Give every direction:
 - An `emotionalArc` with at least three ordered beats and a clear landing.
 - A concrete visual treatment covering framing, camera behavior, lighting, texture, typography restraint, and editing rhythm.
 - A palette of three to eight usable color or material descriptors.
-- A music and sound direction that reinforces its arc.
+- A `musicDirection` for the single full-length background track and a separate `soundDirection` for Seedance scene sound; the latter must say no background music/no score.
 
 Make the directions differ in more than adjectives. Vary the primary emotional arc, shot language, pacing, or sound strategy. Include an intimate or texture-led alternative when spectacle would make all three converge.
 

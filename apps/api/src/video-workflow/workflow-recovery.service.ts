@@ -13,6 +13,7 @@ import {
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 
+import { retryTransientDatabaseRead } from "../infrastructure-error.js";
 import { MastraRuntimeService } from "./mastra-runtime.service.js";
 import { VideoWorkflowOperations } from "./video-workflow.operations.js";
 import { VIDEO_WORKFLOW_REPOSITORY } from "./video-workflow.tokens.js";
@@ -48,7 +49,10 @@ export class WorkflowRecoveryService implements OnApplicationBootstrap, OnModule
   }
 
   private async recoverAfterStartup(): Promise<void> {
-    const workflows = await this.repository.listRecoverableActiveWorkflows();
+    const workflows = await retryTransientDatabaseRead(
+      () => this.repository.listRecoverableActiveWorkflows(),
+      { attempts: 6, initialDelayMs: 500 },
+    );
     for (const workflow of workflows) void this.recoverAgentRun(workflow.id, false);
   }
 

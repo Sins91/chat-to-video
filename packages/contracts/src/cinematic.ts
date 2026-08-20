@@ -19,7 +19,7 @@ export const CINEMATIC_PIPELINE_DEFINITION = defineWorkflowPipeline({
   id: "cinematic",
   label: "电影化视频",
   aliases: ["电影化", "电影感", "cinematic"],
-  definitionVersion: 3,
+  definitionVersion: 4,
   initialStageId: "research",
   terminalStageIds: ["compose"],
   directEntryStageIds: ["proposal", "script", "scene_plan", "consistency_reference", "assets"],
@@ -29,7 +29,7 @@ export const CINEMATIC_PIPELINE_DEFINITION = defineWorkflowPipeline({
     { id: "script", label: "脚本", aliases: ["脚本", "文案阶段", "script"], stepId: "script", stepLabel: "脚本生成", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["剧情", "文案", "旁白", "叙事节奏"], ownedArtifactKinds: ["script"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["scene_plan"], inputArtifactKinds: ["proposal"], outputArtifactKinds: ["script"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, stageSkillId: "cinematic-script", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: ["transcriber", "scene_detect"] } },
     { id: "scene_plan", label: "分镜写作", aliases: ["分镜", "分镜写作", "场景规划", "scene plan", "storyboard"], stepId: "scene-plan", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["镜头", "场景顺序", "运镜", "逐镜时长"], ownedArtifactKinds: ["scene_plan"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["consistency_reference"], inputArtifactKinds: ["script"], outputArtifactKinds: ["scene_plan"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, stageSkillId: "cinematic-scene-plan", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: ["video.probe"], conditional: [] }, tools: { required: [], optional: ["video_analyzer", "audio_probe", "scene_detect", "frame_sampler"] } },
     { id: "consistency_reference", label: "一致性参考图", aliases: ["一致性参考图", "参考图", "锚点图", "consistency reference"], stepId: "consistency-reference", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["人物一致性", "产品一致性", "环境一致性", "视觉世界"], ownedArtifactKinds: ["consistency_reference"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["assets"], inputArtifactKinds: ["proposal", "scene_plan"], outputArtifactKinds: ["consistency_reference"], execution: "queue", planningReview: { requiresApproval: true, allowsRevision: true }, executionReview: { requiresApproval: true, allowsRevision: true }, stageSkillId: "cinematic-consistency-reference", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [{ capability: "image.generate", when: "consistency_reference_required" }] }, tools: { required: [], optional: ["image_generator"] } },
-    { id: "assets", label: "素材规划", aliases: ["素材规划", "素材阶段", "asset", "assets"], stepId: "assets", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["图片", "视频", "音乐", "声音素材"], ownedArtifactKinds: ["asset_manifest"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["edit"], inputArtifactKinds: ["scene_plan", "consistency_reference"], outputArtifactKinds: ["asset_manifest"], execution: "queue", planningReview: { requiresApproval: true, allowsRevision: true }, executionReview: { requiresApproval: true, allowsRevision: true }, stageSkillId: "cinematic-assets", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [{ capability: "video.generate", when: "motion_required_without_source_video" }, { capability: "image.generate", when: "generated_image_planned" }, { capability: "image.render.title-card", when: "title_card_planned" }, { capability: "music.generate", when: "music_generation_selected" }] }, tools: { required: [], optional: ["tts_selector", "apimart_tts", "image_selector", "video_selector", "pixabay_music", "freesound_music", "image_generator", "video_generator", "music_generator", "title_card", "subtitle_gen", "audio_enhance"] } },
+    { id: "assets", label: "素材规划", aliases: ["素材规划", "素材阶段", "asset", "assets"], stepId: "assets", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["图片", "视频", "音乐", "场景声音"], ownedArtifactKinds: ["asset_manifest"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["edit"], inputArtifactKinds: ["scene_plan", "consistency_reference"], outputArtifactKinds: ["asset_manifest"], execution: "queue", planningReview: { requiresApproval: true, allowsRevision: true }, executionReview: { requiresApproval: true, allowsRevision: true }, stageSkillId: "cinematic-assets", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [{ capability: "video.generate", when: "motion_required_without_source_video" }, { capability: "video.generate.audio", when: "seedance_audio_planned" }, { capability: "image.generate", when: "generated_image_planned" }, { capability: "image.render.title-card", when: "title_card_planned" }, { capability: "music.generate", when: "music_generation_selected" }] }, tools: { required: [], optional: ["image_selector", "video_selector", "image_generator", "video_generator", "music_generator", "title_card", "subtitle_gen", "audio_enhance"] } },
     { id: "edit", label: "剪辑方案", aliases: ["剪辑方案", "剪辑", "edit"], stepId: "edit", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["剪辑", "字幕", "同步", "转场"], ownedArtifactKinds: ["edit_decisions"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["compose"], inputArtifactKinds: ["asset_manifest"], outputArtifactKinds: ["edit_decisions"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, stageSkillId: "cinematic-edit", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: ["video_trimmer", "subtitle_burn", "audio_enhance", "silence_cutter", "color_grade"] } },
     { id: "compose", label: "视频生成", aliases: ["视频生成", "合成", "compose"], stepId: "video-generation", producesArtifact: false, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["编码", "分辨率", "音量", "成片"], ownedArtifactKinds: ["render_output"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["edit_decisions"], outputArtifactKinds: ["render_output"], execution: "queue", planningReview: { requiresApproval: false, allowsRevision: false }, stageSkillId: "cinematic-compose", reviewerSkillId: "cinematic-reviewer", capabilities: { required: ["video.compose.ffmpeg"], optional: ["video.probe"], conditional: [{ capability: "audio.mix", when: "audio_asset_planned" }] }, tools: { required: ["video_compose"], optional: ["audio_mixer", "audio_probe", "visual_qa", "av_sync_qa", "export_bundle"] } },
   ],
@@ -49,6 +49,8 @@ export const CinematicResearchBriefSchema = z.object({
     url: z.string().url().nullable(),
   }).strict()).min(3).max(8),
   musicDirection: z.string().trim().min(1).max(500),
+  soundDirection: z.string().trim().min(1).max(500)
+    .default("未单独规划场景声音。"),
   productionConstraints: z.array(z.string().trim().min(1).max(300)).min(1).max(12),
 }).strict();
 
@@ -61,6 +63,8 @@ export const CinematicProposalSchema = z.object({
     visualTreatment: z.string().trim().min(1).max(800),
     colorPalette: z.array(z.string().trim().min(1).max(80)).min(3).max(8),
     musicDirection: z.string().trim().min(1).max(400),
+    soundDirection: z.string().trim().min(1).max(400)
+      .default("未单独规划场景声音。"),
   }).strict()).length(3),
   recommendedDirectionId: z.string().trim().regex(/^[a-z0-9-]+$/u).max(40),
   rendererFamily: z.literal("ffmpeg"),
@@ -110,7 +114,23 @@ export const CinematicSceneSchema = z.object({
   camera: z.string().trim().min(1).max(300),
   transition: z.enum(["cut", "crossfade", "fade_black", "match_cut"]),
   audio: z.string().trim().min(1).max(300),
-}).strict();
+  audioMode: z.enum(["seedance", "silence"]).default("silence"),
+}).strict().superRefine((scene, context) => {
+  if (scene.audioMode === "seedance" && scene.sourceType !== "generated_video") {
+    context.addIssue({
+      code: "custom",
+      message: "Only generated-video scenes can use Seedance scene audio.",
+      path: ["audioMode"],
+    });
+  }
+  if (scene.sourceType !== "generated_video" && scene.audioMode !== "silence") {
+    context.addIssue({
+      code: "custom",
+      message: "Image and title-card scenes must use silence for scene audio.",
+      path: ["audioMode"],
+    });
+  }
+});
 
 export const CinematicScenePlanSchema = z.object({
   durationSeconds: CinematicDurationSecondsSchema,
@@ -168,7 +188,7 @@ export const CinematicConsistencyReferenceArtifactSchema = z.object({
 export const CinematicAssetManifestSchema = z.object({
   assets: z.array(z.object({
     sceneOrder: CinematicSceneOrderSchema,
-    kind: z.enum(["video", "image", "title_card", "audio"]),
+    kind: z.enum(["video", "image", "title_card"]),
     sourceMode: z.enum(["generate", "supplied", "library"]),
     status: z.literal("planned"),
     prompt: z.string().trim().min(1).max(1_000),
@@ -178,6 +198,8 @@ export const CinematicAssetManifestSchema = z.object({
     sourceMode: z.enum(["generate", "supplied", "library"]),
     direction: z.string().trim().min(1).max(500),
   }).strict(),
+  seedanceAudioDirection: z.string().trim().min(1).max(500)
+    .default("逐镜生成对白、旁白、环境声和同步音效，不生成背景配乐。"),
   totalEstimatedCostUsd: z.number().min(0).max(1_000),
   slideshowRisk: z.number().int().min(0).max(10),
 }).strict();
@@ -256,8 +278,9 @@ export const CinematicArtifactVersionSchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
 }).strict();
 
-export const CinematicRenderSceneSchema = CinematicSceneSchema.extend({
+export const CinematicRenderSceneSchema = CinematicSceneSchema.safeExtend({
   generationDurationSeconds: CinematicClipDurationSecondsSchema,
+  audioGainDb: z.number().min(-60).max(12).default(0),
   assetObjectKey: z.string()
     .regex(/^tenant\/demo\/project\/demo\/derived\/[a-zA-Z0-9-]+\/[a-zA-Z0-9._-]+$/u)
     .refine((value) => !value.includes(".."), "Asset object key is unsafe.")
@@ -270,6 +293,7 @@ export const CinematicRenderPlanSchema = z.object({
   durationSeconds: CinematicDurationSecondsSchema,
   modelMaxDurationSeconds: CinematicClipDurationSecondsSchema,
   scenes: z.array(CinematicRenderSceneSchema).min(1).max(60),
+  usesEmbeddedSceneAudio: z.boolean().default(false),
   music: z.object({
     objectKey: z.string()
       .regex(/^tenant\/demo\/project\/demo\/derived\/[a-zA-Z0-9-]+\/[a-zA-Z0-9._-]+$/u)

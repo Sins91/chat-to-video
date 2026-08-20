@@ -223,6 +223,7 @@ describe("agent extension boundaries", () => {
             camera: "推进",
             transition: "cut" as const,
             audio: "雨声",
+            audioMode: "seedance" as const,
           },
           {
             order: 2,
@@ -235,6 +236,7 @@ describe("agent extension boundaries", () => {
             camera: "固定",
             transition: "crossfade" as const,
             audio: "心跳",
+            audioMode: "silence" as const,
           },
         ],
       },
@@ -247,6 +249,7 @@ describe("agent extension boundaries", () => {
           { sceneOrder: 2, kind: "image", sourceMode: "generate", status: "planned", prompt: "信件特写", estimatedCostUsd: 999 },
         ],
         music: { sourceMode: "generate", direction: "低音弦乐" },
+        seedanceAudioDirection: "雨声与同步音效，不含背景配乐。",
         totalEstimatedCostUsd: 999,
         slideshowRisk: 2,
       },

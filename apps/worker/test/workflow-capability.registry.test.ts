@@ -15,7 +15,6 @@ const config: WorkerConfig = {
     pollIntervalMs: 5_000,
     resolution: "720p",
     resultHosts: ["cdn.example.com"],
-    seedanceGenerateAudio: true,
     size: "16:9",
     taskTimeoutMs: 900_000,
   },
@@ -41,6 +40,9 @@ describe("worker capability registry", () => {
     expect(snapshot.resolutions.find(
       (capability) => capability.capabilityId === "music.generate",
     )).toMatchObject({ status: "available", adapterId: "apimart.flowmusic" });
+    expect(snapshot.resolutions.find(
+      (capability) => capability.capabilityId === "video.generate.audio",
+    )).toMatchObject({ status: "available", adapterId: "apimart.seedance-2-audio" });
     expect(snapshot.resolutions.find(
       (capability) => capability.capabilityId === "video.probe",
     )).toMatchObject({ status: "unconfigured", adapterId: null });

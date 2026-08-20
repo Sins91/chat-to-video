@@ -28,11 +28,40 @@ const researchVersion = (
         { title: "Reference C", description: "Description C", url: null },
       ],
       musicDirection: "Minimal strings",
+      soundDirection: "Ambient room tone and synchronized effects; no score.",
       productionConstraints: ["Keep the subject readable"],
     },
   },
   isSuperseded,
   supersededAt: isSuperseded ? CREATED_AT : null,
+  createdAt: CREATED_AT,
+});
+
+const proposalVersion = (version: number): CinematicArtifactVersion => ({
+  version,
+  revisionRequest: null,
+  artifact: {
+    stage: "proposal",
+    data: {
+      directions: ["a", "b", "c"].map((id) => ({
+        id,
+        title: `Direction ${id}`,
+        logline: "A cinematic direction.",
+        emotionalArc: ["setup", "turn", "landing"],
+        visualTreatment: "Controlled cinematic imagery.",
+        colorPalette: ["black", "amber", "blue"],
+        musicDirection: "Low strings.",
+        soundDirection: "Rain and synchronized effects; no score.",
+      })),
+      recommendedDirectionId: "a",
+      rendererFamily: "ffmpeg",
+      durationSeconds: 10,
+      estimatedCostUsd: 1,
+      deliveryPromise: "A ten-second film.",
+    },
+  },
+  isSuperseded: false,
+  supersededAt: null,
   createdAt: CREATED_AT,
 });
 
@@ -77,5 +106,18 @@ describe("workflow preview history", () => {
       pipeline: "cinematic",
       currentStage: "research",
     })).toEqual([]);
+  });
+
+  it("orders all final artifacts when reviewing a completed video", () => {
+    const nodes = getWorkflowPreviewHistoryNodes([
+      artifactEntry("proposal-v2", WORKFLOW_ID, proposalVersion(2)),
+      artifactEntry("research-v1", WORKFLOW_ID, researchVersion(1)),
+    ], {
+      workflowId: WORKFLOW_ID,
+      pipeline: "cinematic",
+      currentStage: null,
+    });
+
+    expect(nodes.map((node) => node.stage)).toEqual(["research", "proposal"]);
   });
 });

@@ -1,4 +1,5 @@
 import type { CinematicArtifact } from "@chat-to-video/contracts";
+import { APICallError } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
 import { ApimartModelGateway } from "../src/model-gateway/apimart-model-gateway.js";
@@ -31,6 +32,7 @@ const researchArtifact: CinematicArtifact = {
       { title: "Empty doorway", description: "Negative space and silhouette.", url: null },
     ],
     musicDirection: "Low strings and rain ambience.",
+    soundDirection: "Rain, dialogue, and synchronized effects; no score.",
     productionConstraints: ["Ten second runtime"],
   },
 };
@@ -52,6 +54,9 @@ const createRequest = (onToolActivity: (activity: ModelToolActivity) => void | P
 
 const createAgents = (generate: ReturnType<typeof vi.fn>): MastraAgents => ({
   cinematic: { generate },
+  cinematicStructurer: {
+    generate: vi.fn().mockResolvedValue({ object: researchArtifact }),
+  },
   chat: { stream: vi.fn() },
   storyboard: { generate: vi.fn() },
   providerName: "deepseek",
@@ -86,7 +91,7 @@ describe("Cinematic tool activity", () => {
           context: {},
           error: new Error("secret-provider-error"),
         });
-        return { object: researchArtifact };
+        return { text: "Grounded research evidence." };
       },
     );
     const gateway = new ApimartModelGateway(createAgents(generate));
@@ -132,9 +137,14 @@ describe("Cinematic tool activity", () => {
           context: {},
         });
         if (attempt === 1) {
-          throw new Error("Structured output validation failed: data.summary is required");
+          throw new APICallError({
+            message: "fetch failed",
+            url: "https://api.example.test/v1/chat/completions",
+            requestBodyValues: {},
+            isRetryable: true,
+          });
         }
-        return { object: researchArtifact };
+        return { text: "Grounded research evidence." };
       },
     );
     const gateway = new ApimartModelGateway(createAgents(generate));
@@ -156,7 +166,7 @@ describe("Cinematic tool activity", () => {
           input: {},
           context: {},
         });
-        return { object: researchArtifact };
+        return { text: "Grounded research evidence." };
       },
     );
     const gateway = new ApimartModelGateway(createAgents(generate));

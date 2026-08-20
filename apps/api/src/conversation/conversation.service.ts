@@ -9,10 +9,11 @@ import {
 import type { ConversationRepository } from "@chat-to-video/database";
 import { randomUUID } from "node:crypto";
 
+import { retryTransientDatabaseRead } from "../infrastructure-error.js";
 import { VideoWorkflowService } from "../video-workflow/video-workflow.service.js";
 import { CONVERSATION_REPOSITORY } from "../video-workflow/video-workflow.tokens.js";
-import { createConversationTitle } from "./conversation-title.js";
 import { buildGeneratedVideoPromptTrace } from "../video-workflow/video-prompt-trace.js";
+import { createConversationTitle } from "./conversation-title.js";
 
 type Cursor = { createdAt: Date; id: string };
 
@@ -101,7 +102,10 @@ export class ConversationService {
   }
 
   async list(cursorValue: string | undefined, limit: number): Promise<ConversationListResponse> {
-    const rows = await this.repository.list(decodeCursor(cursorValue), limit);
+    const cursor = decodeCursor(cursorValue);
+    const rows = await retryTransientDatabaseRead(
+      () => this.repository.list(cursor, limit),
+    );
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit);
     const last = items.at(-1);

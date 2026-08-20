@@ -20,4 +20,12 @@ describe("video output estimate", () => {
   it("uses the resolution explicitly requested by the user", () => {
     expect(getVideoOutputEstimate(30, "Generate a 480p landscape video").resolution).toBe("480p");
   });
+
+  it("uses the latest resolution requested during workflow review", () => {
+    expect(getVideoOutputEstimate(
+      30,
+      "Generate a 720p landscape video",
+      ["Keep the visual direction", "Change the output resolution to 480p"],
+    ).resolution).toBe("480p");
+  });
 });

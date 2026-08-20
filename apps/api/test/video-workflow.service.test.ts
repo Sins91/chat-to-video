@@ -20,6 +20,7 @@ const waitingWorkflow = {
   runId: "run-1",
   requestId: "00000000-0000-4000-8000-000000000002",
   pipelineId: "cinematic",
+  pipelineDefinitionVersion: 4,
   currentStageId: "proposal",
   initialPrompt: "A letter arriving on a rainy night",
   videoModel: "doubao-seedance-2.0",
@@ -221,21 +222,21 @@ describe("VideoWorkflowService interactions", () => {
     const created = await service.create({
       messageId: "message-1",
       prompt: "Generate a rainy night video",
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     });
     expect(typeof created.workflowId).toBe("string");
     expect(modelGateway.inferCinematicDuration).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: created.conversationId,
       messages: [{ role: "user", content: "Generate a rainy night video" }],
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     }));
     expect(repository.createWorkflow).toHaveBeenCalledWith(expect.objectContaining({
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
       durationSeconds: 30,
     }));
     expect(runtime.start).toHaveBeenCalledWith(
       expect.objectContaining({
-        videoModel: "MiniMax-Hailuo-2.3",
+        videoModel: "doubao-seedance-2.0",
         durationSeconds: 30,
       }),
       expect.any(Function),
@@ -262,7 +263,7 @@ describe("VideoWorkflowService interactions", () => {
     await expect(service.resolveVideoIntent({
       messageId: "video-script-message",
       text: "帮我编写一个产品视频脚本",
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     })).resolves.toMatchObject({
       route: "workflow",
       applied: true,
@@ -325,7 +326,7 @@ describe("VideoWorkflowService interactions", () => {
       conversationId: waitingWorkflow.conversationId,
       messageId: "second-video-message",
       text: "再生成一段雨夜城市宣传片",
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     })).resolves.toMatchObject({
       route: "workflow",
       applied: true,
@@ -360,7 +361,7 @@ describe("VideoWorkflowService interactions", () => {
       conversationId: waitingWorkflow.conversationId,
       messageId: "contextual-second-video",
       text: "按刚才的风格再做一版",
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     })).resolves.toMatchObject({
       route: "workflow",
       intent: { type: "start_workflow" },
@@ -428,7 +429,7 @@ describe("VideoWorkflowService interactions", () => {
       conversationId: waitingWorkflow.conversationId,
       messageId: "message-2",
       prompt: "Generate a second rainy night video",
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     });
 
     expect(created.conversationId).toBe(waitingWorkflow.conversationId);
@@ -453,7 +454,7 @@ describe("VideoWorkflowService interactions", () => {
     await expect(service.create({
       messageId: "message-duration-failure",
       prompt: "Generate a product story video",
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     })).rejects.toMatchObject({ response: { code: "VIDEO_DURATION_INFERENCE_FAILED" } });
     expect(conversations.createWithUserMessage).not.toHaveBeenCalled();
     expect(repository.createWorkflow).not.toHaveBeenCalled();
@@ -467,7 +468,7 @@ describe("VideoWorkflowService interactions", () => {
       conversationId: waitingWorkflow.conversationId,
       messageId: "message-2",
       prompt: "Generate another video",
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     })).rejects.toMatchObject({ response: { code: "CONVERSATION_WORKFLOW_ACTIVE" } });
     expect(runtime.start).not.toHaveBeenCalled();
   });
@@ -822,15 +823,23 @@ describe("VideoWorkflowService interactions", () => {
     );
   });
 
-  it("changes the model while the storyboard is awaiting confirmation", async () => {
-    await expect(service.updateModel(waitingWorkflow.id, "MiniMax-Hailuo-2.3")).resolves.toEqual({
+  it("accepts Seedance while the storyboard is awaiting confirmation", async () => {
+    await expect(service.updateModel(waitingWorkflow.id, "doubao-seedance-2.0")).resolves.toEqual({
       accepted: true,
-      videoModel: "MiniMax-Hailuo-2.3",
+      videoModel: "doubao-seedance-2.0",
     });
     expect(repository.updateVideoModel).toHaveBeenCalledWith(
       waitingWorkflow.id,
-      "MiniMax-Hailuo-2.3",
+      "doubao-seedance-2.0",
     );
+  });
+
+  it("rejects a legacy model for a current workflow", async () => {
+    await expect(service.updateModel(waitingWorkflow.id, "MiniMax-Hailuo-2.3"))
+      .rejects.toMatchObject({
+        response: { code: "VIDEO_MODEL_NOT_SUPPORTED_FOR_CURRENT_PIPELINE" },
+      });
+    expect(repository.updateVideoModel).not.toHaveBeenCalled();
   });
 
   it("requeues a failed provider task without creating another workflow", async () => {
@@ -874,7 +883,7 @@ describe("VideoWorkflowService interactions", () => {
 
   it("rejects model changes after the workflow model is locked", async () => {
     repository.updateVideoModel.mockResolvedValue(false);
-    await expect(service.updateModel(waitingWorkflow.id, "MiniMax-Hailuo-2.3"))
+    await expect(service.updateModel(waitingWorkflow.id, "doubao-seedance-2.0"))
       .rejects.toMatchObject({ response: { code: "VIDEO_MODEL_LOCKED" } });
   });
 

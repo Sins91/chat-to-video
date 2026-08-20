@@ -15,12 +15,12 @@ Preserve the approved edit decisions when the workflow prepares or reviews the W
 - Require the registered `video_compose` capability and every conditional capability implied by the approved plan.
 - Keep the renderer family `ffmpeg`; never substitute another runtime or replace missing motion with stills.
 - Require validated scene asset object keys and MIME types from trusted server context, not user text.
-- Preserve scene order, durations, transitions, aspect ratio, grade, audio hierarchy, and the approved delivery promise.
+- Preserve scene order, durations, transitions, aspect ratio, grade, audio hierarchy, and the approved delivery promise. Concatenate Seedance embedded scene sound first, insert silence for static scenes, then mix the approved full-length FlowMusic background track underneath.
 - Escalate missing assets, unavailable Tools, invalid media, or an incompatible render plan instead of weakening it.
 
 ## Preserve cinematic treatment
 
-Use letterbox, crop, overlays, grain, fades, and transition treatments only when already represented by approved edit intent and supported by the renderer. Keep dialogue or narration intelligible, music dynamics intentional, ambience continuous where appropriate, and peaks controlled.
+Use letterbox, crop, overlays, grain, fades, and transition treatments only when already represented by approved edit intent and supported by the renderer. Keep Seedance dialogue or narration intelligible, preserve synchronized effects, keep the separate background-music dynamics intentional, and control mixed peaks.
 
 ## Require verification evidence
 

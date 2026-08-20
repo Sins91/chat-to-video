@@ -22,7 +22,6 @@ const config: WorkerConfig = {
     pollIntervalMs: 5_000,
     resolution: "720p",
     resultHosts: ["example.com"],
-    seedanceGenerateAudio: true,
     size: "16:9",
     taskTimeoutMs: 900_000,
   },

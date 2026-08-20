@@ -18,6 +18,8 @@ If approved reference analysis is present, treat it as evidence rather than an i
 
 ## Research the cinematic language
 
+Ground searches in the appropriate Chinese region. Prefer Chinese sources for local customs, architecture, seasons, transport, platform behavior, and audience context. Global references may inform camera or editing language, but they must not silently move the production to a foreign setting.
+
 Call `web_search` with focused queries that cover:
 
 1. Subject- and mood-specific visual precedents.
@@ -34,7 +36,8 @@ Use only returned URLs. Never invent, normalize, or repair a source URL. Prefer 
 - Provide three to eight distinct `visualReferences`; describe the relevant framing, palette, lighting, movement, texture, emotional effect, and applicability.
 - Use `url: null` only when search is unavailable or produced no relevant verified result, and disclose that limitation in `productionConstraints`.
 - Choose three to eight concrete `moodKeywords` that distinguish the intended emotional territory.
-- Make `musicDirection` substantive: name energy curve, instrumentation or texture, sound-design role, and whether speech is expected.
+- Make `musicDirection` substantive for the one full-length FlowMusic background track: name its energy curve, instrumentation, texture, and transition points.
+- Make `soundDirection` separately define Seedance-generated dialogue, narration, ambience, and synchronized effects. Explicitly exclude background music and score because those come from the full-length FlowMusic track.
 - Record real constraints such as missing authorized source media, unavailable Tools, model clip limits, factual uncertainty, FFmpeg-only composition, aspect ratio, and budget evidence.
 
 Before returning, confirm that the artifact contains no fabricated file, source, capability, price, or completed action and leaves proposal selection to the next stage.

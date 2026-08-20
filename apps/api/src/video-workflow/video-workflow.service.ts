@@ -115,6 +115,26 @@ type WorkflowCreationContext = {
   sourceWorkflowId?: string;
 };
 
+const assertSeedanceVideoModel = (videoModel: VideoModel): void => {
+  if (videoModel !== "doubao-seedance-2.0") {
+    throw new BadRequestException({
+      code: "VIDEO_MODEL_NOT_SUPPORTED_FOR_CURRENT_PIPELINE",
+      message: "New cinematic workflows require doubao-seedance-2.0.",
+    });
+  }
+};
+
+const assertCurrentPipelineDefinition = (workflow: {
+  pipelineDefinitionVersion: number;
+}): void => {
+  if (workflow.pipelineDefinitionVersion !== CINEMATIC_PIPELINE_DEFINITION.definitionVersion) {
+    throw new ConflictException({
+      code: "VIDEO_WORKFLOW_LEGACY_READ_ONLY",
+      message: "This legacy workflow is available for history only and cannot continue.",
+    });
+  }
+};
+
 const createPipelineScopeGuidance = (
   pipeline: WorkflowPipelineDefinition,
   currentStageId: string,
@@ -962,6 +982,8 @@ export class VideoWorkflowService {
     input: ResolveVideoWorkflowIntentRequest,
     pending: NonNullable<Awaited<ReturnType<VideoWorkflowRepository["findWorkflowControlRequest"]>>>,
   ): Promise<ResolveVideoWorkflowIntentResponse> {
+    const videoModel = input.videoModel ?? DEFAULT_VIDEO_MODEL;
+    assertSeedanceVideoModel(videoModel);
     const source = pending.sourceWorkflowId
       ? await this.repository.findWorkflow(pending.sourceWorkflowId)
       : null;
@@ -985,9 +1007,6 @@ export class VideoWorkflowService {
     }
     const workflowId = randomUUID();
     const requestId = pending.id;
-    const videoModel = input.videoModel ?? (source
-      ? VideoModelSchema.parse(source.videoModel)
-      : DEFAULT_VIDEO_MODEL);
     try {
       const previousMessages = await this.conversations.listModelMessages(claimed.conversationId);
       const durationSeconds = source?.durationSeconds ?? await this.modelGateway.inferCinematicDuration({
@@ -1427,6 +1446,7 @@ export class VideoWorkflowService {
     input: CreateVideoWorkflowRequest,
     context: WorkflowCreationContext,
   ): Promise<CreateVideoWorkflowResponse> {
+    assertSeedanceVideoModel(input.videoModel);
     if (!isCinematicCreationEnabled()) {
       throw new ServiceUnavailableException({
         code: "CINEMATIC_CREATION_MAINTENANCE",
@@ -1554,6 +1574,8 @@ export class VideoWorkflowService {
         message: "Video workflow not found.",
       });
     }
+    assertCurrentPipelineDefinition(workflow);
+    assertSeedanceVideoModel(videoModel);
     if (!workflow.conversationId || !await this.conversations.findActiveConversation(workflow.conversationId)) {
       throw new NotFoundException({
         code: "CONVERSATION_NOT_FOUND",
@@ -1581,6 +1603,7 @@ export class VideoWorkflowService {
   async recover(workflowId: string): Promise<RecoverVideoWorkflowResponse> {
     const workflow = await this.repository.findWorkflow(workflowId);
     if (!workflow) throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
+    assertCurrentPipelineDefinition(workflow);
     if (!workflow.conversationId || !await this.conversations.findActiveConversation(workflow.conversationId)) {
       throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
     }
@@ -1601,6 +1624,7 @@ export class VideoWorkflowService {
   async interact(workflowId: string, interaction: VideoWorkflowInteraction): Promise<VideoWorkflowInteractionResult> {
     const workflow = await this.repository.findWorkflow(workflowId);
     if (!workflow) throw new NotFoundException({ code: "VIDEO_WORKFLOW_NOT_FOUND", message: "Video workflow not found." });
+    assertCurrentPipelineDefinition(workflow);
     if (!workflow.conversationId || !await this.conversations.findActiveConversation(workflow.conversationId)) {
       throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
     }

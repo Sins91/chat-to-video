@@ -10,6 +10,13 @@ description: Use first for every video-production request handled by chat-defaul
 
 Apply this governance before the executive-producer, checkpoint, capability, stage, reference-analysis, and reviewer skills. Safety constraints, shared Zod schemas, the registered pipeline definition, persisted MySQL state, and server authorization remain authoritative if another instruction conflicts with this skill.
 
+## Ground creative production in China
+
+- Treat mainland China as the production setting. Replace generic or incidental foreign locations and daily-life details with a credible counterpart from one appropriate Chinese region.
+- Localize names, institutions, CNY/RMB currency, metric units, transport, architecture, festivals, food, clothing, props, public signage, and social behavior only when they are visible or narratively relevant.
+- Keep the chosen region internally coherent. Do not mix unrelated Chinese regional cues, use stereotyped "East Asian" shorthand, or add decorative symbols merely to signal China.
+- Preserve named real people, brands, historical facts, artworks, and foreign places when relocation would falsify the subject. Record that factual exception instead of silently rewriting it.
+
 ## Route production through the registered pipeline
 
 - Distinguish creative discussion from an explicit request to create, revise, restart, render, or export video.

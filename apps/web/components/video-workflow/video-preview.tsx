@@ -1,6 +1,6 @@
 "use client";
 
-import type { GeneratedVideoPromptTrace, GeneratedVideoPromptTraceItem } from "@chat-to-video/contracts";
+import { CINEMATIC_PIPELINE_DEFINITION, type GeneratedVideoPromptTrace, type GeneratedVideoPromptTraceItem } from "@chat-to-video/contracts";
 import { CheckIcon, CircleAlertIcon, CopyIcon, FilmIcon, LoaderCircleIcon, LogOutIcon, RefreshCwIcon, SparklesIcon } from "lucide-react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -35,12 +35,14 @@ const CURRENT_WORKFLOW_NODE_VALUE = "current";
 
 function WorkflowPreviewShell({
   children,
+  contextLabel = "节点回看",
   currentLabel,
   historyNodes,
   onNodeChange,
   selectedNodeId,
 }: {
   readonly children: ReactNode;
+  readonly contextLabel?: string;
   readonly currentLabel: string;
   readonly historyNodes: readonly WorkflowPreviewHistoryNode[];
   readonly onNodeChange: (nodeId: string | null) => void;
@@ -58,7 +60,7 @@ function WorkflowPreviewShell({
       <header className="flex h-14 shrink-0 items-center border-b border-border px-5">
         <FilmIcon className="size-4 text-primary" />
         <h2 className="ml-2 font-sans text-sm font-medium text-foreground">{"\u53ef\u89c6\u5316\u7ed3\u679c"}</h2>
-        <span className="ml-auto hidden text-xs text-muted-foreground sm:inline">{"\u8282\u70b9\u56de\u770b"}</span>
+        <span className="ml-auto hidden text-xs text-muted-foreground sm:inline">{contextLabel}</span>
         <Select
           disabled={historyNodes.length === 0}
           onValueChange={(value) => onNodeChange(
@@ -257,15 +259,36 @@ function CompletedVideoReview({
 
 export function VideoWorkflowVisualization() {
   const { entries, isLoading, previewVideo, refresh, returnToCurrentVideo, snapshot, stepProgress } = useVideoWorkflow();
-  const [selectedHistoryNodeId, setSelectedHistoryNodeId] = useState<string | null>(null);
+  const [historySelection, setHistorySelection] = useState<{ nodeId: string; workflowId: string } | null>(null);
+  const historyWorkflowId = previewVideo?.workflowId ?? snapshot?.workflowId ?? null;
+  const historyPipeline = previewVideo?.workflowSnapshot.pipeline ?? snapshot?.pipeline ?? CINEMATIC_PIPELINE_DEFINITION.id;
+  const historyCurrentStage = previewVideo ? null : snapshot?.currentStage ?? null;
+  const historySnapshot = previewVideo?.workflowSnapshot ?? snapshot;
   const historyNodes = useMemo(
-    () => snapshot ? getWorkflowPreviewHistoryNodes(entries, snapshot) : [],
-    [entries, snapshot],
+    () => historyWorkflowId && historyPipeline
+      ? getWorkflowPreviewHistoryNodes(entries, {
+          currentStage: historyCurrentStage,
+          pipeline: historyPipeline,
+          workflowId: historyWorkflowId,
+        })
+      : [],
+    [entries, historyCurrentStage, historyPipeline, historyWorkflowId],
   );
+  const selectedHistoryNodeId = historySelection &&
+      historySelection.workflowId === historyWorkflowId
+    ? historySelection.nodeId
+    : null;
   const selectedHistoryNode = historyNodes.find((node) => node.id === selectedHistoryNodeId) ?? null;
-  const currentNodeLabel = snapshot
-    ? getCurrentWorkflowNodeLabel(snapshot)
-    : stepProgress?.stepLabel ?? "current";
+  const currentNodeLabel = previewVideo
+    ? "视频成片"
+    : snapshot
+      ? getCurrentWorkflowNodeLabel(snapshot)
+      : stepProgress?.stepLabel ?? "current";
+  const selectHistoryNode = (nodeId: string | null) => {
+    setHistorySelection(nodeId && historyWorkflowId
+      ? { nodeId, workflowId: historyWorkflowId }
+      : null);
+  };
 
   if (isLoading) {
     return <VisualizationLoading />;
@@ -274,52 +297,32 @@ export function VideoWorkflowVisualization() {
   const videoOutputEstimate = getVideoOutputEstimate(
     snapshot?.durationSeconds,
     snapshot?.initialPrompt,
+    entries.flatMap((entry) => entry.type === "text" && entry.role === "user" ? [entry.content] : []),
   );
 
-  if (snapshot?.status === "cancelled") {
-    return <aside className="checkerboard grid h-full min-w-0 place-items-center p-6" aria-labelledby="visualization-title"><div className="flex max-w-sm items-center gap-4 text-zinc-500"><span className="grid size-12 shrink-0 place-items-center rounded-xl border border-white/10 bg-[#111315]"><LogOutIcon className="size-5" /></span><div><h2 className="font-sans text-sm font-medium text-zinc-400" id="visualization-title">工作流已退出</h2><p className="mt-1 text-xs leading-5">当前预览已关闭，可以在左侧新建对话重新开始。</p></div></div></aside>;
-  }
-
-  if (previewVideo) {
-    return <aside className="flex h-full min-w-0 flex-col bg-[#090a0b]" aria-labelledby="visualization-title">
-      <header className="flex h-14 shrink-0 items-center border-b border-white/10 px-5"><FilmIcon className="size-4 text-violet-300" /><h2 className="ml-2 font-sans text-sm font-medium text-zinc-200" id="visualization-title">可视化结果</h2><span className="ml-auto text-xs text-zinc-400">视频 · 回看</span><Button className="ml-2 h-7 border-white/10 bg-transparent px-2 text-xs text-zinc-300 hover:bg-white/5 hover:text-white" onClick={() => void returnToCurrentVideo()} size="sm" type="button" variant="outline">返回当前</Button></header>
-      <div className="checkerboard grid min-h-0 flex-1 place-items-center p-6"><CompletedVideoReview key={previewVideo.id} promptTrace={previewVideo.promptTrace} video={previewVideo} /></div>
-    </aside>;
-  }
-
-  if (snapshot?.status === "succeeded" && job?.playbackUrl) {
-    return <aside className="flex h-full min-w-0 flex-col bg-[#090a0b]" aria-labelledby="visualization-title">
-      <header className="flex h-14 shrink-0 items-center border-b border-white/10 px-5"><FilmIcon className="size-4 text-violet-300" /><h2 className="ml-2 font-sans text-sm font-medium text-zinc-200" id="visualization-title">可视化结果</h2><span className="ml-auto text-xs text-emerald-400">视频 · 已完成</span></header>
-      <div className="checkerboard grid min-h-0 flex-1 place-items-center p-6"><CompletedVideoReview onError={() => void refresh()} promptTrace={snapshot.promptTrace} video={{ id: job.jobId, playbackUrl: job.playbackUrl, title: job.videoTitle ?? "视频成片" }} /></div>
-    </aside>;
-  }
-
-  if (snapshot?.status === "failed") {
-    const failure = presentVideoFailure(snapshot.errorMessage ?? job?.errorMessage ?? null);
-    return <aside className="checkerboard grid h-full min-w-0 place-items-center p-6" aria-labelledby="visualization-title"><div className="max-w-sm rounded-xl border border-red-950 bg-[#111315]/95 p-6 text-center"><CircleAlertIcon className="mx-auto size-7 text-red-400" /><h2 className="mt-4 font-sans text-sm font-medium text-zinc-200" id="visualization-title">{failure.stage ? <>失败环节：{failure.stage}</> : "视频生成失败"}</h2><p className="mt-2 text-xs leading-5 text-zinc-500">{failure.detail}</p><Button className="mt-4" onClick={() => void refresh()} size="sm" type="button" variant="outline"><RefreshCwIcon />刷新状态</Button></div></aside>;
-  }
-
-  if (snapshot && selectedHistoryNode) {
+  if (historyWorkflowId && selectedHistoryNode) {
     return (
       <WorkflowPreviewShell
         currentLabel={currentNodeLabel}
         historyNodes={historyNodes}
-        onNodeChange={setSelectedHistoryNodeId}
+        onNodeChange={selectHistoryNode}
         selectedNodeId={selectedHistoryNode.id}
       >
         <ScrollArea className="h-full min-w-0">
           <div className="mx-auto min-h-full w-full max-w-3xl space-y-4 p-6">
-            {selectedHistoryNode.version.artifact.stage === "consistency_reference" &&
-                snapshot.consistencyReferenceBatch?.planVersion === selectedHistoryNode.version.version ? (
+            {historySnapshot?.workflowId === historyWorkflowId &&
+                selectedHistoryNode.version.artifact.stage === "consistency_reference" &&
+                historySnapshot.consistencyReferenceBatch?.planVersion === selectedHistoryNode.version.version ? (
               <ConsistencyReferenceReviewCard
                 artifact={selectedHistoryNode.version.artifact}
-                batch={snapshot.consistencyReferenceBatch}
+                batch={historySnapshot.consistencyReferenceBatch}
               />
             ) : null}
-            {selectedHistoryNode.version.artifact.stage === "assets" &&
-                snapshot.assetBatch?.planVersion === selectedHistoryNode.version.version ? (
+            {historySnapshot?.workflowId === historyWorkflowId &&
+                selectedHistoryNode.version.artifact.stage === "assets" &&
+                historySnapshot.assetBatch?.planVersion === selectedHistoryNode.version.version ? (
               <CinematicAssetReviewCard
-                batch={snapshot.assetBatch}
+                batch={historySnapshot.assetBatch}
               />
             ) : null}
             <CinematicArtifactCard
@@ -331,6 +334,34 @@ export function VideoWorkflowVisualization() {
         </ScrollArea>
       </WorkflowPreviewShell>
     );
+  }
+
+  if (snapshot?.status === "cancelled") {
+    return <WorkflowPreviewShell currentLabel={currentNodeLabel} historyNodes={historyNodes} onNodeChange={selectHistoryNode} selectedNodeId={null}>
+      <aside className="grid h-full min-w-0 place-items-center p-6" aria-labelledby="visualization-title"><div className="flex max-w-sm items-center gap-4 text-zinc-500"><span className="grid size-12 shrink-0 place-items-center rounded-xl border border-white/10 bg-[#111315]"><LogOutIcon className="size-5" /></span><div><h2 className="font-sans text-sm font-medium text-zinc-400" id="visualization-title">工作流已退出</h2><p className="mt-1 text-xs leading-5">当前预览已关闭，可以在左侧新建对话重新开始。</p></div></div></aside>
+    </WorkflowPreviewShell>;
+  }
+
+  if (previewVideo) {
+    return <WorkflowPreviewShell contextLabel="视频 · 回看" currentLabel={currentNodeLabel} historyNodes={historyNodes} onNodeChange={selectHistoryNode} selectedNodeId={null}>
+      <div className="relative grid h-full min-h-0 place-items-center p-6">
+        <CompletedVideoReview key={previewVideo.id} promptTrace={previewVideo.promptTrace} video={previewVideo} />
+        <Button className="absolute right-4 top-4 z-20 h-7 border-white/10 bg-background/80 px-2 text-xs backdrop-blur hover:bg-background" onClick={() => void returnToCurrentVideo()} size="sm" type="button" variant="outline">返回当前</Button>
+      </div>
+    </WorkflowPreviewShell>;
+  }
+
+  if (snapshot?.status === "succeeded" && job?.playbackUrl) {
+    return <WorkflowPreviewShell contextLabel="视频 · 已完成" currentLabel={currentNodeLabel} historyNodes={historyNodes} onNodeChange={selectHistoryNode} selectedNodeId={null}>
+      <div className="grid h-full min-h-0 place-items-center p-6"><CompletedVideoReview onError={() => void refresh()} promptTrace={snapshot.promptTrace} video={{ id: job.jobId, playbackUrl: job.playbackUrl, title: job.videoTitle ?? "视频成片" }} /></div>
+    </WorkflowPreviewShell>;
+  }
+
+  if (snapshot?.status === "failed") {
+    const failure = presentVideoFailure(snapshot.errorMessage ?? job?.errorMessage ?? null);
+    return <WorkflowPreviewShell currentLabel={currentNodeLabel} historyNodes={historyNodes} onNodeChange={selectHistoryNode} selectedNodeId={null}>
+      <aside className="grid h-full min-w-0 place-items-center p-6" aria-labelledby="visualization-title"><div className="max-w-sm rounded-xl border border-red-950 bg-[#111315]/95 p-6 text-center"><CircleAlertIcon className="mx-auto size-7 text-red-400" /><h2 className="mt-4 font-sans text-sm font-medium text-zinc-200" id="visualization-title">{failure.stage ? <>失败环节：{failure.stage}</> : "视频生成失败"}</h2><p className="mt-2 text-xs leading-5 text-zinc-500">{failure.detail}</p><Button className="mt-4" onClick={() => void refresh()} size="sm" type="button" variant="outline"><RefreshCwIcon />刷新状态</Button></div></aside>
+    </WorkflowPreviewShell>;
   }
 
   if (snapshot && job && isQueuedStatus(snapshot.status)) {
@@ -345,7 +376,7 @@ export function VideoWorkflowVisualization() {
       <WorkflowPreviewShell
         currentLabel={currentNodeLabel}
         historyNodes={historyNodes}
-        onNodeChange={setSelectedHistoryNodeId}
+        onNodeChange={selectHistoryNode}
         selectedNodeId={null}
       >
       <aside
@@ -390,7 +421,7 @@ export function VideoWorkflowVisualization() {
       <WorkflowPreviewShell
         currentLabel={currentNodeLabel}
         historyNodes={historyNodes}
-        onNodeChange={setSelectedHistoryNodeId}
+        onNodeChange={selectHistoryNode}
         selectedNodeId={null}
       >
         <aside
@@ -429,7 +460,7 @@ export function VideoWorkflowVisualization() {
       <WorkflowPreviewShell
         currentLabel={currentNodeLabel}
         historyNodes={historyNodes}
-        onNodeChange={setSelectedHistoryNodeId}
+        onNodeChange={selectHistoryNode}
         selectedNodeId={null}
       >
       <aside aria-label="结构化创作工作区" className="checkerboard h-full min-w-0 overflow-hidden">
@@ -467,7 +498,7 @@ export function VideoWorkflowVisualization() {
       <WorkflowPreviewShell
         currentLabel={currentNodeLabel}
         historyNodes={historyNodes}
-        onNodeChange={setSelectedHistoryNodeId}
+        onNodeChange={selectHistoryNode}
         selectedNodeId={null}
       >
       <aside

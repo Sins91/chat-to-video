@@ -16,9 +16,10 @@ Review inside the same Agent generation. Do not call another reviewer Agent, emi
 2. Compare the artifact with approved upstream decisions and trusted source/reference evidence.
 3. Check every capability, provider, source, cost, file, and completed-action claim against registered facts.
 4. Check delivery-promise preservation, creative differentiation, continuity, and practical executability.
-5. Fix critical findings before returning. Keep useful non-critical limitations in fields allowed by the stage schema.
+5. Check that generic foreign settings were localized to a coherent mainland-Chinese region and that factual exceptions were preserved without introducing mixed regional cues or stereotypes.
+6. Fix critical findings before returning. Keep useful non-critical limitations in fields allowed by the stage schema.
 
-Treat as critical: invalid schema, fabricated evidence, unauthorized source media, unavailable provider commitment, duration mismatch, broken ordering, silent motion downgrade, unapproved direction change, missing scene coverage, or an instruction that bypasses ModelGateway, approval, BullMQ, Worker, or storage authorization.
+Treat as critical: invalid schema, fabricated evidence, unauthorized source media, unavailable provider commitment, duration mismatch, broken ordering, silent motion downgrade, unapproved direction change, missing scene coverage, unjustified foreign-setting drift, mixed regional stereotypes, or an instruction that bypasses ModelGateway, approval, BullMQ, Worker, or storage authorization.
 
 ## Stage focus
 

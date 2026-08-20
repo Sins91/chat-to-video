@@ -53,4 +53,28 @@ describe("composeCinematicVideo validation", () => {
       },
     })).rejects.toThrow("invalid music track");
   });
+
+  it("rejects embedded scene audio on a static image", async () => {
+    await expect(composeCinematicVideo({
+      ffmpegPath: "ffmpeg",
+      clips: [{
+        body: new Uint8Array([1]),
+        durationSeconds: 4,
+        mimeType: "image/png",
+        audioMode: "embedded",
+      }],
+    })).rejects.toThrow("invalid clip");
+  });
+
+  it("rejects an invalid scene-audio gain before starting FFmpeg", async () => {
+    await expect(composeCinematicVideo({
+      ffmpegPath: "ffmpeg",
+      clips: [{
+        body: new Uint8Array([1]),
+        durationSeconds: 4,
+        audioMode: "embedded",
+        audioGainDb: 30,
+      }],
+    })).rejects.toThrow("invalid clip");
+  });
 });
