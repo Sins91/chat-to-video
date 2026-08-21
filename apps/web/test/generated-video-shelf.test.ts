@@ -17,8 +17,13 @@ describe("generated video shelf", () => {
     expect(workspace).toContain('id="agent-preview"');
     expect(shelf).toContain("overflow-x-auto");
     expect(shelf).toContain("cursor-grabbing select-none");
+    expect(shelf).toContain("disabled:cursor-pointer");
+    expect(shelf).not.toContain("disabled:cursor-wait");
     expect(shelf).toContain("onPointerDown={startHorizontalDrag}");
     expect(shelf).toContain("event.currentTarget.scrollLeft = dragState.startScrollLeft - distanceX");
+    expect(shelf.indexOf("event.currentTarget.setPointerCapture(event.pointerId)")).toBeGreaterThan(
+      shelf.indexOf("dragState.hasDragged = true"),
+    );
     expect(shelf).toContain("onClickCapture={suppressClickAfterDrag}");
     expect(shelf).toContain("onWheel={scrollHorizontallyWithWheel}");
     expect(shelf).toContain("currentTargetScrollLeft + delta");

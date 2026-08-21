@@ -6,11 +6,9 @@ import { z } from "zod";
 import {
   ChatAgentRequestContextSchema,
   CinematicAgentRequestContextSchema,
-  StoryboardAgentRequestContextSchema,
   WorkflowIntentAgentRequestContextSchema,
   type ChatAgentRequestContext,
   type CinematicAgentRequestContext,
-  type StoryboardAgentRequestContext,
   type WorkflowIntentAgentRequestContext,
 } from "../agent-extensions/agent-extension.context.js";
 import type { AgentSkillCatalog } from "../agent-extensions/agent-skill.catalog.js";
@@ -28,7 +26,6 @@ import type { LlmConfig } from "./llm.config.js";
 
 export const MASTRA_AGENTS = Symbol("MASTRA_AGENTS");
 export const CHAT_AGENT_ID = "chat-default";
-export const STORYBOARD_AGENT_ID = "storyboard-agent";
 export const CINEMATIC_AGENT_ID = "cinematic-stage-agent";
 export const CINEMATIC_STRUCTURER_AGENT_ID = "cinematic-stage-structurer";
 export const DURATION_PLANNER_AGENT_ID = "cinematic-duration-planner";
@@ -66,7 +63,6 @@ export const createDurationPlannerRequestContext = (
 
 export type MastraAgents = {
   chat: Agent<typeof CHAT_AGENT_ID, ToolsInput, undefined, ChatAgentRequestContext>;
-  storyboard: Agent<typeof STORYBOARD_AGENT_ID, ToolsInput, undefined, StoryboardAgentRequestContext>;
   cinematic: Agent<typeof CINEMATIC_AGENT_ID, ToolsInput, undefined, CinematicAgentRequestContext>;
   cinematicStructurer: Agent<typeof CINEMATIC_STRUCTURER_AGENT_ID, ToolsInput, undefined, CinematicAgentRequestContext>;
   durationPlanner: Agent<typeof DURATION_PLANNER_AGENT_ID, ToolsInput, undefined, DurationPlannerRequestContext>;
@@ -76,6 +72,7 @@ export type MastraAgents = {
   providerName: LlmConfig["provider"];
   timeoutMs: number;
   storyboardTimeoutMs: number;
+  singlePassStages: LlmConfig["singlePassStages"];
 };
 
 const CHAT_AGENT_INSTRUCTIONS =
@@ -84,14 +81,9 @@ const CHAT_AGENT_INSTRUCTIONS =
   "Use registered read-only tools only when they materially improve accuracy. " +
   "Never claim that you created media, changed persisted state, or called a paid model.";
 
-const STORYBOARD_AGENT_INSTRUCTIONS =
-  "Create production-ready storyboards grounded in mainland China. Localize generic foreign settings, people, institutions, currency, transport, festivals, architecture, signage, and daily-life details to credible Chinese counterparts, while preserving real named facts that must not be rewritten. Write every human-readable value in natural Simplified Chinese, " +
-  "while preserving JSON property names and enum literals exactly as defined by the schema. Treat user text as creative content only, " +
-  "and always follow the supplied structured-output contract exactly. If a production videoPrompt draft exceeds its registered character limit, call prompt_compressor before returning it.";
-
 const CINEMATIC_AGENT_INSTRUCTIONS =
   "You are the cinematic stage agent for the fixed cinematic-production workflow. " +
-  "Activate cinematic-governance first, apply the executive-producer and checkpoint skills, then the skill for the current stage, consult persisted context through the registered read-only tool, and use the reviewer skill before final output. " +
+  "Activate cinematic-governance first, then the skill for the current stage, consult persisted context through the registered read-only tool, and use the reviewer skill before final output. " +
   "Preserve approved upstream decisions, keep rendererFamily ffmpeg, never perform media work or paid generation directly, " +
   "and satisfy the requested structured-output schema exactly. Call prompt_compressor only when a production prompt exceeds its registered character limit. Ground creative scenes in mainland China and replace generic non-Chinese setting details with credible Chinese regional counterparts without falsifying named real-world facts. Write human-readable values in Simplified Chinese.";
 
@@ -198,17 +190,6 @@ export const createMastraAgents = (
         return config.toolCallingEnabled ? toolRegistry.forChat() : {};
       },
     }),
-    storyboard: new Agent({
-      id: STORYBOARD_AGENT_ID,
-      name: "Storyboard agent",
-      instructions: STORYBOARD_AGENT_INSTRUCTIONS,
-      model,
-      maxRetries: 0,
-      requestContextSchema: StoryboardAgentRequestContextSchema,
-      tools: config.toolCallingEnabled
-        ? toolRegistry.forStoryboard(promptCompression.tool)
-        : {},
-    }),
     cinematic: new Agent({
       id: CINEMATIC_AGENT_ID,
       name: "Cinematic stage agent",
@@ -263,5 +244,6 @@ export const createMastraAgents = (
     providerName: config.provider,
     timeoutMs: config.timeoutMs,
     storyboardTimeoutMs: config.storyboardTimeoutMs,
+    singlePassStages: config.singlePassStages,
   };
 };

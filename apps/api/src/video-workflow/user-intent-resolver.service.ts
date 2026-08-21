@@ -81,7 +81,7 @@ export class UserIntentResolverService {
     outputResolution?: ReturnType<typeof getStandaloneVideoOutputResolutionUpdate>,
   ): WorkflowIntentDecision | null {
     const currentStage = findWorkflowStage(context.pipeline, context.currentStage);
-    if (!currentStage?.allowsRevision || this.mentionsEarlierStage(context, text)) return null;
+    if (!currentStage?.planningReview.allowsRevision || this.mentionsEarlierStage(context, text)) return null;
     if (VAGUE_REVISION_PATTERN.test(text)) {
       return WorkflowIntentDecisionSchema.parse({
         intent: {
@@ -143,7 +143,7 @@ export class UserIntentResolverService {
         requiresConfirmation: false,
       });
     }
-    if (findWorkflowStage(context.pipeline, context.currentStage)?.allowsRevision === true &&
+    if (findWorkflowStage(context.pipeline, context.currentStage)?.planningReview.allowsRevision === true &&
         APPROVE_WITH_CHANGES_PATTERN.test(text)) {
       return WorkflowIntentDecisionSchema.parse({
         intent: {
@@ -165,7 +165,7 @@ export class UserIntentResolverService {
         resolverVersion: WORKFLOW_INTENT_RESOLVER_VERSION, requiresConfirmation: false,
       });
     }
-    if (findWorkflowStage(context.pipeline, context.currentStage)?.allowsRevision === true &&
+    if (findWorkflowStage(context.pipeline, context.currentStage)?.planningReview.allowsRevision === true &&
         DIRECTION_SELECTION_PATTERN.test(text)) {
       return WorkflowIntentDecisionSchema.parse({
         intent: {
@@ -211,7 +211,7 @@ export class UserIntentResolverService {
             classified.type === "approve_with_changes") {
           const currentStage = findWorkflowStage(context.pipeline, context.currentStage);
           const canApplyAtCurrentStage = classified.stageId === context.currentStage &&
-            (classified.type === "approve" || currentStage?.allowsRevision === true);
+            (classified.type === "approve" || currentStage?.planningReview.allowsRevision === true);
           return canApplyAtCurrentStage
             ? classified.type === "approve_with_changes"
               ? {

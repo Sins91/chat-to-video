@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, type OnModuleDestroy } from "@nestjs/common
 import {
   CINEMATIC_PIPELINE_DEFINITION,
   findWorkflowStage,
+  getWorkflowStageStepId,
   type CinematicGenerativeStage,
   type VideoWorkflowInteraction,
 } from "@chat-to-video/contracts";
@@ -72,7 +73,6 @@ export class MastraRuntimeService implements OnModuleDestroy {
     this.mastra = new Mastra({
       agents: {
         chatDefault: agents.chat,
-        storyboardAgent: agents.storyboard,
         cinematicStageAgent: agents.cinematic,
         cinematicStageStructurer: agents.cinematicStructurer,
         cinematicDurationPlanner: agents.durationPlanner,
@@ -93,56 +93,29 @@ export class MastraRuntimeService implements OnModuleDestroy {
     return this.initialized;
   }
 
-  async start(
-    input: CinematicWorkflowInput,
-    persistRunId: (runId: string) => Promise<void>,
-  ): Promise<string> {
+  async launchAttempt(input: {
+    runId: string;
+    workflowInput: CinematicWorkflowInput;
+    baseVersion: number;
+    startStage: CinematicGenerativeStage | null;
+  }): Promise<void> {
     await this.initialize();
-    const run = await this.workflow.createRun({ pubsub: this.pubsub });
-    await persistRunId(run.runId);
-    this.logRun("Starting", input, run.runId, "research", 0);
-    await run.startAsync({ inputData: input, initialState: initialCinematicState(input) });
-    return run.runId;
-  }
-
-  async restart(
-    input: CinematicWorkflowInput,
-    baseVersion: number,
-    persistRunId: (runId: string) => Promise<void>,
-  ): Promise<string> {
-    await this.initialize();
-    const run = await this.workflow.createRun({ pubsub: this.pubsub });
-    await persistRunId(run.runId);
+    const run = await this.workflow.createRun({ runId: input.runId, pubsub: this.pubsub });
     this.logRun(
-      "Restarting",
-      input,
-      run.runId,
-      input.restart?.targetStage,
-      baseVersion,
+      input.workflowInput.restart || input.workflowInput.continuation ? "Restarting" : "Starting",
+      input.workflowInput,
+      input.runId,
+      input.startStage ?? "research",
+      input.baseVersion,
     );
     await run.startAsync({
-      inputData: input,
-      initialState: initialCinematicState(input, baseVersion),
+      inputData: input.workflowInput,
+      initialState: initialCinematicState(
+        input.workflowInput,
+        input.baseVersion,
+        input.startStage,
+      ),
     });
-    return run.runId;
-  }
-
-  async continueAfterAssetApproval(
-    input: CinematicWorkflowInput,
-    persistRunId: (runId: string) => Promise<void>,
-  ): Promise<string> {
-    if (!input.continuation || input.continuation.kind !== "stage_execution_approved") {
-      throw new Error("Stage execution approval continuation input is invalid.");
-    }
-    await this.initialize();
-    const run = await this.workflow.createRun({ pubsub: this.pubsub });
-    await persistRunId(run.runId);
-    this.logRun("Restarting", input, run.runId, input.continuation.stageId === "consistency_reference" ? "assets" : "edit", input.continuation.baseVersion);
-    await run.startAsync({
-      inputData: input,
-      initialState: initialCinematicState(input, input.continuation.baseVersion),
-    });
-    return run.runId;
   }
 
   async resume(
@@ -158,10 +131,11 @@ export class MastraRuntimeService implements OnModuleDestroy {
       throw new MastraRunNotResumableError(runId, "workflow run is not suspended");
     }
     const suspension = CinematicWorkflowSuspensionSchema.safeParse(suspended.suspendPayload);
-    const expectedStepId = findWorkflowStage(
+    const expectedStage = findWorkflowStage(
       CINEMATIC_PIPELINE_DEFINITION,
       expected.stage,
-    )?.stepId;
+    );
+    const expectedStepId = expectedStage ? getWorkflowStageStepId(expectedStage) : undefined;
     if (!suspension.success ||
         suspension.data.workflowId !== expected.workflowId ||
         suspension.data.stage !== expected.stage ||

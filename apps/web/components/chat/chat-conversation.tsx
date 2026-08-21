@@ -147,6 +147,7 @@ const TextMessage = memo(function TextMessage({ copyFeedback, id, isAnimating = 
   const hasCopyFailed = copyFeedback?.id === id && copyFeedback.state === "failed";
   const copyLabel = isCopied ? "已复制" : hasCopyFailed ? "复制失败" : "复制";
   const copyText = notice ? `${text}\n\n${notice}` : text;
+  const canCopy = text.length > 0 && !isAnimating;
   return <Message className={role === "assistant" ? "max-w-full" : undefined} from={role}>
     <MessageContent className={role === "assistant" ? "w-full" : undefined}>{role === "assistant" ? <><ProcessingTimeHeader seconds={processingSeconds} /><MessageResponse className="cursor-text" isAnimating={isAnimating}>{text}</MessageResponse>{notice ? <WorkflowReviewNotice text={notice} /> : null}</> : <>
       {referenceImages.length > 0 ? <Attachments className="mb-2" variant="grid">
@@ -159,7 +160,7 @@ const TextMessage = memo(function TextMessage({ copyFeedback, id, isAnimating = 
       </Attachments> : null}
       {text ? <span className="cursor-text whitespace-pre-wrap">{text}</span> : null}
     </>}</MessageContent>
-    {text ? <MessageActions className={`opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${role === "user" ? "self-end" : ""} ${copyFeedback?.id === id ? "opacity-100" : ""}`}>
+    {canCopy ? <MessageActions className={`opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${role === "user" ? "self-end" : ""} ${copyFeedback?.id === id ? "opacity-100" : ""}`}>
       <MessageAction aria-live="polite" label={copyLabel} onClick={() => onCopy(id, copyText)} tooltip={copyLabel}>
         {isCopied ? <CheckIcon className="size-3.5 text-success" /> : <CopyIcon className="size-3.5" />}
       </MessageAction>
@@ -576,7 +577,6 @@ export const ChatConversation = memo(function ChatConversation({
   // Live session state remains visible until the completed turn is handed off to persisted history.
   const visibleMessages = messages;
   const liveMessages = visibleMessages.filter((message) => !persistedIds.has(message.id));
-  const hasLiveAssistantText = liveMessages.some((message) => message.role === "assistant" && message.parts.some((part) => part.type === "text" && part.text.length > 0));
   const lastLiveAssistantId = useMemo(() => {
     for (let index = liveMessages.length - 1; index >= 0; index -= 1) {
       if (liveMessages[index]?.role === "assistant") return liveMessages[index]?.id ?? null;
@@ -640,7 +640,7 @@ export const ChatConversation = memo(function ChatConversation({
     || completedVideoJobId === videoFocusRequest.videoId
   );
   const viewportKey = `${conversationId ?? "new"}:${isLoadingHistory ? "loading" : "ready"}`;
-  const temporaryProgress: WorkflowStepProgress | null = !isLoadingHistory && pendingActionMessage
+  const temporaryProgress: WorkflowStepProgress | null = !isLoadingHistory && status !== "streaming" && pendingActionMessage
     ? {
         stepId: "pending-user-action",
         stepLabel: "处理请求",
@@ -649,7 +649,7 @@ export const ChatConversation = memo(function ChatConversation({
         stepTotal: 1,
         message: pendingActionMessage,
       }
-    : !isLoadingHistory && (status === "submitted" || (status === "streaming" && !hasLiveAssistantText))
+    : !isLoadingHistory && status === "submitted"
     ? {
         stepId: "chat-response",
         stepLabel: "理解需求",

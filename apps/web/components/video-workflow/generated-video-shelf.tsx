@@ -44,7 +44,7 @@ const GeneratedVideoCard = memo(function GeneratedVideoCard({
       <button
         aria-label={`打开视频：${video.title}`}
         aria-busy={isSwitching}
-        className="group w-full cursor-pointer text-left disabled:cursor-wait"
+        className="group w-full cursor-pointer text-left disabled:cursor-pointer"
         disabled={isSwitching}
         onClick={() => onSelect(video)}
         title={video.title}
@@ -128,7 +128,6 @@ export function GeneratedVideoShelf() {
       startScrollLeft: event.currentTarget.scrollLeft,
       startX: event.clientX,
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
   }, [stopWheelScrollAnimation]);
 
   const moveHorizontalDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -139,6 +138,7 @@ export function GeneratedVideoShelf() {
     if (!dragState.hasDragged) {
       dragState.hasDragged = true;
       setIsDragging(true);
+      event.currentTarget.setPointerCapture(event.pointerId);
     }
     event.currentTarget.scrollLeft = dragState.startScrollLeft - distanceX;
     event.preventDefault();

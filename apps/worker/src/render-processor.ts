@@ -2,10 +2,11 @@ import {
   CINEMATIC_PIPELINE_DEFINITION,
   findMissingWorkflowCapabilities,
   findWorkflowStage,
+  getWorkflowStageStepId,
   getVideoGenerationResolution,
   getVideoFrameDimensions,
-  RenderVideoJobPayloadSchema,
-  type RenderVideoJobPayload,
+  CinematicRenderVideoJobPayloadSchema,
+  type CinematicRenderVideoJobPayload,
   type VideoWorkflowEvent,
   type WorkflowStepProgress,
   type WorkflowStepState,
@@ -48,7 +49,7 @@ const videoGenerationStep = (
   const stage = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "compose");
   if (!stage) throw new Error("Cinematic compose stage is not registered.");
   return {
-    stepId: stage.stepId,
+    stepId: getWorkflowStageStepId(stage),
     stepLabel: stage.stepLabel ?? stage.label,
     stepState,
     stepIndex: CINEMATIC_PIPELINE_DEFINITION.stages.findIndex(
@@ -70,7 +71,7 @@ export class RenderProcessor {
     this.publisher = new Redis(config.redisUrl, { maxRetriesPerRequest: 1 });
   }
 
-  private assertPayloadCapabilities(payload: RenderVideoJobPayload): void {
+  private assertPayloadCapabilities(payload: CinematicRenderVideoJobPayload): void {
     const required = payload.cinematic
       ? [...new Set([
           "video.compose.ffmpeg" as const,
@@ -124,7 +125,7 @@ export class RenderProcessor {
     await this.publisher.publish(`video-workflow:${input.workflowId}`, JSON.stringify(event));
   }
 
-  private async assertActive(payload: RenderVideoJobPayload): Promise<void> {
+  private async assertActive(payload: CinematicRenderVideoJobPayload): Promise<void> {
     const videoJob = await this.repository.findVideoJob(payload.jobId);
     if (
       !videoJob ||
@@ -138,7 +139,7 @@ export class RenderProcessor {
   }
 
   private async progress(
-    payload: RenderVideoJobPayload,
+    payload: CinematicRenderVideoJobPayload,
     progress: number,
     message: string,
     eventKey: string,
@@ -204,7 +205,7 @@ export class RenderProcessor {
   }
 
   private async generateCinematicVideo(
-    payload: RenderVideoJobPayload & { cinematic: NonNullable<RenderVideoJobPayload["cinematic"]> },
+    payload: CinematicRenderVideoJobPayload,
     videoClient: SeedanceClient,
   ): Promise<{ body: Uint8Array; contentType: string }> {
     const clips: CinematicClip[] = [];
@@ -373,7 +374,7 @@ export class RenderProcessor {
     return { body, contentType: "video/mp4" };
   }
 
-  private async fail(payload: RenderVideoJobPayload, message: string): Promise<void> {
+  private async fail(payload: CinematicRenderVideoJobPayload, message: string): Promise<void> {
     const isClaimed = await this.repository.claimVideoJobFailure(
       payload.workflowId,
       payload.jobId,
@@ -383,8 +384,8 @@ export class RenderProcessor {
     await this.event({ eventId: `${payload.jobId}:failed`, workflowId: payload.workflowId, requestId: payload.requestId, type: "job.failed", data: { jobId: payload.jobId, message } });
   }
 
-  async process(job: Job<RenderVideoJobPayload>): Promise<void> {
-    const payload = RenderVideoJobPayloadSchema.parse(job.data);
+  async process(job: Job<unknown>): Promise<void> {
+    const payload = CinematicRenderVideoJobPayloadSchema.parse(job.data);
     this.assertPayloadCapabilities(payload);
     const videoClient = new SeedanceClient(selectApimartVideoConfig(this.config.apimart, payload.videoModel));
     let activeStage = "渲染任务初始化";
@@ -394,40 +395,8 @@ export class RenderProcessor {
         return;
       }
       await this.progress(payload, existing?.progress ?? 1, "正在初始化视频生成任务。", "initialize");
-      let video: { body: Uint8Array; contentType: string };
-      if (payload.cinematic) {
-        activeStage = "逐场景视频生成";
-        video = await this.generateCinematicVideo(
-          { ...payload, cinematic: payload.cinematic },
-          videoClient,
-        );
-      } else {
-        let providerTaskId = existing?.providerTaskId;
-        if (!providerTaskId) {
-          activeStage = "提交视频模型任务";
-          providerTaskId = await videoClient.submit(
-            payload.videoPrompt,
-            undefined,
-            [],
-            getVideoGenerationResolution(payload.videoModel, payload.outputResolution),
-          );
-          activeStage = "保存供应商任务 ID";
-          await this.repository.updateVideoJob(payload.jobId, { providerTaskId });
-        }
-        activeStage = "等待视频模型生成";
-        const task = await videoClient.waitForCompletion(
-          providerTaskId,
-          (progress) => this.progress(
-            payload,
-            progress,
-            "视频模型正在生成成片（" + progress + "%）。",
-            "provider-poll",
-          ),
-        );
-        await this.assertActive(payload);
-        activeStage = "下载生成结果";
-        video = await this.downloadVideo(videoClient.resultUrl(task));
-      }
+      activeStage = "逐场景视频生成";
+      const video = await this.generateCinematicVideo(payload, videoClient);
       await this.assertActive(payload);
       activeStage = "保存最终视频";
       await this.progress(payload, 98, "正在保存最终视频。", "save-output");

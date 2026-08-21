@@ -302,6 +302,8 @@ describe("Agent UI shell", () => {
     expect(conversation).toContain("从你的视频想法开始");
     expect(conversation).toContain("时长、画面、节奏和风格都可以在后续对话中继续补充");
     expect(conversation).toContain("MessageActions");
+    expect(conversation).toContain("const canCopy = text.length > 0 && !isAnimating");
+    expect(conversation).toContain("{canCopy ? <MessageActions");
     expect(conversation).toContain('role === "user" ? "self-end" : ""');
     expect(conversation).not.toContain('role === "assistant" && text ? <MessageActions');
     expect(message).toContain("chat-markdown size-full space-y-1.5 text-[13px] text-foreground/80");

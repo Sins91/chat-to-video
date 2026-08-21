@@ -1,5 +1,6 @@
 import type { ConversationRepository, VideoWorkflowRepository } from "@chat-to-video/database";
 import type { ObjectStorage } from "@chat-to-video/storage";
+import { CINEMATIC_PIPELINE_DEFINITION } from "@chat-to-video/contracts";
 import { ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +10,9 @@ import {
   type MastraRuntimeService,
 } from "../src/video-workflow/mastra-runtime.service.js";
 import { VideoWorkflowService } from "../src/video-workflow/video-workflow.service.js";
+import { WorkflowIntentApplicationService } from "../src/video-workflow/workflow-intent-application.service.js";
+import { WorkflowControlService } from "../src/video-workflow/workflow-control.service.js";
+import { WorkflowLifecycleService } from "../src/video-workflow/workflow-lifecycle.service.js";
 import type { WorkflowEventService } from "../src/video-workflow/workflow-event.service.js";
 import type { VideoWorkflowOperations } from "../src/video-workflow/video-workflow.operations.js";
 import type { WorkflowRecoveryService } from "../src/video-workflow/workflow-recovery.service.js";
@@ -20,7 +24,7 @@ const waitingWorkflow = {
   runId: "run-1",
   requestId: "00000000-0000-4000-8000-000000000002",
   pipelineId: "cinematic",
-  pipelineDefinitionVersion: 4,
+  pipelineDefinitionVersion: CINEMATIC_PIPELINE_DEFINITION.definitionVersion,
   currentStageId: "proposal",
   initialPrompt: "A letter arriving on a rainy night",
   videoModel: "doubao-seedance-2.0",
@@ -46,6 +50,7 @@ describe("VideoWorkflowService interactions", () => {
     findPreviousWorkflow: vi.fn(),
     claimInteraction: vi.fn(),
     claimCinematicAssetBatchApproval: vi.fn(),
+    createWorkflowRunAttempt: vi.fn(),
     createWorkflow: vi.fn(),
     createSuccessorWorkflow: vi.fn(),
     findWorkflowVideoJob: vi.fn(),
@@ -73,10 +78,7 @@ describe("VideoWorkflowService interactions", () => {
   const modelGateway = { inferCinematicDuration: vi.fn(), generateCinematicArtifact: vi.fn() };
   const runtime = {
     resume: vi.fn(),
-    restart: vi.fn(),
-    start: vi.fn(),
     cancel: vi.fn(),
-    continueAfterAssetApproval: vi.fn(),
   };
   const events = { append: vi.fn() };
   const operations = { retryVideo: vi.fn(), getRenderQueueAhead: vi.fn(), cancelQueuedWork: vi.fn() };
@@ -85,10 +87,12 @@ describe("VideoWorkflowService interactions", () => {
   const referenceImages = {
     analyze: vi.fn().mockResolvedValue([]),
     bindToMessage: vi.fn(),
+    bindResolvedToWorkflow: vi.fn(),
     modelParts: vi.fn().mockResolvedValue([]),
     readyRows: vi.fn().mockResolvedValue([]),
   };
-  const service = new VideoWorkflowService(
+  const runLauncher = { launchAttempt: vi.fn() };
+  const lifecycle = new WorkflowLifecycleService(
     repository as unknown as VideoWorkflowRepository,
     conversations as unknown as ConversationRepository,
     modelGateway as unknown as ModelGateway,
@@ -97,9 +101,28 @@ describe("VideoWorkflowService interactions", () => {
     events as unknown as WorkflowEventService,
     operations as unknown as VideoWorkflowOperations,
     recovery as unknown as WorkflowRecoveryService,
+    referenceImages as never,
+    runLauncher as never,
+  );
+  const control = new WorkflowControlService(
+    repository as unknown as VideoWorkflowRepository,
+    conversations as unknown as ConversationRepository,
+    modelGateway as unknown as ModelGateway,
+    runtime as unknown as MastraRuntimeService,
+    events as unknown as WorkflowEventService,
+    operations as unknown as VideoWorkflowOperations,
+    runLauncher as never,
+  );
+  const intents = new WorkflowIntentApplicationService(
+    repository as unknown as VideoWorkflowRepository,
+    conversations as unknown as ConversationRepository,
+    events as unknown as WorkflowEventService,
     intentResolver as unknown as UserIntentResolverService,
     referenceImages as never,
+    control,
+    lifecycle,
   );
+  const service = new VideoWorkflowService(intents, lifecycle);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -133,11 +156,11 @@ describe("VideoWorkflowService interactions", () => {
         targetVersion: 1,
       }],
     });
-    repository.claimCinematicAssetBatchApproval.mockResolvedValue(true);
+    repository.claimCinematicAssetBatchApproval.mockResolvedValue("continuation-attempt-id");
+    repository.createWorkflowRunAttempt.mockResolvedValue({ id: "start-attempt-id" });
     repository.findLatestActiveStageCheckpoint.mockResolvedValue({ version: 1 });
     repository.setRunId.mockResolvedValue(undefined);
     runtime.resume.mockResolvedValue(undefined);
-    runtime.restart.mockResolvedValue("run-restarted");
     runtime.cancel.mockResolvedValue(undefined);
     repository.updateWorkflow.mockResolvedValue(undefined);
     events.append.mockResolvedValue(undefined);
@@ -153,8 +176,7 @@ describe("VideoWorkflowService interactions", () => {
     conversations.createWithUserMessage.mockResolvedValue(undefined);
     conversations.listModelMessages.mockResolvedValue([]);
     modelGateway.inferCinematicDuration.mockResolvedValue(30);
-    runtime.start.mockResolvedValue("run-created");
-    runtime.continueAfterAssetApproval.mockResolvedValue("run-assets-approved");
+    runLauncher.launchAttempt.mockResolvedValue(true);
     operations.retryVideo.mockResolvedValue(undefined);
     operations.getRenderQueueAhead.mockResolvedValue(null);
     operations.cancelQueuedWork.mockResolvedValue(undefined);
@@ -245,13 +267,16 @@ describe("VideoWorkflowService interactions", () => {
       videoModel: "doubao-seedance-2.0",
       durationSeconds: 30,
     }));
-    expect(runtime.start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        videoModel: "doubao-seedance-2.0",
-        durationSeconds: 30,
-      }),
-      expect.any(Function),
-    );
+    expect(repository.createWorkflowRunAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: created.workflowId,
+      context: {
+        kind: "start",
+        baseVersion: 0,
+        expectedStateVersion: 0,
+        startStage: null,
+      },
+    }));
+    expect(runLauncher.launchAttempt).toHaveBeenCalledWith("start-attempt-id");
     expect(events.append).toHaveBeenCalledWith(expect.objectContaining({
       eventId: created.workflowId + ":understanding",
       type: "agent.step",
@@ -261,7 +286,7 @@ describe("VideoWorkflowService interactions", () => {
         stepLabel: "理解需求",
         stepState: "running",
         stepIndex: 1,
-        stepTotal: 8,
+        stepTotal: 9,
         message: "正在理解你的需求并准备电影化创作流程。",
       },
     }));
@@ -281,7 +306,7 @@ describe("VideoWorkflowService interactions", () => {
       intent: { type: "start_workflow", pipelineId: "cinematic" },
     });
 
-    expect(runtime.start).toHaveBeenCalledTimes(1);
+    expect(runLauncher.launchAttempt).toHaveBeenCalledTimes(1);
     expect(repository.createWorkflow).toHaveBeenCalledWith(expect.objectContaining({
       pipelineId: "cinematic",
       initialPrompt: "帮我编写一个产品视频脚本",
@@ -426,7 +451,7 @@ describe("VideoWorkflowService interactions", () => {
     expect(intentResolver.resolveTerminal).not.toHaveBeenCalled();
     expect(modelGateway.inferCinematicDuration).not.toHaveBeenCalled();
     expect(repository.createSuccessorWorkflow).not.toHaveBeenCalled();
-    expect(runtime.start).not.toHaveBeenCalled();
+    expect(runLauncher.launchAttempt).not.toHaveBeenCalled();
   });
 
   it("creates another workflow in an existing conversation after the previous one is terminal", async () => {
@@ -456,7 +481,7 @@ describe("VideoWorkflowService interactions", () => {
       message: { messageId: "message-2", content: "Generate a second rainy night video" },
       durationSeconds: 24,
     }));
-    expect(runtime.start).toHaveBeenCalledOnce();
+    expect(runLauncher.launchAttempt).toHaveBeenCalledOnce();
   });
 
   it("does not persist a workflow when conversation-based duration inference fails", async () => {
@@ -469,7 +494,7 @@ describe("VideoWorkflowService interactions", () => {
     })).rejects.toMatchObject({ response: { code: "VIDEO_DURATION_INFERENCE_FAILED" } });
     expect(conversations.createWithUserMessage).not.toHaveBeenCalled();
     expect(repository.createWorkflow).not.toHaveBeenCalled();
-    expect(runtime.start).not.toHaveBeenCalled();
+    expect(runLauncher.launchAttempt).not.toHaveBeenCalled();
   });
 
   it("rejects a second workflow while another workflow is active", async () => {
@@ -481,7 +506,7 @@ describe("VideoWorkflowService interactions", () => {
       prompt: "Generate another video",
       videoModel: "doubao-seedance-2.0",
     })).rejects.toMatchObject({ response: { code: "CONVERSATION_WORKFLOW_ACTIVE" } });
-    expect(runtime.start).not.toHaveBeenCalled();
+    expect(runLauncher.launchAttempt).not.toHaveBeenCalled();
   });
 
   it("returns the live number of render jobs ahead in queued snapshots", async () => {
@@ -855,17 +880,7 @@ describe("VideoWorkflowService interactions", () => {
       role: "user",
       content: "确认",
     });
-    expect(runtime.continueAfterAssetApproval).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workflowId: waitingWorkflow.id,
-        continuation: {
-          kind: "stage_execution_approved",
-          stageId: "assets",
-          baseVersion: 6,
-        },
-      }),
-      expect.any(Function),
-    );
+    expect(runLauncher.launchAttempt).toHaveBeenCalledWith("continuation-attempt-id");
   });
 
   it("approves the exact consistency-reference batch before starting assets planning", async () => {
@@ -895,16 +910,7 @@ describe("VideoWorkflowService interactions", () => {
       5,
       "consistency_reference",
     );
-    expect(runtime.continueAfterAssetApproval).toHaveBeenCalledWith(
-      expect.objectContaining({
-        continuation: {
-          kind: "stage_execution_approved",
-          stageId: "consistency_reference",
-          baseVersion: 5,
-        },
-      }),
-      expect.any(Function),
-    );
+    expect(runLauncher.launchAttempt).toHaveBeenCalledWith("continuation-attempt-id");
   });
 
   it("accepts Seedance while the storyboard is awaiting confirmation", async () => {

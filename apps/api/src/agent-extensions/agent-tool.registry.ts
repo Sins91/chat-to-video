@@ -629,10 +629,6 @@ export class AgentToolRegistry implements OnModuleDestroy {
     };
   }
 
-  forStoryboard(promptCompressor: PromptCompressionRuntime["tool"]) {
-    return { prompt_compressor: promptCompressor };
-  }
-
   forCinematic(
     stage: CinematicGenerativeStage,
     promptCompressor?: PromptCompressionRuntime["tool"],

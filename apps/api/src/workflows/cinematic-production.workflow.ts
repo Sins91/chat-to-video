@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import type { VideoWorkflowOperations } from "../video-workflow/video-workflow.operations.js";
 import { createPipelineStepDefinition } from "./pipeline-stage-control.js";
+import { assertCinematicRuntimeRegistration } from "./cinematic-runtime-adapters.js";
 
 export const CINEMATIC_WORKFLOW_ID = "cinematic-production";
 
@@ -93,11 +94,15 @@ export type CinematicWorkflowDomainAdapter = Pick<VideoWorkflowOperations,
 export const initialCinematicState = (
   input: CinematicWorkflowInput,
   version = 0,
+  explicitStartStage?: CinematicGenerativeStage | null,
 ): CinematicWorkflowState => ({
   workflowId: input.workflowId,
   version,
-  startStage: input.restart?.targetStage ?? null,
-  ...(input.continuation ? { startStage: input.continuation.stageId === "consistency_reference" ? "assets" as const : "edit" as const } : {}),
+  startStage: explicitStartStage === undefined
+    ? input.restart?.targetStage ?? (input.continuation
+      ? input.continuation.stageId === "consistency_reference" ? "assets" : "edit"
+      : null)
+    : explicitStartStage,
   currentArtifact: null,
   handoff: "none",
 });
@@ -128,6 +133,7 @@ type ReviewStage = "proposal" | "script" | "scene_plan" | "consistency_reference
 type ExecutionReviewResult = { handoff: CinematicWorkflowState["handoff"]; shouldSuspend: boolean };
 
 export const createCinematicWorkflow = (operations: CinematicWorkflowDomainAdapter) => {
+  assertCinematicRuntimeRegistration();
   const executionReviewHandlers: Partial<Record<
     ReviewStage,
     (input: CinematicWorkflowCursor) => Promise<ExecutionReviewResult>

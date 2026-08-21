@@ -1,7 +1,10 @@
 import { defineWorkflowPipeline } from "@chat-to-video/contracts";
 import { describe, expect, it } from "vitest";
 
-import { createPipelineStepDefinition } from "../src/workflows/pipeline-stage-control.js";
+import {
+  assertPipelineRuntimeRegistration,
+  createPipelineStepDefinition,
+} from "../src/workflows/pipeline-stage-control.js";
 
 const AUDIO_PIPELINE = defineWorkflowPipeline({
   id: "audio-trailer",
@@ -14,9 +17,6 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       label: "Outline",
       aliases: ["outline"],
       stepId: "audio-outline",
-      producesArtifact: true,
-      requiresApproval: true,
-      allowsRevision: false,
       isRestartable: true,
       intentTopics: ["outline"],
       ownedArtifactKinds: ["outline"],
@@ -34,9 +34,6 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       label: "Mix",
       aliases: ["mix"],
       stepId: "audio-mix",
-      producesArtifact: true,
-      requiresApproval: false,
-      allowsRevision: false,
       isRestartable: false,
       intentTopics: ["mix"],
       ownedArtifactKinds: ["mix"],
@@ -54,9 +51,6 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       label: "Sources",
       aliases: ["sources"],
       stepId: "audio-sources",
-      producesArtifact: true,
-      requiresApproval: true,
-      allowsRevision: true,
       isRestartable: true,
       intentTopics: ["sources"],
       ownedArtifactKinds: ["sources"],
@@ -64,7 +58,7 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
       allowedNextStageIds: [],
       inputArtifactKinds: ["mix"],
       outputArtifactKinds: ["sources"],
-      execution: "agent",
+      execution: "queue",
       planningReview: { requiresApproval: true, allowsRevision: true },
       capabilities: { required: [], optional: [], conditional: [] },
       tools: { required: [], optional: [] },
@@ -73,6 +67,18 @@ const AUDIO_PIPELINE = defineWorkflowPipeline({
 });
 
 describe("pipeline stage control", () => {
+  it("validates a differently ordered pipeline through the same runtime registration algorithm", () => {
+    expect(() => assertPipelineRuntimeRegistration(
+      AUDIO_PIPELINE,
+      ["audio-outline", "audio-mix", "audio-sources"],
+      {
+        outline: { planningArtifact: "generate_activate", queueExecution: false, planningApprovalHandoff: false, executionContinuationTarget: null, capabilityPreflight: false, terminal: false },
+        mix: { planningArtifact: "generate_activate", queueExecution: false, planningApprovalHandoff: false, executionContinuationTarget: null, capabilityPreflight: false, terminal: false },
+        sources: { planningArtifact: "generate_activate", queueExecution: true, planningApprovalHandoff: false, executionContinuationTarget: null, capabilityPreflight: true, terminal: true },
+      },
+    )).not.toThrow();
+  });
+
   it("derives restart skipping and interaction capabilities from any pipeline definition", () => {
     const outline = createPipelineStepDefinition(AUDIO_PIPELINE, "outline");
     const mix = createPipelineStepDefinition(AUDIO_PIPELINE, "mix");

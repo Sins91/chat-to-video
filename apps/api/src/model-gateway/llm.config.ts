@@ -1,4 +1,5 @@
 import type { ApimartConfig } from "./apimart.config.js";
+import type { CinematicGenerativeStage } from "@chat-to-video/contracts";
 
 export const LLM_CONFIG = Symbol("LLM_CONFIG");
 
@@ -10,6 +11,7 @@ export type LlmConfig = {
   toolCallingEnabled: boolean;
   storyboardTimeoutMs: number;
   timeoutMs: number;
+  singlePassStages: readonly CinematicGenerativeStage[];
 };
 
 const required = (name: string): string => {
@@ -43,8 +45,14 @@ const parseBoolean = (name: string, value: string): boolean => {
 };
 
 export const loadLlmConfig = (apimart: ApimartConfig): LlmConfig => {
+  const singlePassStages = (process.env.CINEMATIC_SINGLE_PASS_STAGES ?? "")
+    .split(",")
+    .map((stage) => stage.trim())
+    .filter((stage): stage is CinematicGenerativeStage =>
+      ["script", "scene_plan", "consistency_reference", "edit"].includes(stage)
+    );
   const provider = process.env.LLM_PROVIDER?.trim() || "apimart";
-  if (provider === "apimart") return { ...apimart, provider, toolCallingEnabled: parseBoolean("LLM_TOOL_CALLING_ENABLED", process.env.LLM_TOOL_CALLING_ENABLED ?? "true") };
+  if (provider === "apimart") return { ...apimart, provider, singlePassStages, toolCallingEnabled: parseBoolean("LLM_TOOL_CALLING_ENABLED", process.env.LLM_TOOL_CALLING_ENABLED ?? "true") };
   if (provider !== "deepseek") {
     throw new Error('LLM_PROVIDER must be "deepseek" or "apimart".');
   }
@@ -69,5 +77,6 @@ export const loadLlmConfig = (apimart: ApimartConfig): LlmConfig => {
       "LLM_TOOL_CALLING_ENABLED",
       process.env.LLM_TOOL_CALLING_ENABLED ?? "true",
     ),
+    singlePassStages,
   };
 };

@@ -2,10 +2,9 @@ import {
   CINEMATIC_PIPELINE_DEFINITION,
   CinematicArtifactSchema,
   getVideoModelMaxDurationSeconds,
-  RenderVideoJobPayloadSchema,
+  CinematicRenderVideoJobPayloadSchema,
   RetryVideoWorkflowResponseSchema,
   roundVideoModelDurationSeconds,
-  StoryboardVersionSchema,
   VideoModelSchema,
   type RetryVideoWorkflowResponse,
   WorkflowCapabilityResolutionSchema,
@@ -61,30 +60,19 @@ export const retryVideoWorkflow = async (
       message: "Only a failed video task with an existing provider task can be safely retried.",
     });
   }
-  const [storyboard, editRow, sceneRow] = await Promise.all([
-    repository.findStoryboard(workflowId, job.storyboardVersion),
+  const [editRow, sceneRow] = await Promise.all([
     repository.findLatestCinematicArtifact(workflowId, "edit"),
     repository.findLatestCinematicArtifact(workflowId, "scene_plan"),
   ]);
   const editArtifact = editRow ? CinematicArtifactSchema.parse(editRow.artifact) : null;
   const sceneArtifact = sceneRow ? CinematicArtifactSchema.parse(sceneRow.artifact) : null;
-  if (!storyboard && (editArtifact?.stage !== "edit" || sceneArtifact?.stage !== "scene_plan")) {
+  if (editArtifact?.stage !== "edit" || sceneArtifact?.stage !== "scene_plan") {
     throw new ConflictException({
       code: "VIDEO_WORKFLOW_NOT_RECOVERABLE",
       message: "The cinematic edit plan for this video task is unavailable.",
     });
   }
-  const retryPrompt = editArtifact?.stage === "edit"
-    ? editArtifact.data.renderPrompt
-    : storyboard
-      ? StoryboardVersionSchema.parse({
-          version: storyboard.version,
-          revisionRequest: storyboard.revisionRequest,
-          storyboard: storyboard.storyboard,
-          createdAt: storyboard.createdAt.toISOString(),
-        }).storyboard.videoPrompt
-      : null;
-  if (!retryPrompt) throw new Error("Recoverable video task is missing its render prompt.");
+  const retryPrompt = editArtifact.data.renderPrompt;
   const capabilityResolutions = job.capabilityResolutions?.map((resolution) =>
     WorkflowCapabilityResolutionSchema.parse(resolution)
   ) ?? [];
@@ -94,14 +82,12 @@ export const retryVideoWorkflow = async (
       message: "The failed job predates persisted capability selection and cannot be retried safely.",
     });
   }
-  const assetBatch = editArtifact?.stage === "edit"
-    ? await repository.findLatestCinematicAssetBatch(workflowId)
-    : null;
+  const assetBatch = await repository.findLatestCinematicAssetBatch(workflowId);
   const executedAssets = assetBatch?.status === "approved"
     ? await repository.listCinematicAssetJobs(assetBatch.id)
     : [];
   const music = executedAssets.find((asset) => asset.kind === "music");
-  if (editArtifact?.stage === "edit" && !music?.mimeType) {
+  if (!music?.mimeType) {
     throw new ConflictException({
       code: "VIDEO_WORKFLOW_NOT_RECOVERABLE",
       message: "The approved cinematic music asset is unavailable.",
@@ -115,15 +101,14 @@ export const retryVideoWorkflow = async (
     });
   }
   const videoModel = VideoModelSchema.parse(workflow.videoModel);
-  const payload = RenderVideoJobPayloadSchema.parse({
+  const payload = CinematicRenderVideoJobPayloadSchema.parse({
     workflowId,
     requestId: workflow.requestId,
     jobId: job.id,
     storyboardVersion: job.storyboardVersion,
     videoModel,
     outputResolution: job.outputResolution,
-    cinematic: editArtifact?.stage === "edit" && sceneArtifact?.stage === "scene_plan"
-      ? {
+    cinematic: {
           rendererFamily: "ffmpeg",
           durationSeconds: workflow.durationSeconds,
           outputResolution: job.outputResolution,
@@ -155,8 +140,7 @@ export const retryVideoWorkflow = async (
           ...(music?.mimeType ? {
             music: { objectKey: music.objectKey, mimeType: music.mimeType, gainDb: -12 },
           } : {}),
-        }
-      : undefined,
+        },
     videoPrompt: retryPrompt,
     capabilityResolutions,
     objectKey: job.objectKey,

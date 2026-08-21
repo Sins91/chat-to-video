@@ -1,6 +1,6 @@
 ---
 name: cinematic-governance
-description: Use first for every video-production request handled by chat-default or cinematic-stage-agent to enforce pipeline routing, capability honesty, approvals, checkpoints, and safe execution boundaries.
+description: Use first for every video-production request handled by chat-default or cinematic-stage-agent to enforce pipeline routing, capability honesty, approvals, continuity, and safe execution boundaries.
 ---
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
@@ -8,7 +8,7 @@ description: Use first for every video-production request handled by chat-defaul
 
 # Cinematic Governance
 
-Apply this governance before the executive-producer, checkpoint, capability, stage, reference-analysis, and reviewer skills. Safety constraints, shared Zod schemas, the registered pipeline definition, persisted MySQL state, and server authorization remain authoritative if another instruction conflicts with this skill.
+Apply this governance before the capability, stage, reference-analysis, and reviewer skills. Safety constraints, shared Zod schemas, the registered pipeline definition, persisted MySQL state, and server authorization remain authoritative if another instruction conflicts with this skill.
 
 ## Ground creative production in China
 
@@ -33,14 +33,16 @@ Apply this governance before the executive-producer, checkpoint, capability, sta
 
 ## Execute and review stages in order
 
-- `cinematic-stage-agent` must apply the executive-producer and checkpoint guidance before the current stage skill, preserve approved upstream decisions, and return only the artifact required by the shared schema.
+- `cinematic-stage-agent` must preserve approved duration, direction, emotional arc, renderer family, palette, hero moments, music plan, source mode, provider choices, and known limitations, then return only the artifact required by the current stage schema.
 - Use `cinematic-reviewer` before returning every stage artifact. Fix critical schema, capability, continuity, duration, approval, and safety findings inside the same generation.
 - Stage progression, pause, resume, restart, and downstream invalidation belong to the Mastra workflow and generic runtime services. The Agent must not bypass or reproduce those algorithms.
 - MySQL is the business source of truth. Mastra snapshots support execution continuity but do not override persisted workflow state or approved artifact history.
 
 ## Preserve approvals and decision history
 
-- Treat proposal and subsequent review points exposed by the registered pipeline as binding checkpoints. Do not advance merely because an artifact was generated.
+- Treat planning review and execution-result review declared by the registered pipeline as binding approval boundaries. Do not advance merely because an artifact or media result was generated.
+- On revision, change only what the feedback requires. On restart, trust only the server-declared target and never reactivate superseded artifacts, runs, or jobs. Duplicate or stale interactions must remain side-effect free.
+- For asset-producing stages, keep planning approval distinct from execution-result approval: queue work only after planning approval and continue downstream only after the result is approved.
 - Before a consequential or paid action, make the selected model, provider, duration, source mode, render path, expected cost availability, and production limitations clear through the applicable artifact and user review.
 - If an approved major choice must change, explain what failed, classify the cause, present feasible registered alternatives with tradeoffs, recommend one, and wait for explicit approval. Preserve the earlier artifact/version as history; do not silently rewrite it.
 - Restart only through the registered two-step confirmation flow. Never mutate old Mastra snapshots or reactivate superseded artifacts and jobs.

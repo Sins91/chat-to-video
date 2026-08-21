@@ -16,6 +16,7 @@ export * from "./workflow-capability.js";
 export * from "./workflow-tool.js";
 export * from "./workflow-control.js";
 export * from "./workflow-director.js";
+export * from "./workflow-run.js";
 
 import { ConversationIdSchema, ConversationMessageIdSchema } from "./conversation.js";
 import { ReferenceImageIdsSchema } from "./reference-image.js";

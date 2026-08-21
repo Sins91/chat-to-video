@@ -6,21 +6,10 @@ vi.mock("@mastra/ai-sdk", () => mastraAiSdk);
 import {
   ApimartModelGateway,
   buildCinematicDurationPrompt,
-  buildStoryboardPrompt,
   createApimartFetch,
   transformApimartRequestBody,
 } from "../src/model-gateway/apimart-model-gateway.js";
 import type { MastraAgents } from "../src/model-gateway/mastra-agents.js";
-
-const storyboard = {
-  title: "雨夜来信",
-  creativeSummary: "雨夜中的神秘来信",
-  shots: [
-    { order: 1, durationSeconds: 4, scene: "旧街", subjectAction: "女孩走近信箱", camera: "推进", visualStyle: "冷色", audio: "雨声" },
-    { order: 2, durationSeconds: 6, scene: "信箱", subjectAction: "女孩取出信件", camera: "特写", visualStyle: "高反差", audio: "心跳" },
-  ],
-  videoPrompt: "雨夜旧街上的来信，推进后切至信件特写，冷色高反差灯光，雨声与心跳。",
-};
 
 describe("transformApimartRequestBody", () => {
   it("explicitly disables APIMart's default streaming mode for generate calls", () => {
@@ -76,44 +65,6 @@ describe("buildCinematicDurationPrompt", () => {
     expect(prompt).toContain("现在生成视频");
   });
 });
-describe("buildStoryboardPrompt", () => {
-  it("includes the complete JSON contract required when native structured outputs are unavailable", () => {
-    const prompt = buildStoryboardPrompt({
-      requestId: "00000000-0000-4000-8000-000000000001",
-      initialPrompt: "一名宇航员在月球上发现一朵花",
-    });
-
-    expect(prompt).toContain('"creativeSummary"');
-    expect(prompt).toContain('"durationSeconds"');
-    expect(prompt).toContain('"subjectAction"');
-    expect(prompt).toContain('"visualStyle"');
-    expect(prompt).toContain('"videoPrompt"');
-    expect(prompt).toContain("integer durations must total exactly 10 seconds");
-    expect(prompt).toContain("一名宇航员在月球上发现一朵花");
-  });
-
-  it("includes the previous storyboard and revision request", () => {
-    const prompt = buildStoryboardPrompt({
-      requestId: "00000000-0000-4000-8000-000000000001",
-      initialPrompt: "雨夜来信",
-      previousStoryboard: {
-        title: "旧方案",
-        creativeSummary: "雨夜中的来信",
-        shots: [
-          { order: 1, durationSeconds: 4, scene: "旧街", subjectAction: "女孩走近信箱", camera: "推进", visualStyle: "冷色", audio: "雨声" },
-          { order: 2, durationSeconds: 6, scene: "信箱", subjectAction: "女孩取出信件", camera: "特写", visualStyle: "高反差", audio: "心跳" },
-        ],
-        videoPrompt: "雨夜旧街上的来信",
-      },
-      revisionRequest: "第二个镜头改成俯拍",
-    });
-
-    expect(prompt).toContain("Previous storyboard:");
-    expect(prompt).toContain('"title":"旧方案"');
-    expect(prompt).toContain("第二个镜头改成俯拍");
-  });
-});
-
 describe("ApimartModelGateway Mastra agents", () => {
   it("repairs one overlong reference-image analysis item", async () => {
     const referenceImageId = "00000000-0000-4000-8000-000000000005";
@@ -197,63 +148,6 @@ describe("ApimartModelGateway Mastra agents", () => {
     expect(JSON.stringify(generate.mock.calls)).toContain(
       '"jsonPromptInjection":"inline"',
     );
-  });
-
-  it("repairs one schema-invalid storyboard without framework retries", async () => {
-    const agents = {
-      storyboard: { generate: vi.fn()
-        .mockResolvedValueOnce({ object: { title: "invalid" } })
-        .mockResolvedValueOnce({ object: storyboard }) },
-      chat: { stream: vi.fn() },
-      timeoutMs: 30_000,
-      storyboardTimeoutMs: 120_000,
-    };
-    const gateway = new ApimartModelGateway(agents as unknown as MastraAgents);
-
-    await expect(gateway.generateStoryboard({
-      requestId: "00000000-0000-4000-8000-000000000001",
-      workflowId: "00000000-0000-4000-8000-000000000004",
-      conversationId: "00000000-0000-4000-8000-000000000002",
-      tenantId: "tenant-1",
-      projectId: "project-1",
-      initialPrompt: "雨夜来信",
-    })).resolves.toEqual(storyboard);
-    expect(agents.storyboard.generate).toHaveBeenCalledTimes(2);
-  });
-
-  it("compresses an overlong storyboard videoPrompt before strict validation", async () => {
-    const compressedPrompt = "雨夜旧街，推进至信件特写，保留冷色灯光、雨声与心跳。";
-    const compress = vi.fn().mockResolvedValue({
-      prompt: compressedPrompt,
-      maxCharacters: 4_000,
-      originalCharacters: 4_001,
-      compressedCharacters: compressedPrompt.length,
-      wasCompressed: true,
-    });
-    const agents = {
-      storyboard: { generate: vi.fn().mockResolvedValue({
-        object: { ...storyboard, videoPrompt: "长".repeat(4_001) },
-      }) },
-      promptCompression: { compress },
-      chat: { stream: vi.fn() },
-      timeoutMs: 30_000,
-      storyboardTimeoutMs: 120_000,
-    };
-    const gateway = new ApimartModelGateway(agents as unknown as MastraAgents);
-
-    await expect(gateway.generateStoryboard({
-      requestId: "00000000-0000-4000-8000-000000000001",
-      workflowId: "00000000-0000-4000-8000-000000000004",
-      conversationId: "00000000-0000-4000-8000-000000000002",
-      tenantId: "tenant-1",
-      projectId: "project-1",
-      initialPrompt: "雨夜来信",
-    })).resolves.toEqual({ ...storyboard, videoPrompt: compressedPrompt });
-    expect(compress).toHaveBeenCalledWith({
-      prompt: "长".repeat(4_001),
-      purpose: "storyboard_generation",
-      maxCharacters: 4_000,
-    });
   });
 
   it("converts a Mastra chat stream and propagates cancellation", async () => {

@@ -6,7 +6,6 @@ import {
   type CinematicAssetBatchStatus,
   type CinematicAssetJobPayload,
   type CinematicGenerativeStage,
-  type Storyboard,
   type VideoModel,
   type VideoOutputResolution,
   type VideoJobStatus,
@@ -26,6 +25,8 @@ import {
   WorkflowIntentDecisionSchema,
   type WorkflowIntentDecision,
   WorkflowUserIntentSchema,
+  WorkflowRunAttemptContextSchema,
+  type WorkflowRunAttemptContext,
 } from "@chat-to-video/contracts";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -44,7 +45,6 @@ import {
   videoWorkflowEvents,
   videoWorkflows,
   workflowStageCheckpoints,
-  workflowAgentActions,
   workflowApprovals,
   workflowArtifactVersions,
   workflowDirectorCycles,
@@ -52,6 +52,7 @@ import {
   workflowUserDecisions,
   workflowControlRequests,
   workflowStageAttempts,
+  workflowRunAttempts,
 } from "./schema.js";
 
 type NewWorkflow = {
@@ -218,6 +219,12 @@ export class VideoWorkflowRepository {
         .where(and(eq(workflowApprovals.workflowId, workflow.id), eq(workflowApprovals.status, "pending")));
       await transaction.update(workflowDirectorCycles).set({ status: "superseded", updatedAt: now })
         .where(and(eq(workflowDirectorCycles.workflowId, workflow.id), inArray(workflowDirectorCycles.status, ["pending", "claimed", "running", "suspended"])));
+      await transaction.update(workflowRunAttempts).set({
+        status: "superseded", completedAt: now, claimToken: null, claimUntil: null,
+      }).where(and(
+        eq(workflowRunAttempts.workflowId, workflow.id),
+        inArray(workflowRunAttempts.status, ["pending", "claimed", "started"]),
+      ));
       await transaction.update(workflowControlRequests).set({ status: "completed", completedAt: now })
         .where(eq(workflowControlRequests.id, control.id));
       return workflow.id;
@@ -262,6 +269,12 @@ export class VideoWorkflowRepository {
           .where(and(eq(workflowApprovals.workflowId, workflow.id), eq(workflowApprovals.status, "pending")));
         await transaction.update(workflowDirectorCycles).set({ status: "superseded", updatedAt: now })
           .where(and(eq(workflowDirectorCycles.workflowId, workflow.id), inArray(workflowDirectorCycles.status, ["pending", "claimed", "running", "suspended"])));
+        await transaction.update(workflowRunAttempts).set({
+          status: "superseded", completedAt: now, claimToken: null, claimUntil: null,
+        }).where(and(
+          eq(workflowRunAttempts.workflowId, workflow.id),
+          inArray(workflowRunAttempts.status, ["pending", "claimed", "started"]),
+        ));
       }
       await transaction.update(workflowControlRequests).set({
         status: "claimed",
@@ -487,6 +500,168 @@ export class VideoWorkflowRepository {
     await this.database.update(videoWorkflows).set({ runId, updatedAt: new Date() }).where(eq(videoWorkflows.id, workflowId));
   }
 
+  async createWorkflowRunAttempt(input: {
+    id: string;
+    workflowId: string;
+    idempotencyKey: string;
+    context: WorkflowRunAttemptContext;
+  }) {
+    const context = WorkflowRunAttemptContextSchema.parse(input.context);
+    await this.database.insert(workflowRunAttempts).values({
+      id: input.id,
+      workflowId: input.workflowId,
+      kind: context.kind,
+      idempotencyKey: input.idempotencyKey,
+      runContext: context,
+      mastraRunId: input.id,
+      status: "pending",
+    }).onDuplicateKeyUpdate({ set: { idempotencyKey: input.idempotencyKey } });
+    return this.findWorkflowRunAttemptByIdempotencyKey(input.idempotencyKey);
+  }
+
+  async findWorkflowRunAttempt(id: string) {
+    const rows = await this.database.select().from(workflowRunAttempts)
+      .where(eq(workflowRunAttempts.id, id)).limit(1);
+    const row = rows[0];
+    return row ? { ...row, runContext: WorkflowRunAttemptContextSchema.parse(row.runContext) } : null;
+  }
+
+  async findWorkflowRunAttemptByIdempotencyKey(idempotencyKey: string) {
+    const rows = await this.database.select().from(workflowRunAttempts)
+      .where(eq(workflowRunAttempts.idempotencyKey, idempotencyKey)).limit(1);
+    const row = rows[0];
+    return row ? { ...row, runContext: WorkflowRunAttemptContextSchema.parse(row.runContext) } : null;
+  }
+
+  async listDispatchableWorkflowRunAttempts(now: Date, limit = 100) {
+    const rows = await this.database.select().from(workflowRunAttempts).where(or(
+      eq(workflowRunAttempts.status, "pending"),
+      and(eq(workflowRunAttempts.status, "claimed"), lt(workflowRunAttempts.claimUntil, now)),
+    )).orderBy(asc(workflowRunAttempts.createdAt)).limit(limit);
+    return rows.map((row) => ({
+      ...row,
+      runContext: WorkflowRunAttemptContextSchema.parse(row.runContext),
+    }));
+  }
+
+  async claimWorkflowRunAttempt(id: string, claimToken: string, claimUntil: Date) {
+    const now = new Date();
+    const result: unknown = await this.database.update(workflowRunAttempts).set({
+      status: "claimed",
+      claimToken,
+      claimUntil,
+      errorCode: null,
+    }).where(and(
+      eq(workflowRunAttempts.id, id),
+      or(
+        eq(workflowRunAttempts.status, "pending"),
+        and(eq(workflowRunAttempts.status, "claimed"), lt(workflowRunAttempts.claimUntil, now)),
+      ),
+    ));
+    return readAffectedRows(result) === 1 ? this.findWorkflowRunAttempt(id) : null;
+  }
+
+  async markWorkflowRunAttemptStarted(id: string, claimToken: string): Promise<boolean> {
+    return this.database.transaction(async (transaction) => {
+      const rows = await transaction.select().from(workflowRunAttempts)
+        .where(eq(workflowRunAttempts.id, id)).limit(1).for("update");
+      const attempt = rows[0];
+      if (!attempt || attempt.status !== "claimed" || attempt.claimToken !== claimToken) return false;
+      const now = new Date();
+      await transaction.update(workflowRunAttempts).set({
+        status: "started",
+        claimToken: null,
+        claimUntil: null,
+        startedAt: attempt.startedAt ?? now,
+        errorCode: null,
+      }).where(and(
+        eq(workflowRunAttempts.id, id),
+        eq(workflowRunAttempts.status, "claimed"),
+        eq(workflowRunAttempts.claimToken, claimToken),
+      ));
+      await transaction.update(videoWorkflows).set({
+        runId: attempt.mastraRunId,
+        lastProgressAt: now,
+        updatedAt: now,
+      }).where(and(
+        eq(videoWorkflows.id, attempt.workflowId),
+        notInArray(videoWorkflows.status, ["cancelled"]),
+      ));
+      return true;
+    });
+  }
+
+  async releaseWorkflowRunAttempt(id: string, claimToken: string, errorCode: string): Promise<boolean> {
+    const result: unknown = await this.database.update(workflowRunAttempts).set({
+      status: "pending",
+      claimToken: null,
+      claimUntil: null,
+      errorCode,
+    }).where(and(
+      eq(workflowRunAttempts.id, id),
+      eq(workflowRunAttempts.status, "claimed"),
+      eq(workflowRunAttempts.claimToken, claimToken),
+    ));
+    return readAffectedRows(result) === 1;
+  }
+
+  async finishClaimedWorkflowRunAttempt(
+    id: string,
+    claimToken: string,
+    status: "failed" | "superseded",
+    errorCode: string,
+  ): Promise<boolean> {
+    const result: unknown = await this.database.update(workflowRunAttempts).set({
+      status,
+      claimToken: null,
+      claimUntil: null,
+      errorCode,
+      completedAt: new Date(),
+    }).where(and(
+      eq(workflowRunAttempts.id, id),
+      eq(workflowRunAttempts.status, "claimed"),
+      eq(workflowRunAttempts.claimToken, claimToken),
+    ));
+    return readAffectedRows(result) === 1;
+  }
+
+  async completeWorkflowRunAttempt(id: string): Promise<void> {
+    await this.database.update(workflowRunAttempts).set({
+      status: "completed",
+      completedAt: new Date(),
+      claimToken: null,
+      claimUntil: null,
+    }).where(and(
+      eq(workflowRunAttempts.id, id),
+      eq(workflowRunAttempts.status, "started"),
+    ));
+  }
+
+  async completeWorkflowRunAttemptByMastraRunId(mastraRunId: string): Promise<void> {
+    await this.database.update(workflowRunAttempts).set({
+      status: "completed",
+      completedAt: new Date(),
+      claimToken: null,
+      claimUntil: null,
+    }).where(and(
+      eq(workflowRunAttempts.mastraRunId, mastraRunId),
+      eq(workflowRunAttempts.status, "started"),
+    ));
+  }
+
+  async supersedeWorkflowRunAttempts(workflowId: string, exceptId?: string): Promise<void> {
+    await this.database.update(workflowRunAttempts).set({
+      status: "superseded",
+      completedAt: new Date(),
+      claimToken: null,
+      claimUntil: null,
+    }).where(and(
+      eq(workflowRunAttempts.workflowId, workflowId),
+      inArray(workflowRunAttempts.status, ["pending", "claimed", "started"]),
+      ...(exceptId ? [sql`${workflowRunAttempts.id} <> ${exceptId}`] : []),
+    ));
+  }
+
   async saveProductionDecisions(
     workflowId: string,
     actionId: string,
@@ -567,24 +742,6 @@ export class VideoWorkflowRepository {
     )).orderBy(desc(workflowApprovals.requestedAt));
   }
 
-  async listDirectorCycles(workflowId: string, limit = 50) {
-    return this.database.select().from(workflowDirectorCycles)
-      .where(eq(workflowDirectorCycles.workflowId, workflowId))
-      .orderBy(desc(workflowDirectorCycles.createdAt)).limit(limit);
-  }
-
-  async listDirectorActions(workflowId: string, limit = 100) {
-    return this.database.select().from(workflowAgentActions)
-      .where(eq(workflowAgentActions.workflowId, workflowId))
-      .orderBy(desc(workflowAgentActions.createdAt)).limit(limit);
-  }
-
-  async listProductionDecisions(workflowId: string, limit = 100) {
-    return this.database.select().from(workflowProductionDecisions)
-      .where(eq(workflowProductionDecisions.workflowId, workflowId))
-      .orderBy(desc(workflowProductionDecisions.createdAt)).limit(limit);
-  }
-
   async saveWorkflowUserDecision(input: {
     id: string;
     workflowId: string;
@@ -636,6 +793,7 @@ export class VideoWorkflowRepository {
     stagesToSupersede: readonly WorkflowStageId[];
     now: Date;
   }): Promise<{
+    runAttemptId: string;
     previousRunId: string | null;
     targetStage: WorkflowStageId;
     text: string;
@@ -754,6 +912,25 @@ export class VideoWorkflowRepository {
         eq(workflowDirectorCycles.workflowId, workflow.id),
         inArray(workflowDirectorCycles.status, ["pending", "claimed", "running", "suspended"]),
       ));
+      await transaction.update(workflowRunAttempts).set({
+        status: "superseded",
+        completedAt: supersededAt,
+        claimToken: null,
+        claimUntil: null,
+      }).where(and(
+        eq(workflowRunAttempts.workflowId, workflow.id),
+        inArray(workflowRunAttempts.status, ["pending", "claimed", "started"]),
+      ));
+      const runAttemptId = randomUUID();
+      const runContext = WorkflowRunAttemptContextSchema.parse({
+        kind: "restart",
+        restartRequestId: control.id,
+        targetStage: control.targetStageId,
+        text: control.rawText,
+        baseVersion: workflow.currentVersion,
+        expectedStateVersion: workflow.stateVersion + 1,
+        previousArtifactVersion: previousRows[0]?.version ?? null,
+      });
       await transaction.update(videoWorkflows).set({
         status: "drafting",
         stateVersion: sql`${videoWorkflows.stateVersion} + 1`,
@@ -773,7 +950,17 @@ export class VideoWorkflowRepository {
         status: "completed",
         completedAt: supersededAt,
       }).where(eq(workflowControlRequests.id, control.id));
+      await transaction.insert(workflowRunAttempts).values({
+        id: runAttemptId,
+        workflowId: workflow.id,
+        kind: "restart",
+        idempotencyKey: `${workflow.id}:restart:${control.id}`,
+        runContext,
+        mastraRunId: runAttemptId,
+        status: "pending",
+      });
       return {
+        runAttemptId,
         previousRunId: workflow.runId,
         targetStage: control.targetStageId,
         text: control.rawText,
@@ -882,20 +1069,6 @@ export class VideoWorkflowRepository {
         })),
       };
     });
-  }
-
-  async completeWorkflowFromDirector(input: {
-    workflowId: string;
-    jobId: string;
-  }): Promise<boolean> {
-    const result: unknown = await this.database.update(videoWorkflows).set({
-      status: "succeeded", failureCode: null, errorMessage: null, updatedAt: new Date(),
-    }).where(and(
-      eq(videoWorkflows.id, input.workflowId),
-      eq(videoWorkflows.currentStageId, "compose"),
-      notInArray(videoWorkflows.status, ["succeeded", "cancelled"]),
-    ));
-    return readAffectedRows(result) === 1;
   }
 
   async updateVideoModel(workflowId: string, videoModel: VideoModel): Promise<boolean> {
@@ -1017,27 +1190,6 @@ export class VideoWorkflowRepository {
       ))
       .limit(1);
     return rows[0]?.workflow ?? null;
-  }
-
-  async saveStoryboard(input: {
-    workflowId: string;
-    version: number;
-    revisionRequest: string | null;
-    storyboard: Storyboard;
-  }): Promise<void> {
-    await this.database.insert(storyboardVersions).values({
-      id: randomUUID(),
-      ...input,
-    }).onDuplicateKeyUpdate({
-      set: {
-        revisionRequest: input.revisionRequest,
-        storyboard: input.storyboard,
-      },
-    });
-    const workflow = await this.findWorkflow(input.workflowId);
-    if (workflow?.conversationId) {
-      await this.database.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, workflow.conversationId));
-    }
   }
 
   async findLatestStoryboard(workflowId: string) {
@@ -1646,11 +1798,19 @@ export class VideoWorkflowRepository {
     workflowId: string,
     planVersion: number,
     stageId: "consistency_reference" | "assets" = "assets",
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     return this.database.transaction(async (transaction) => {
+      const idempotencyKey = `${workflowId}:continuation:${stageId}:${planVersion}`;
+      const existingAttempts = await transaction.select({
+        id: workflowRunAttempts.id,
+      }).from(workflowRunAttempts)
+        .where(eq(workflowRunAttempts.idempotencyKey, idempotencyKey))
+        .limit(1);
+      if (existingAttempts[0]) return existingAttempts[0].id;
       const workflows = await transaction.select({
         status: videoWorkflows.status,
         currentVersion: videoWorkflows.currentVersion,
+        stateVersion: videoWorkflows.stateVersion,
       }).from(videoWorkflows)
         .where(eq(videoWorkflows.id, workflowId))
         .limit(1)
@@ -1659,7 +1819,7 @@ export class VideoWorkflowRepository {
       if (
         !workflow || workflow.status !== "awaiting_input" ||
         workflow.currentVersion !== planVersion
-      ) return false;
+      ) return null;
       const result: unknown = await transaction.update(cinematicAssetBatches).set({
         status: "approved" satisfies CinematicAssetBatchStatus,
         updatedAt: new Date(),
@@ -1670,9 +1830,10 @@ export class VideoWorkflowRepository {
         eq(cinematicAssetBatches.status, "awaiting_approval"),
         isNull(cinematicAssetBatches.supersededAt),
       ));
-      if (readAffectedRows(result) !== 1) return false;
+      if (readAffectedRows(result) !== 1) return null;
       await transaction.update(videoWorkflows).set({
         status: "drafting",
+        stateVersion: sql`${videoWorkflows.stateVersion} + 1`,
         errorMessage: null,
         updatedAt: new Date(),
       }).where(and(
@@ -1680,7 +1841,25 @@ export class VideoWorkflowRepository {
         eq(videoWorkflows.status, "awaiting_input"),
         eq(videoWorkflows.currentVersion, planVersion),
       ));
-      return true;
+      const runAttemptId = randomUUID();
+      const targetStage = stageId === "consistency_reference" ? "assets" : "edit";
+      const runContext = WorkflowRunAttemptContextSchema.parse({
+        kind: "continuation",
+        sourceStage: stageId,
+        targetStage,
+        baseVersion: planVersion,
+        expectedStateVersion: workflow.stateVersion + 1,
+      });
+      await transaction.insert(workflowRunAttempts).values({
+        id: runAttemptId,
+        workflowId,
+        kind: "continuation",
+        idempotencyKey,
+        runContext,
+        mastraRunId: runAttemptId,
+        status: "pending",
+      });
+      return runAttemptId;
     });
   }
 

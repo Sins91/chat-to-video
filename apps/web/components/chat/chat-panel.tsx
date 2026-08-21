@@ -28,7 +28,6 @@ import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-pro
 import { createChatTransport } from "@/lib/chat-transport";
 import { notifyConversationHistoryChanged, notifyPendingConversationHistory } from "@/lib/conversation-client";
 import { isVideoCreationIntent } from "@/lib/video-intent";
-import { shouldResolveVideoWorkflowInput } from "@/lib/video-workflow-routing";
 
 type ChatSession = {
   chat: Chat<UIMessage>;
@@ -236,11 +235,6 @@ export function ChatPanel() {
     && workflowStatus !== "cancelled";
   const isReviewingStoryboard = workflowStatus === "awaiting_input";
   const pendingControl = workflow.snapshot?.pendingControl ?? null;
-  const hasPendingReferenceResolution = workflow.entries.some((entry) =>
-    entry.type === "text" && entry.referenceImages.some((image) =>
-      image.resolution?.status === "needs_clarification"
-    )
-  );
   const isGenerating = isChatGenerating || workflow.isSubmitting;
   const isAgentBusy = isGenerating || isQueueDispatching || workflowStatus === "drafting";
   const isAgentProcessing = isAgentBusy || isWorkflowProcessing;
@@ -288,11 +282,6 @@ export function ChatPanel() {
   const dispatchText = useCallback(async (message: SubmittedChatInput, sessionId: string) => {
     const text = message.text;
     const messageId = crypto.randomUUID();
-    if (!hasPendingReferenceResolution && message.referenceImages.length === 0 &&
-        !shouldResolveVideoWorkflowInput({ snapshot: workflow.snapshot, text })) {
-      await sendChatMessage(message);
-      return;
-    }
     const controlRoute = await workflow.resolveControlIntent(text, messageId, message.referenceImages);
     if (controlRoute.route === "workflow") {
       if (controlRoute.conversationId) {
@@ -306,7 +295,7 @@ export function ChatPanel() {
       return;
     }
     await sendChatMessage(message);
-  }, [hasPendingReferenceResolution, sendChatMessage, workflow.resolveControlIntent, workflow.snapshot]);
+  }, [sendChatMessage, workflow.resolveControlIntent]);
 
   const runText = useCallback((message: SubmittedChatInput) => {
     const text = message.text;

@@ -5,6 +5,7 @@ import {
   CINEMATIC_PIPELINE_DEFINITION,
   findWorkflowPipelineDefinition,
   findWorkflowStage,
+  getWorkflowStageStepId,
   VideoWorkflowEventSchema,
   WorkflowStepProgressSchema,
   type ConversationEntry,
@@ -148,7 +149,7 @@ const legacyWorkflowStep = (
   const stageDefinition = findWorkflowStage(pipeline, stage);
   const stageIndex = pipeline.stages.findIndex((definition) => definition.id === stage);
   const definition = {
-    stepId: stageDefinition?.stepId ?? stage,
+    stepId: stageDefinition ? getWorkflowStageStepId(stageDefinition) : stage,
     stepLabel: stageDefinition?.stepLabel ?? stageDefinition?.label ?? stage,
     stepIndex: Math.max(0, stageIndex) + 2,
   };

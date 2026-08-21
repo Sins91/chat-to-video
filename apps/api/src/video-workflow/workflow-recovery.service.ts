@@ -19,6 +19,7 @@ import { VideoWorkflowOperations } from "./video-workflow.operations.js";
 import { VIDEO_WORKFLOW_REPOSITORY } from "./video-workflow.tokens.js";
 import { WorkflowEventService } from "./workflow-event.service.js";
 import { videoWorkflowStep } from "./workflow-step.js";
+import { WorkflowRunLauncher } from "./workflow-run-launcher.service.js";
 
 const STALL_TIMEOUT_MS = 30 * 60 * 1_000;
 const WATCHDOG_INTERVAL_MS = 60_000;
@@ -34,6 +35,7 @@ export class WorkflowRecoveryService implements OnApplicationBootstrap, OnModule
     @Inject(MastraRuntimeService) private readonly runtime: MastraRuntimeService,
     @Inject(VideoWorkflowOperations) private readonly operations: VideoWorkflowOperations,
     @Inject(WorkflowEventService) private readonly events: WorkflowEventService,
+    @Inject(WorkflowRunLauncher) private readonly runLauncher: WorkflowRunLauncher,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -41,7 +43,7 @@ export class WorkflowRecoveryService implements OnApplicationBootstrap, OnModule
       this.logger.error({ message: "Startup workflow recovery scan failed.", error });
     });
     this.watchdogTimer = setInterval(() => {
-      void this.checkStalledWorkflows().catch((error: unknown) => {
+      void this.runPeriodicRecovery().catch((error: unknown) => {
         this.logger.error({ message: "Workflow watchdog scan failed.", error });
       });
     }, WATCHDOG_INTERVAL_MS);
@@ -49,11 +51,23 @@ export class WorkflowRecoveryService implements OnApplicationBootstrap, OnModule
   }
 
   private async recoverAfterStartup(): Promise<void> {
+    await this.runLauncher.dispatchPending();
     const workflows = await retryTransientDatabaseRead(
       () => this.repository.listRecoverableActiveWorkflows(),
       { attempts: 6, initialDelayMs: 500 },
     );
-    for (const workflow of workflows) void this.recoverAgentRun(workflow.id, false);
+    for (const workflow of workflows) {
+      try {
+        await this.recoverAgentRun(workflow.id, false);
+      } catch (error: unknown) {
+        this.logger.error({ message: "Startup workflow recovery failed.", workflowId: workflow.id, error });
+      }
+    }
+  }
+
+  private async runPeriodicRecovery(): Promise<void> {
+    await this.runLauncher.dispatchPending();
+    await this.checkStalledWorkflows();
   }
 
   async recoverAgentRun(workflowId: string, isManual: boolean): Promise<boolean> {
@@ -86,6 +100,7 @@ export class WorkflowRecoveryService implements OnApplicationBootstrap, OnModule
         return true;
       }
       if (state === "success") {
+        await this.repository.completeWorkflowRunAttemptByMastraRunId(workflow.runId);
         const job = await this.repository.findWorkflowVideoJob(workflowId);
         if (job) {
           await this.repository.updateWorkflow(workflowId, {

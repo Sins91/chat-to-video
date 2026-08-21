@@ -3,6 +3,7 @@ import {
   CinematicAssetJobPayloadSchema,
   findMissingWorkflowCapabilities,
   findWorkflowStage,
+  getWorkflowStageStepId,
   getVideoFrameDimensions,
   type CinematicAssetJobPayload,
   type VideoWorkflowEvent,
@@ -28,7 +29,7 @@ const assetGenerationStep = (
   const stage = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, stageId);
   if (!stage) throw new Error(`Cinematic ${stageId} stage is not registered.`);
   return {
-    stepId: stage.stepId,
+    stepId: getWorkflowStageStepId(stage),
     stepLabel: stage.stepLabel ?? stage.label,
     stepState,
     stepIndex: CINEMATIC_PIPELINE_DEFINITION.stages.findIndex(

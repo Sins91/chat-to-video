@@ -1,6 +1,7 @@
 import {
   CINEMATIC_PIPELINE_DEFINITION,
   findWorkflowStage,
+  getWorkflowStageStepId,
   type CinematicStage,
   type WorkflowStepProgress,
   type WorkflowStepState,
@@ -17,7 +18,7 @@ const videoWorkflowStepDefinition = (
   const definition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, step);
   if (!definition) throw new Error(`Unknown cinematic workflow stage: ${step}`);
   return {
-    stepId: definition.stepId,
+    stepId: getWorkflowStageStepId(definition),
     stepLabel: definition.stepLabel ?? definition.label,
     stepIndex: CINEMATIC_PIPELINE_DEFINITION.stages.findIndex(
       (stage) => stage.id === definition.id,

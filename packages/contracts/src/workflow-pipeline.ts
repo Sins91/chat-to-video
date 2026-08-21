@@ -15,11 +15,8 @@ export type WorkflowStageDefinition<StageId extends WorkflowStageId = WorkflowSt
   id: StageId;
   label: string;
   aliases: readonly string[];
-  stepId: string;
+  stepId?: string;
   stepLabel?: string;
-  producesArtifact: boolean;
-  requiresApproval: boolean;
-  allowsRevision: boolean;
   isRestartable: boolean;
   allowsDirectEntry?: boolean;
   intentTopics: readonly string[];
@@ -47,7 +44,6 @@ export type WorkflowPipelineDefinition<StageId extends WorkflowStageId = Workflo
   definitionVersion: number;
   initialStageId: StageId;
   terminalStageIds: readonly StageId[];
-  directEntryStageIds?: readonly StageId[];
   stages: readonly WorkflowStageDefinition<StageId>[];
 };
 
@@ -70,7 +66,8 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
   for (const stage of definition.stages) {
     WorkflowStageIdSchema.parse(stage.id);
     if (ids.has(stage.id)) throw new Error(`Duplicate workflow stage id: ${stage.id}`);
-    if (!stage.label.trim() || !stage.stepId.trim() ||
+    const stepId = getWorkflowStageStepId(stage);
+    if (!stage.label.trim() || !stepId.trim() ||
         (stage.stepLabel !== undefined && !stage.stepLabel.trim()) || stage.aliases.length < 1 ||
         stage.intentTopics.length < 1 || stage.ownedArtifactKinds.length < 1) {
       throw new Error(`Workflow stage ${stage.id} is missing presentation metadata.`);
@@ -96,11 +93,11 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
     if (new Set(toolIds).size !== toolIds.length) {
       throw new Error(`Workflow stage ${stage.id} declares a tool more than once.`);
     }
-    if (stepIds.has(stage.stepId)) {
-      throw new Error(`Duplicate Mastra step id: ${stage.stepId}`);
+    if (stepIds.has(stepId)) {
+      throw new Error(`Duplicate Mastra step id: ${stepId}`);
     }
     ids.add(stage.id);
-    stepIds.add(stage.stepId);
+    stepIds.add(stepId);
   }
   if (!ids.has(definition.initialStageId)) {
     throw new Error(`Workflow pipeline ${definition.id} has an unknown initial stage.`);
@@ -108,9 +105,6 @@ export const defineWorkflowPipeline = <const StageId extends WorkflowStageId>(
   if (definition.terminalStageIds.length < 1 ||
       definition.terminalStageIds.some((stageId) => !ids.has(stageId))) {
     throw new Error(`Workflow pipeline ${definition.id} has an invalid terminal stage.`);
-  }
-  if (definition.directEntryStageIds?.some((stageId) => !ids.has(stageId))) {
-    throw new Error(`Workflow pipeline ${definition.id} has an invalid direct-entry stage.`);
   }
   for (const stage of definition.stages) {
     if (stage.allowedNextStageIds.some((stageId) => !ids.has(stageId))) {
@@ -140,6 +134,14 @@ export const findWorkflowStage = (
   stageId: string,
 ): WorkflowStageDefinition | null =>
   pipeline.stages.find((stage) => stage.id === stageId) ?? null;
+
+export const getWorkflowStageStepId = (
+  stage: Pick<WorkflowStageDefinition, "id" | "stepId">,
+): string => stage.stepId ?? stage.id.replaceAll("_", "-");
+
+export const workflowStageProducesArtifact = (
+  stage: Pick<WorkflowStageDefinition, "outputArtifactKinds">,
+): boolean => stage.outputArtifactKinds.length > 0;
 
 export const getWorkflowStageIndex = (
   pipeline: WorkflowPipelineDefinition,
@@ -188,9 +190,7 @@ export const parseWorkflowDirectEntryTarget = (
   stageId: string,
 ): WorkflowStageDefinition | null => {
   const stage = findWorkflowStage(pipeline, stageId);
-  return stage && (
-    stage.allowsDirectEntry === true || pipeline.directEntryStageIds?.includes(stage.id)
-  ) ? stage : null;
+  return stage?.allowsDirectEntry === true ? stage : null;
 };
 
 export type WorkflowPipelineArtifactMapping = {

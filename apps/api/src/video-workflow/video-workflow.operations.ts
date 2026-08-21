@@ -25,14 +25,12 @@ import {
 import {
   RENDER_JOB_TIMEOUT_MS,
   RenderTimeoutCleanupJobPayloadSchema,
-  RenderVideoJobPayloadSchema,
-  StoryboardSchema,
+  CinematicRenderVideoJobPayloadSchema,
   getVideoModelMaxDurationSeconds,
   roundVideoModelDurationSeconds,
   VideoModelSchema,
   type RenderTimeoutCleanupJobPayload,
-  type RenderVideoJobPayload,
-  type Storyboard,
+  type CinematicRenderVideoJobPayload,
   type VideoModel,
 } from "@chat-to-video/contracts";
 import type { VideoWorkflowRepository } from "@chat-to-video/database";
@@ -95,7 +93,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     "api-workflow-queues",
     { maxRetriesPerRequest: 1 },
   );
-  private readonly renderQueue = new Queue<RenderVideoJobPayload | CinematicAssetJobPayload>("render-jobs", {
+  private readonly renderQueue = new Queue<CinematicRenderVideoJobPayload | CinematicAssetJobPayload>("render-jobs", {
     connection: this.queueConnection,
   });
   private readonly imageQueue = new Queue<CinematicAssetJobPayload>("image-jobs", {
@@ -674,7 +672,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       },
     });
   }
-  private async scheduleRenderTimeout(payload: RenderVideoJobPayload): Promise<void> {
+  private async scheduleRenderTimeout(payload: CinematicRenderVideoJobPayload): Promise<void> {
     const videoJob = await this.repository.findVideoJob(payload.jobId);
     if (!videoJob) throw new Error("Video job was not persisted before timeout scheduling.");
     const deadlineAt = new Date(videoJob.updatedAt.getTime() + RENDER_JOB_TIMEOUT_MS);
@@ -695,8 +693,8 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
   }
 
   private async enqueueRenderJob(
-    name: "generate-cinematic-video" | "generate-video",
-    payload: RenderVideoJobPayload,
+    name: "generate-cinematic-video",
+    payload: CinematicRenderVideoJobPayload,
   ): Promise<void> {
     try {
       await this.scheduleRenderTimeout(payload);
@@ -1057,7 +1055,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     const workflow = workflowScope.workflow;
     const selectedVideoModel = VideoModelSchema.parse(workflow.videoModel);
     const capabilityResolutions = await this.assertComposeCapabilities(input.workflowId);
-    const payload = RenderVideoJobPayloadSchema.parse({
+    const payload = CinematicRenderVideoJobPayloadSchema.parse({
       workflowId: input.workflowId,
       requestId: input.requestId,
       jobId,
@@ -1148,140 +1146,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     await this.enqueueCinematicVideo({ ...input, edit: artifact });
   }
 
-  async generateStoryboard(input: WorkflowInput & {
-    version: number;
-    previousStoryboard?: Storyboard;
-    revisionRequest?: string;
-  }): Promise<Storyboard> {
-    const existing = await this.repository.findStoryboard(input.workflowId, input.version);
-    if (existing) return StoryboardSchema.parse(existing.storyboard);
-
-    await this.repository.updateWorkflow(input.workflowId, {
-      status: "drafting",
-      errorMessage: null,
-    });
-    await this.events.append({
-      eventId: `${input.workflowId}:drafting:v${input.version}`,
-      workflowId: input.workflowId,
-      requestId: input.requestId,
-      type: "agent.step",
-      data: {
-        status: "drafting",
-        ...videoWorkflowStep(
-          "scene_plan",
-          "running",
-          input.version === 1
-            ? "正在整理创意并生成分镜。"
-            : "正在根据修改意见重新生成分镜。",
-        ),
-      },
-    });
-    const workflowScope = await this.repository.findWorkflowScope(input.workflowId);
-    if (!workflowScope) throw new Error("Storyboard workflow scope was not found.");
-    return StoryboardSchema.parse(await this.modelGateway.generateStoryboard({
-      requestId: input.requestId,
-      workflowId: input.workflowId,
-      conversationId: workflowScope.workflow.conversationId ?? undefined,
-      tenantId: workflowScope.tenantId,
-      projectId: workflowScope.projectId,
-      initialPrompt: input.initialPrompt,
-      previousStoryboard: input.previousStoryboard,
-      revisionRequest: input.revisionRequest,
-    }));
-  }
-
-  async activateStoryboard(input: WorkflowInput & {
-    version: number;
-    storyboard: Storyboard;
-    revisionRequest?: string;
-  }): Promise<void> {
-    await this.repository.saveStoryboard({
-      workflowId: input.workflowId,
-      version: input.version,
-      revisionRequest: input.revisionRequest ?? null,
-      storyboard: input.storyboard,
-    });
-    await this.repository.updateWorkflow(input.workflowId, {
-      status: "awaiting_input",
-      currentVersion: input.version,
-      errorMessage: null,
-    });
-    await this.events.append({
-      eventId: `${input.workflowId}:storyboard:v${input.version}`,
-      workflowId: input.workflowId,
-      requestId: input.requestId,
-      type: "storyboard.completed",
-      data: {
-        version: input.version,
-        revisionRequest: input.revisionRequest ?? null,
-        storyboard: input.storyboard,
-        createdAt: new Date().toISOString(),
-      },
-    });
-    await this.events.append({
-      eventId: `${input.workflowId}:awaiting:v${input.version}`,
-      workflowId: input.workflowId,
-      requestId: input.requestId,
-      type: "agent.step",
-      data: {
-        status: "awaiting_input",
-        ...videoWorkflowStep(
-          "scene_plan",
-          "awaiting_input",
-          "分镜已完成，等待你确认生成或继续提出修改。",
-        ),
-      },
-    });
-  }
-
-  async enqueueVideo(input: WorkflowInput & { version: number; storyboard: Storyboard }): Promise<void> {
-    const jobId = `${input.workflowId}-v${input.version}`;
-    const workflowScope = await this.repository.findWorkflowScope(input.workflowId);
-    if (!workflowScope) throw new Error("Video workflow not found while enqueueing.");
-    const workflow = workflowScope.workflow;
-    const resolutions = await this.capabilityResolutions();
-    const required = ["video.generate"] as const;
-    const missing = findMissingWorkflowCapabilities(required, resolutions);
-    if (missing.length > 0) throw new Error("Video generation capability is unavailable.");
-    const payload = RenderVideoJobPayloadSchema.parse({
-      workflowId: input.workflowId,
-      requestId: input.requestId,
-      jobId,
-      storyboardVersion: input.version,
-      videoModel: VideoModelSchema.parse(workflow.videoModel),
-      outputResolution: VideoOutputResolutionSchema.parse(workflow.outputResolution),
-      videoPrompt: input.storyboard.videoPrompt,
-      capabilityResolutions: resolutions.filter(
-        (resolution) => required.includes(resolution.capabilityId as "video.generate"),
-      ),
-      objectKey: `tenant/demo/project/demo/render/${jobId}/${createGeneratedVideoFilename(input.storyboard.title, jobId)}`,
-    });
-    await this.repository.createVideoJob({
-      id: payload.jobId,
-      workflowId: payload.workflowId,
-      storyboardVersion: payload.storyboardVersion,
-      objectKey: payload.objectKey,
-      capabilityResolutions: payload.capabilityResolutions,
-      outputResolution: payload.outputResolution,
-    });
-    await this.enqueueRenderJob("generate-video", payload);
-    const queueAhead = await this.getRenderQueueAhead(payload.jobId);
-    await this.events.append({
-      eventId: `${input.workflowId}:queued:v${input.version}`,
-      workflowId: input.workflowId,
-      requestId: input.requestId,
-      type: "job.progress",
-      data: {
-        jobId,
-        status: "queued",
-        progress: 0,
-        ...(queueAhead === null ? {} : { queueAhead }),
-        ...videoWorkflowStep("compose", "running", "视频任务已进入队列，正在等待生成资源。"),
-      },
-    });
-  }
-
-  async retryVideo(payload: RenderVideoJobPayload): Promise<void> {
+  async retryVideo(payload: CinematicRenderVideoJobPayload): Promise<void> {
     const existing = await this.renderQueue.getJob(payload.jobId);
     if (existing) {
       const state = await existing.getState();
@@ -1294,7 +1159,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         throw new Error(`Render job cannot be retried from BullMQ state ${state}.`);
       }
     } else {
-      await this.enqueueRenderJob(payload.cinematic ? "generate-cinematic-video" : "generate-video", payload);
+      await this.enqueueRenderJob("generate-cinematic-video", payload);
     }
     const queueAhead = await this.getRenderQueueAhead(payload.jobId);
     await this.events.append({

@@ -448,6 +448,12 @@ export const RenderVideoJobPayloadSchema = z
     });
   });
 
+// New queue producers and Workers must use this schema. The optional-cinematic
+// schema above remains available only for decoding historical queue/event data.
+export const CinematicRenderVideoJobPayloadSchema = RenderVideoJobPayloadSchema.and(
+  z.object({ cinematic: CinematicRenderPlanSchema }).passthrough(),
+);
+
 export const RENDER_JOB_TIMEOUT_MS = 12 * 60 * 60 * 1_000;
 
 export const RenderTimeoutCleanupJobPayloadSchema = z
@@ -508,6 +514,7 @@ export type VideoWorkflowInteractionResult = z.infer<typeof VideoWorkflowInterac
 export type VideoWorkflowEvent = z.infer<typeof VideoWorkflowEventSchema>;
 export type VideoWorkflowCompletion = z.infer<typeof VideoWorkflowCompletionSchema>;
 export type RenderVideoJobPayload = z.infer<typeof RenderVideoJobPayloadSchema>;
+export type CinematicRenderVideoJobPayload = z.infer<typeof CinematicRenderVideoJobPayloadSchema>;
 export type RenderTimeoutCleanupJobPayload = z.infer<typeof RenderTimeoutCleanupJobPayloadSchema>;
 export type ApimartVideoSubmission = z.infer<typeof ApimartVideoSubmissionSchema>;
 export type ApimartVideoTask = z.infer<typeof ApimartVideoTaskSchema>;

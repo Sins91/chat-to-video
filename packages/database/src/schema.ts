@@ -13,6 +13,9 @@ import type {
   WorkflowControlKind,
   WorkflowControlStatus,
   WorkflowImportedArtifactCandidate,
+  WorkflowRunAttemptContext,
+  WorkflowRunAttemptKind,
+  WorkflowRunAttemptStatus,
 } from "@chat-to-video/contracts";
 import type {
   ReferenceImageAnalysis,
@@ -52,7 +55,7 @@ export const videoWorkflows = mysqlTable("video_workflows", {
   currentStageId: varchar("current_stage_id", { length: 64 }).notNull().default("research"),
   currentVersion: int("current_version").notNull().default(0),
   stateVersion: int("state_version").notNull().default(0),
-  pipelineDefinitionVersion: int("pipeline_definition_version").notNull().default(3),
+  pipelineDefinitionVersion: int("pipeline_definition_version").notNull().default(5),
   sourceWorkflowId: varchar("source_workflow_id", { length: 36 }),
   successorWorkflowId: varchar("successor_workflow_id", { length: 36 }),
   cancellationReason: text("cancellation_reason"),
@@ -113,6 +116,27 @@ export const conversationMessages = mysqlTable("conversation_messages", {
 }, (table) => [
   uniqueIndex("conversation_messages_message_uq").on(table.conversationId, table.messageId),
   index("conversation_messages_order_idx").on(table.conversationId, table.id),
+]);
+
+export const workflowRunAttempts = mysqlTable("workflow_run_attempts", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+  kind: varchar("kind", { length: 24 }).$type<WorkflowRunAttemptKind>().notNull(),
+  idempotencyKey: varchar("idempotency_key", { length: 200 }).notNull(),
+  runContext: json("run_context_json").$type<WorkflowRunAttemptContext>().notNull(),
+  mastraRunId: varchar("mastra_run_id", { length: 200 }).notNull(),
+  status: varchar("status", { length: 24 }).$type<WorkflowRunAttemptStatus>().notNull().default("pending"),
+  claimToken: varchar("claim_token", { length: 36 }),
+  claimUntil: timestamp("claim_until", { mode: "date", fsp: 3 }),
+  errorCode: varchar("error_code", { length: 64 }),
+  createdAt: timestamp("created_at", { mode: "date", fsp: 3 }).notNull().defaultNow(),
+  startedAt: timestamp("started_at", { mode: "date", fsp: 3 }),
+  completedAt: timestamp("completed_at", { mode: "date", fsp: 3 }),
+}, (table) => [
+  uniqueIndex("workflow_run_attempts_idempotency_uq").on(table.idempotencyKey),
+  uniqueIndex("workflow_run_attempts_mastra_run_uq").on(table.mastraRunId),
+  index("workflow_run_attempts_dispatch_idx").on(table.status, table.claimUntil, table.createdAt),
+  index("workflow_run_attempts_workflow_idx").on(table.workflowId, table.createdAt),
 ]);
 
 export const referenceImages = mysqlTable("reference_images", {
@@ -503,6 +527,7 @@ export const agentExtensionExecutions = mysqlTable("agent_extension_executions",
 ]);
 
 export type VideoWorkflowRow = typeof videoWorkflows.$inferSelect;
+export type WorkflowRunAttemptRow = typeof workflowRunAttempts.$inferSelect;
 export type ConversationRow = typeof conversations.$inferSelect;
 export type ConversationMessageRow = typeof conversationMessages.$inferSelect;
 export type ReferenceImageRow = typeof referenceImages.$inferSelect;

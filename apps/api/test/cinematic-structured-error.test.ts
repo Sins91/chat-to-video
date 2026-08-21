@@ -24,7 +24,86 @@ const fallbackResearchArtifact: CinematicArtifact = {
   },
 };
 
+const fallbackScriptArtifact: CinematicArtifact = {
+  stage: "script",
+  data: {
+    title: "雨夜来信",
+    durationSeconds: 10,
+    dialogue: [],
+    titleCards: [],
+    beats: [
+      { order: 1, durationSeconds: 4, purpose: "接近", visual: "雨中的信使", audio: "雨声" },
+      { order: 2, durationSeconds: 6, purpose: "揭示", visual: "信件特写", audio: "心跳" },
+    ],
+  },
+};
+
 describe("cinematic structured-output diagnostics", () => {
+  it("counts the failed single pass in fallback cost and schema metrics", async () => {
+    const singlePassUsage = { inputTokens: 100, outputTokens: 20 };
+    const evidenceUsage = { inputTokens: 120, outputTokens: 30 };
+    const structuringUsage = { inputTokens: 80, outputTokens: 40 };
+    const cinematicGenerate = vi.fn()
+      .mockResolvedValueOnce({ object: { stage: "script", data: {} }, usage: singlePassUsage })
+      .mockResolvedValueOnce({ text: "有效的脚本证据草稿", usage: evidenceUsage });
+    const structuringGenerate = vi.fn().mockResolvedValue({
+      object: fallbackScriptArtifact,
+      usage: structuringUsage,
+    });
+    const log = vi.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+    const agents = {
+      cinematic: { generate: cinematicGenerate },
+      cinematicStructurer: { generate: structuringGenerate },
+      providerName: "apimart",
+      singlePassStages: ["script"],
+      storyboardTimeoutMs: 120_000,
+      timeoutMs: 30_000,
+    };
+    const gateway = new ApimartModelGateway(agents as unknown as MastraAgents);
+
+    try {
+      await expect(gateway.generateCinematicArtifact({
+        requestId: "00000000-0000-4000-8000-000000000001",
+        workflowId: "00000000-0000-4000-8000-000000000002",
+        conversationId: "00000000-0000-4000-8000-000000000003",
+        tenantId: "tenant-1",
+        projectId: "project-1",
+        initialPrompt: "生成一支十秒雨夜悬疑短片",
+        stage: "script",
+        durationSeconds: 10,
+        videoModel: "doubao-seedance-2.0",
+        modelMaxDurationSeconds: 15,
+        approvedArtifacts: [],
+      })).resolves.toEqual(fallbackScriptArtifact);
+
+      const logCalls: readonly unknown[][] = log.mock.calls;
+      let metrics: Record<string, unknown> | undefined;
+      for (const call of logCalls) {
+        const entry = call[0];
+        if (typeof entry !== "object" || entry === null ||
+            !("generationMode" in entry) || entry.generationMode !== "fallback_two_pass") {
+          continue;
+        }
+        metrics = entry;
+        break;
+      }
+      expect(metrics).toEqual(expect.objectContaining({
+        generationMode: "fallback_two_pass",
+        modelSteps: 3,
+        evidenceAttempts: 1,
+        structuringAttempts: 2,
+        firstSchemaValidationPassed: false,
+        finalSchemaValidationPassed: true,
+        usage: [singlePassUsage, evidenceUsage, structuringUsage],
+      }));
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(cinematicGenerate).toHaveBeenCalledTimes(2);
+    expect(structuringGenerate).toHaveBeenCalledTimes(1);
+  });
+
   it("recovers an empty evidence response through the structurer without resending reference images", async () => {
     const evidenceGenerate = vi.fn().mockResolvedValue({
       text: "",

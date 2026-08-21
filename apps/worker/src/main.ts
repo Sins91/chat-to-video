@@ -1,7 +1,7 @@
 import type {
   CinematicAssetJobPayload,
   RenderTimeoutCleanupJobPayload,
-  RenderVideoJobPayload,
+  CinematicRenderVideoJobPayload,
   ReferenceImageProbeJobPayload,
   ReferenceImageCleanupJobPayload,
 } from "@chat-to-video/contracts";
@@ -29,10 +29,10 @@ const config = loadWorkerConfig();
 const connection = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
 const processor = new RenderProcessor(config);
 const assetProcessor = new CinematicAssetProcessor(config);
-const worker = new Worker<RenderVideoJobPayload | CinematicAssetJobPayload>("render-jobs", (job) =>
+const worker = new Worker<CinematicRenderVideoJobPayload | CinematicAssetJobPayload>("render-jobs", (job) =>
   job.name === "generate-cinematic-asset"
     ? assetProcessor.process(job as Job<CinematicAssetJobPayload>)
-    : processor.process(job as Job<RenderVideoJobPayload>), {
+    : processor.process(job), {
   connection,
   concurrency: 2,
   lockDuration: 60_000,

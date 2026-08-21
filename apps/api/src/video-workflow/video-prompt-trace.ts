@@ -49,7 +49,7 @@ export const buildGeneratedVideoPromptTrace = (input: {
 
   for (const stage of CINEMATIC_PIPELINE_DEFINITION.stages) {
     const parsedStage = CinematicGenerativeStageSchema.safeParse(stage.id);
-    if (!stage.producesArtifact || !parsedStage.success) continue;
+    if (stage.outputArtifactKinds.length === 0 || !parsedStage.success) continue;
     const selected = latestByStage.get(parsedStage.data);
     if (!selected) continue;
     if (selected.revisionRequest) {

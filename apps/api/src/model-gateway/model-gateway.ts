@@ -2,7 +2,6 @@ import type {
   ChatAgentMessage,
   CinematicArtifact,
   CinematicGenerativeStage,
-  Storyboard,
   VideoModel,
   WorkflowToolActivity,
   WorkflowUserIntent,
@@ -74,16 +73,6 @@ export interface ModelGateway {
     projectId: string;
     messages: ChatAgentMessage[];
   }): Promise<ChatModelStream>;
-  generateStoryboard(request: {
-    requestId: string;
-    workflowId: string;
-    conversationId?: string;
-    tenantId: string;
-    projectId: string;
-    initialPrompt: string;
-    previousStoryboard?: Storyboard;
-    revisionRequest?: string;
-  }): Promise<Storyboard>;
   generateCinematicArtifact(request: {
     requestId: string;
     workflowId: string;

@@ -17,7 +17,7 @@ const binding = (purpose: "character" | "product" | "environment" | "style", ind
 
 describe("cinematic consistency-reference contracts", () => {
   it("registers the v4 stage between scene plan and assets", () => {
-    expect(CINEMATIC_PIPELINE_DEFINITION.definitionVersion).toBe(4);
+    expect(CINEMATIC_PIPELINE_DEFINITION.definitionVersion).toBe(5);
     expect(CINEMATIC_PIPELINE_DEFINITION.stages.map((stage) => stage.id)).toEqual([
       "research", "proposal", "script", "scene_plan", "consistency_reference", "assets", "edit", "compose",
     ]);
@@ -27,7 +27,7 @@ describe("cinematic consistency-reference contracts", () => {
     expect(stage?.planningReview).toEqual({ requiresApproval: true, allowsRevision: true });
     expect(stage?.executionReview).toEqual({ requiresApproval: true, allowsRevision: true });
     expect(stage?.execution).toBe("queue");
-    expect(stage?.requiresApproval).toBe(true);
+    expect(stage?.planningReview.requiresApproval).toBe(true);
   });
 
   it("requires every continuity group to cover at least two scenes", () => {

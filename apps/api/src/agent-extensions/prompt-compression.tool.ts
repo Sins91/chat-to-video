@@ -5,10 +5,7 @@ import {
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-import {
-  CinematicAgentRequestContextSchema,
-  StoryboardAgentRequestContextSchema,
-} from "./agent-extension.context.js";
+import { CinematicAgentRequestContextSchema } from "./agent-extension.context.js";
 
 const PROMPT_COMPRESSION_CANDIDATE_MAX_CHARACTERS = 12_000;
 
@@ -52,10 +49,7 @@ const PromptCompressionDraftSchema = z.object({
   prompt: PromptCompressionOutputSchema.shape.prompt,
 }).strict();
 
-const PromptCompressionRequestContextSchema = z.discriminatedUnion("agentId", [
-  StoryboardAgentRequestContextSchema,
-  CinematicAgentRequestContextSchema,
-]);
+const PromptCompressionRequestContextSchema = CinematicAgentRequestContextSchema;
 
 const PRESERVATION_DIRECTIONS: Record<ProductionPromptPurpose, string> = {
   scene_visual:

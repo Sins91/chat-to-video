@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   createChatAgentRequestContext,
   createCinematicAgentRequestContext,
-  createStoryboardAgentRequestContext,
 } from "../src/agent-extensions/agent-extension.context.js";
 import {
   AgentToolRegistry,
@@ -19,8 +18,6 @@ import {
   ALL_CINEMATIC_SKILL_IDS,
   AgentSkillCatalog,
   CINEMATIC_COMPOSE_SKILL_ID,
-  CINEMATIC_CHECKPOINT_SKILL_ID,
-  CINEMATIC_EXECUTIVE_PRODUCER_SKILL_ID,
   CINEMATIC_FINAL_REVIEW_SKILL_ID,
   CINEMATIC_GOVERNANCE_SKILL_ID,
   CINEMATIC_PUBLISH_SKILL_ID,
@@ -51,15 +48,6 @@ describe("agent extension boundaries", () => {
     });
   });
 
-  it("builds a tool-free storyboard RequestContext", () => {
-    expect(createStoryboardAgentRequestContext({
-      requestId,
-      conversationId,
-      workflowId,
-      tenantId: "tenant-1",
-      projectId: "project-1",
-    }).get("agentId")).toBe("storyboard-agent");
-  });
   it("builds a stage-scoped cinematic RequestContext", () => {
     expect(createCinematicAgentRequestContext({
       requestId,
@@ -80,8 +68,6 @@ describe("agent extension boundaries", () => {
     ]);
     expect(catalog.forCinematic("scene_plan")).toEqual([
       expect.stringMatching(/cinematic-governance$/u),
-      expect.stringMatching(/cinematic-executive-producer$/u),
-      expect.stringMatching(/cinematic-checkpoint$/u),
       expect.stringMatching(/cinematic-scene-plan$/u),
       expect.stringMatching(/cinematic-reviewer$/u),
     ]);
@@ -91,12 +77,10 @@ describe("agent extension boundaries", () => {
     expect(ALL_CINEMATIC_SKILL_IDS).toContain(CINEMATIC_GOVERNANCE_SKILL_ID);
     expect(ALL_CINEMATIC_SKILL_IDS).toContain(CINEMATIC_COMPOSE_SKILL_ID);
     expect(ALL_CINEMATIC_SKILL_IDS).toEqual(expect.arrayContaining([
-      CINEMATIC_CHECKPOINT_SKILL_ID,
-      CINEMATIC_EXECUTIVE_PRODUCER_SKILL_ID,
       CINEMATIC_REFERENCE_ANALYST_SKILL_ID,
-      CINEMATIC_FINAL_REVIEW_SKILL_ID,
-      CINEMATIC_PUBLISH_SKILL_ID,
     ]));
+    expect(ALL_CINEMATIC_SKILL_IDS).not.toContain(CINEMATIC_FINAL_REVIEW_SKILL_ID);
+    expect(ALL_CINEMATIC_SKILL_IDS).not.toContain(CINEMATIC_PUBLISH_SKILL_ID);
   });
 
   it("resolves Nest SWC split code and asset output directories", () => {
@@ -146,8 +130,6 @@ describe("agent extension boundaries", () => {
       .toContain("prompt_compressor");
     expect(Object.keys(registry.forCinematic("proposal", promptCompression.tool)))
       .not.toContain("prompt_compressor");
-    expect(Object.keys(registry.forStoryboard(promptCompression.tool)))
-      .toEqual(["prompt_compressor"]);
   });
 
   it("returns shared model constraints", () => {

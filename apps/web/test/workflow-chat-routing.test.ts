@@ -96,8 +96,8 @@ describe("workflow and chat routing", () => {
       initialStageId: "brief",
       terminalStageIds: ["voice"],
       stages: [
-        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", producesArtifact: true, requiresApproval: false, allowsRevision: false, isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["voice"], inputArtifactKinds: [], outputArtifactKinds: ["brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
-        { id: "voice", label: "配音", aliases: ["配音", "voice"], stepId: "voice", producesArtifact: true, requiresApproval: true, allowsRevision: true, isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["brief"], outputArtifactKinds: ["voice"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
+        { id: "brief", label: "需求", aliases: ["需求"], stepId: "brief", isRestartable: false, intentTopics: ["需求"], ownedArtifactKinds: ["brief"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["voice"], inputArtifactKinds: [], outputArtifactKinds: ["brief"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
+        { id: "voice", label: "配音", aliases: ["配音", "voice"], stepId: "voice", isRestartable: true, intentTopics: ["配音"], ownedArtifactKinds: ["voice"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["brief"], outputArtifactKinds: ["voice"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: [] } },
       ],
     });
     expect(parseWorkflowControlCommand("从配音重新开始", pipeline))
@@ -280,6 +280,9 @@ describe("workflow and chat routing", () => {
     expect(panel).not.toContain("await regenerate();");
     expect(conversation).toContain("const visibleMessages = messages");
     expect(conversation).not.toContain("const visibleMessages = isLoadingHistory ? [] : messages");
+    expect(conversation).toContain('status !== "streaming" && pendingActionMessage');
+    expect(conversation).toContain('status === "submitted"');
+    expect(conversation).not.toContain('status === "streaming" && !hasLiveAssistantText');
     expect(conversation).not.toContain("聊天响应失败，请稍后重试");
   });
 
