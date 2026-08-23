@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { presentVideoFailure } from "@/lib/video-failure";
 import { getVideoModelPresentation } from "@/lib/video-models";
 import { getVideoOutputEstimate } from "@/lib/video-output-estimate";
+import { deriveWorkflowInteractionState } from "@/lib/workflow-interaction-state";
 import {
   getCurrentWorkflowNodeLabel,
   getWorkflowPreviewHistoryNodes,
@@ -456,7 +457,7 @@ export function VideoWorkflowVisualization() {
   }
 
   if (snapshot?.consistencyReferenceBatch || snapshot?.assetBatch || snapshot?.currentArtifact || snapshot?.storyboard) {
-    const canReview = snapshot.status === "awaiting_input";
+    const canReview = deriveWorkflowInteractionState(snapshot).kind === "planning_review";
     return (
       <WorkflowPreviewShell
         currentLabel={currentNodeLabel}

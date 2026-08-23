@@ -22,7 +22,11 @@ import {
   parseWorkflowRestartTarget,
   parseWorkflowDirectEntryTarget,
   PendingWorkflowControlSchema,
+  PersistedChatQueueItemSchema,
+  PERSISTED_CHAT_QUEUE_VERSION,
   CINEMATIC_PIPELINE_DEFINITION,
+  isVideoWorkflowProcessingStatus,
+  isVideoWorkflowTerminalStatus,
 } from "../src/index.js";
 
 const storyboard = {
@@ -36,6 +40,45 @@ const storyboard = {
 };
 
 describe("video workflow contracts", () => {
+  it("derives processing and terminal workflow states consistently", () => {
+    expect((["drafting", "queued", "running"] as const)
+      .every((status) => isVideoWorkflowProcessingStatus(status))).toBe(true);
+    expect((["succeeded", "failed", "cancelled"] as const)
+      .every((status) => isVideoWorkflowTerminalStatus(status))).toBe(true);
+    expect(isVideoWorkflowProcessingStatus("awaiting_input")).toBe(false);
+    expect(isVideoWorkflowTerminalStatus("awaiting_input")).toBe(false);
+  });
+
+  it("validates versioned persistent queue records and rejects corrupt versions", () => {
+    const item = {
+      version: PERSISTED_CHAT_QUEUE_VERSION,
+      id: "00000000-0000-4000-8000-000000000020",
+      messageId: "message-1",
+      conversationId: "00000000-0000-4000-8000-000000000010",
+      text: "下一条消息",
+      referenceImages: [],
+      videoModel: "doubao-seedance-2.0",
+      subtitlesEnabled: false,
+      status: "queued",
+      attemptCount: 0,
+      nextAttemptAt: null,
+      errorMessage: null,
+      createdAt: "2026-08-10T01:00:00.000Z",
+      updatedAt: "2026-08-10T01:00:00.000Z",
+    };
+    expect(PersistedChatQueueItemSchema.parse(item)).toMatchObject({ version: 1 });
+    expect(PersistedChatQueueItemSchema.safeParse({ ...item, version: 2 }).success).toBe(false);
+    expect(PersistedChatQueueItemSchema.safeParse({ ...item, text: "", referenceImages: [] }).success).toBe(false);
+  });
+  it("defaults new workflows to subtitles disabled", () => {
+    const request = CreateVideoWorkflowRequestSchema.parse({
+      messageId: "message-1",
+      prompt: "制作一条产品短片",
+      referenceImageIds: [],
+      videoModel: "doubao-seedance-2.0",
+    });
+    expect(request.subtitlesEnabled).toBe(false);
+  });
   it("validates structured workflow user intents", () => {
     expect(WorkflowUserIntentSchema.parse({ type: "approve", stageId: "proposal" }))
       .toEqual({ type: "approve", stageId: "proposal" });

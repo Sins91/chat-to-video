@@ -88,6 +88,14 @@ export const VideoWorkflowStatusSchema = z.enum([
   "cancelled",
 ]);
 
+export const isVideoWorkflowProcessingStatus = (
+  status: z.infer<typeof VideoWorkflowStatusSchema> | null | undefined,
+): boolean => status === "drafting" || status === "queued" || status === "running";
+
+export const isVideoWorkflowTerminalStatus = (
+  status: z.infer<typeof VideoWorkflowStatusSchema> | null | undefined,
+): boolean => status === "succeeded" || status === "failed" || status === "cancelled";
+
 export const VideoWorkflowFailureCodeSchema = z.enum([
   "AGENT_PROGRESS_STALLED",
   "QUEUE_PROGRESS_STALLED",
@@ -263,6 +271,8 @@ export const VideoWorkflowSnapshotSchema = z
     requestId: z.string().uuid(),
     videoModel: VideoModelSchema,
     canChangeVideoModel: z.boolean().default(false),
+    subtitlesEnabled: z.boolean().default(false),
+    canChangeSubtitles: z.boolean().default(false),
     durationSeconds: CinematicRenderPlanSchema.shape.durationSeconds.default(10),
     outputResolution: VideoOutputResolutionSchema.default("480p"),
     initialPrompt: z.string().trim().min(1).max(8_000),
@@ -292,6 +302,7 @@ export const CreateVideoWorkflowRequestSchema = z
     prompt: z.string().trim().min(1).max(8_000),
     referenceImageIds: ReferenceImageIdsSchema,
     videoModel: VideoModelSchema,
+    subtitlesEnabled: z.boolean().default(false),
   })
   .strict();
 
@@ -309,6 +320,14 @@ export const UpdateVideoWorkflowModelRequestSchema = z
 
 export const UpdateVideoWorkflowModelResponseSchema = z
   .object({ accepted: z.literal(true), videoModel: VideoModelSchema })
+  .strict();
+
+export const UpdateVideoWorkflowSubtitlesRequestSchema = z
+  .object({ subtitlesEnabled: z.boolean() })
+  .strict();
+
+export const UpdateVideoWorkflowSubtitlesResponseSchema = z
+  .object({ accepted: z.literal(true), subtitlesEnabled: z.boolean() })
   .strict();
 
 export const RetryVideoWorkflowResponseSchema = z
@@ -507,6 +526,8 @@ export type CreateVideoWorkflowRequest = z.input<typeof CreateVideoWorkflowReque
 export type CreateVideoWorkflowResponse = z.infer<typeof CreateVideoWorkflowResponseSchema>;
 export type UpdateVideoWorkflowModelRequest = z.infer<typeof UpdateVideoWorkflowModelRequestSchema>;
 export type UpdateVideoWorkflowModelResponse = z.infer<typeof UpdateVideoWorkflowModelResponseSchema>;
+export type UpdateVideoWorkflowSubtitlesRequest = z.infer<typeof UpdateVideoWorkflowSubtitlesRequestSchema>;
+export type UpdateVideoWorkflowSubtitlesResponse = z.infer<typeof UpdateVideoWorkflowSubtitlesResponseSchema>;
 export type RetryVideoWorkflowResponse = z.infer<typeof RetryVideoWorkflowResponseSchema>;
 export type RecoverVideoWorkflowResponse = z.infer<typeof RecoverVideoWorkflowResponseSchema>;
 export type VideoWorkflowInteraction = z.infer<typeof VideoWorkflowInteractionSchema>;

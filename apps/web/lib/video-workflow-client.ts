@@ -3,6 +3,7 @@ import {
   RecoverVideoWorkflowResponseSchema,
   RetryVideoWorkflowResponseSchema,
   UpdateVideoWorkflowModelResponseSchema,
+  UpdateVideoWorkflowSubtitlesResponseSchema,
   VideoWorkflowInteractionResultSchema,
   VideoWorkflowSnapshotSchema,
   ResolveWorkflowUserIntentResponseSchema,
@@ -16,6 +17,8 @@ import {
   type RetryVideoWorkflowResponse,
   type UpdateVideoWorkflowModelRequest,
   type UpdateVideoWorkflowModelResponse,
+  type UpdateVideoWorkflowSubtitlesRequest,
+  type UpdateVideoWorkflowSubtitlesResponse,
   type VideoWorkflowInteraction,
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
@@ -67,6 +70,14 @@ export const updateVideoWorkflowModel = async (
 ): Promise<UpdateVideoWorkflowModelResponse> =>
   UpdateVideoWorkflowModelResponseSchema.parse(
     await videoApi.Patch(`/video-workflows/${encodeURIComponent(workflowId)}/model`, request).send(),
+  );
+
+export const updateVideoWorkflowSubtitles = async (
+  workflowId: string,
+  request: UpdateVideoWorkflowSubtitlesRequest,
+): Promise<UpdateVideoWorkflowSubtitlesResponse> =>
+  UpdateVideoWorkflowSubtitlesResponseSchema.parse(
+    await videoApi.Patch(`/video-workflows/${encodeURIComponent(workflowId)}/subtitles`, request).send(),
   );
 
 export const interactWithVideoWorkflow = async (workflowId: string, interaction: VideoWorkflowInteraction): Promise<VideoWorkflowInteractionResult> =>

@@ -1,8 +1,20 @@
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vitest";
-import { toChatAgentRequest } from "@/lib/chat-transport";
+import { createChatUserMessage, toChatAgentRequest } from "@/lib/chat-transport";
 
 describe("toChatAgentRequest", () => {
+  it("creates a new user message with a stable ID instead of using replacement messageId semantics", () => {
+    expect(createChatUserMessage({
+      messageId: "stable-user-message",
+      text: "正常聊天",
+      referenceImages: [],
+    })).toEqual({
+      id: "stable-user-message",
+      role: "user",
+      parts: [{ type: "text", text: "正常聊天" }],
+    });
+  });
+
   it("converts text UI message parts to the shared chat contract", () => {
     const messages: UIMessage[] = [{ id: "user-1", role: "user", parts: [{ type: "text", text: "hello" }, { type: "text", text: " world" }] }];
     expect(toChatAgentRequest(messages, "00000000-0000-4000-8000-000000000010")).toEqual({

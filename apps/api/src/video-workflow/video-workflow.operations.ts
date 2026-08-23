@@ -160,6 +160,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         requiresConsistencyReference: false,
         hasAudioAsset: assets.data.music.sourceMode !== "supplied" ||
           scenePlan.data.scenes.some((scene) => scene.audioMode === "seedance"),
+        hasSubtitleTrack: false,
         hasSeedanceAudio: scenePlan.data.scenes.some(
           (scene) => scene.audioMode === "seedance",
         ),
@@ -632,7 +633,10 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     });
   }
 
-  private async assertComposeCapabilities(workflowId: string): Promise<
+  private async assertComposeCapabilities(
+    workflowId: string,
+    hasSubtitleTrack: boolean,
+  ): Promise<
     WorkflowCapabilityResolution[]
   > {
     const assetDefinition = findWorkflowStage(CINEMATIC_PIPELINE_DEFINITION, "assets");
@@ -641,10 +645,11 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
       throw new Error("Cinematic execution stages are not registered.");
     }
     const { facts } = await this.cinematicCapabilityContext(workflowId);
+    const composeFacts = { ...facts, hasSubtitleTrack };
     const resolutions = await this.capabilityResolutions();
     const required = [...new Set([
-      ...getRequiredWorkflowCapabilities(assetDefinition.capabilities, facts),
-      ...getRequiredWorkflowCapabilities(composeDefinition.capabilities, facts),
+      ...getRequiredWorkflowCapabilities(assetDefinition.capabilities, composeFacts),
+      ...getRequiredWorkflowCapabilities(composeDefinition.capabilities, composeFacts),
     ])];
     const missing = findMissingWorkflowCapabilities(required, resolutions);
     if (missing.length > 0) {
@@ -861,6 +866,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
         tenantId: workflowScope.tenantId,
         projectId: workflowScope.projectId,
         initialPrompt: input.initialPrompt,
+        subtitlesEnabled: workflowScope.workflow.subtitlesEnabled,
         videoModel: selectedVideoModel,
         durationSeconds: input.durationSeconds,
         modelMaxDurationSeconds: getVideoModelMaxDurationSeconds(selectedVideoModel),
@@ -1054,7 +1060,13 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
     if (!workflowScope) throw new Error("Cinematic workflow not found while enqueueing.");
     const workflow = workflowScope.workflow;
     const selectedVideoModel = VideoModelSchema.parse(workflow.videoModel);
-    const capabilityResolutions = await this.assertComposeCapabilities(input.workflowId);
+    const subtitles = workflow.subtitlesEnabled && input.edit.data.subtitles?.enabled === true
+      ? input.edit.data.subtitles
+      : undefined;
+    const capabilityResolutions = await this.assertComposeCapabilities(
+      input.workflowId,
+      subtitles !== undefined,
+    );
     const payload = CinematicRenderVideoJobPayloadSchema.parse({
       workflowId: input.workflowId,
       requestId: input.requestId,
@@ -1093,6 +1105,7 @@ export class VideoWorkflowOperations implements OnModuleDestroy {
           ),
         })),
         usesEmbeddedSceneAudio: true,
+        ...(subtitles ? { subtitles } : {}),
         music: {
           objectKey: music.objectKey,
           mimeType: music.mimeType,

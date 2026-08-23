@@ -80,6 +80,12 @@ describe("Agent UI shell", () => {
     expect(panel).not.toContain("打开历史对话");
   });
 
+  it("reserves the conversation scrollbar gutter without deferred container layout", async () => {
+    const sidebar = await readFile(resolve(webRoot, "components/chat/chat-history-sidebar.tsx"), "utf8");
+    expect(sidebar).toContain("[scrollbar-gutter:stable]");
+    expect(sidebar).not.toContain("[content-visibility:auto]");
+  });
+
   it("uses semantic cursors across the Agent workspace", async () => {
     const [workspace, conversation, button, menu] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/agent-workspace.tsx"), "utf8"),

@@ -11,6 +11,7 @@ describe("Worker container runtime", () => {
     ]);
 
     expect(dockerfile).toContain("apt-get install --yes --no-install-recommends ffmpeg");
+    expect(dockerfile).toContain("fonts-noto-cjk");
     expect(dockerfile).toContain("ENV FFMPEG_PATH=/usr/bin/ffmpeg");
     expect(compose).toContain('FFMPEG_PATH: "${FFMPEG_PATH:-/usr/bin/ffmpeg}"');
   });

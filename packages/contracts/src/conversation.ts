@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CinematicArtifactVersionSchema } from "./cinematic.js";
 import {
+  CinematicAssetBatchSchema,
   CinematicAssetBatchStatusSchema,
   CinematicAssetIdSchema,
 } from "./cinematic-assets.js";
@@ -51,6 +52,7 @@ export const ConversationCinematicAssetBatchEntrySchema = z.object({
   type: z.literal("cinematic_asset_batch"),
   workflowId: z.string().uuid(),
   batchId: CinematicAssetIdSchema,
+  stageId: CinematicAssetBatchSchema.shape.stageId.nullable().default(null),
   planVersion: z.number().int().positive(),
   status: CinematicAssetBatchStatusSchema,
   assetCount: z.number().int().min(1).max(121),

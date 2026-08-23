@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import {
   CinematicAssetBatchStatusSchema,
   ConversationDetailSchema,
@@ -51,13 +51,27 @@ export class ConversationService {
   async ensureUserMessage(input: { conversationId?: string; messageId: string; content: string; referenceImageIds?: readonly string[] }): Promise<string> {
     if (input.conversationId) {
       const conversation = await this.repository.findActiveConversation(input.conversationId);
-      if (!conversation) throw new NotFoundException({ code: "CONVERSATION_NOT_FOUND", message: "Conversation not found." });
-      await this.repository.appendMessage({
-        conversationId: input.conversationId,
-        messageId: input.messageId,
-        role: "user",
-        content: input.content,
-      });
+      if (conversation) {
+        await this.repository.appendMessage({
+          conversationId: input.conversationId,
+          messageId: input.messageId,
+          role: "user",
+          content: input.content,
+        });
+      } else {
+        const isReserved = await this.repository.createWithUserMessage({
+          conversationId: input.conversationId,
+          title: createConversationTitle(input.content || "参考图片"),
+          messageId: input.messageId,
+          content: input.content,
+        });
+        if (isReserved === false) {
+          throw new ConflictException({
+            code: "CONVERSATION_ID_CONFLICT",
+            message: "Conversation ID is unavailable.",
+          });
+        }
+      }
       await this.referenceImages.bindToMessage({
         ids: input.referenceImageIds ?? [],
         conversationId: input.conversationId,
@@ -116,6 +130,10 @@ export class ConversationService {
       role: "assistant",
       content,
     });
+  }
+
+  findMessage(conversationId: string, messageId: string) {
+    return this.repository.findMessage(conversationId, messageId);
   }
 
   async list(cursorValue: string | undefined, limit: number): Promise<ConversationListResponse> {
@@ -231,6 +249,7 @@ export class ConversationService {
         type: "cinematic_asset_batch" as const,
         workflowId: row.workflowId,
         batchId: row.id,
+        stageId: row.stageId,
         planVersion: row.planVersion,
         status: CinematicAssetBatchStatusSchema.parse(row.status),
         assetCount: row.assetCount,

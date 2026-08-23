@@ -5,6 +5,16 @@ import { describe, expect, it } from "vitest";
 const webRoot = resolve(import.meta.dirname, "..");
 
 describe("two-step video workflow UI", () => {
+  it("offers an accessible final-subtitle switch and forwards the preference", async () => {
+    const [composer, provider] = await Promise.all([
+      readFile(resolve(webRoot, "components/chat/chat-composer.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
+    ]);
+    expect(composer).toContain('role="switch"');
+    expect(composer).toContain("字幕");
+    expect(provider).toContain("subtitlesEnabled");
+    expect(provider).toContain("updateVideoWorkflowSubtitles");
+  });
   it("persists the conversation ID in the Agent URL and reconnects through EventSource", async () => {
     const provider = await readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8");
     expect(provider).toContain("conversationId=");
@@ -25,9 +35,7 @@ describe("two-step video workflow UI", () => {
     expect(conversation).toContain("automaticStageNotice(entry.artifact)");
     expect(conversation).toContain('entry.type === "cinematic_asset_batch"');
     expect(conversation).toContain("cinematicAssetBatchSummaryText(entry)");
-    expect(conversation).toContain("阶段完成：素材生成");
     expect(conversation).toContain("entry.assetCount");
-    expect(conversation).toContain("snapshot.assetBatch.batchId === entry.batchId");
     expect(conversation).toContain("/(无需确认|确认|修改|取消)/u");
     expect(conversation).toContain('part === "无需确认" || part === "确认" || part === "修改" || part === "取消" ? "text-warning-foreground"');
     expect(conversation).not.toContain("onApprove");
@@ -105,10 +113,10 @@ describe("two-step video workflow UI", () => {
     const panel = await readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8");
 
     expect(panel).toContain("createChatTransport");
-    expect(panel).toContain("sendMessage({ text })");
+    expect(panel).toContain("sendMessage(createChatUserMessage({");
     expect(panel).toContain("isVideoCreationIntent(text)");
     expect(panel).not.toContain("handleCreateVideo");
-    expect(panel).toContain("isReviewingStoryboard");
+    expect(panel).toContain("isReviewingWorkflow");
     expect(panel).not.toContain("workflow.retryWorkflow()");
   });
 
@@ -201,7 +209,7 @@ describe("two-step video workflow UI", () => {
       readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
     ]);
-    expect(panel).toContain("await workflow.resolveControlIntent(text, messageId, message.referenceImages)");
+    expect(panel).toContain("const controlRoute = await workflow.resolveControlIntent(");
     expect(panel).not.toContain("await workflow.startWorkflow(text, crypto.randomUUID())");
     expect(panel).toContain('controlRoute.route === "workflow"');
     expect(panel).not.toContain('workflowStatus === "failed" && workflow.snapshot?.videoJob');

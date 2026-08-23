@@ -80,6 +80,7 @@ export interface ModelGateway {
     tenantId: string;
     projectId: string;
     initialPrompt: string;
+    subtitlesEnabled?: boolean;
     stage: CinematicGenerativeStage;
     videoModel: VideoModel;
     durationSeconds: number;

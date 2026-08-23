@@ -17,6 +17,7 @@ import {
   type RetryVideoWorkflowResponse,
   type RecoverVideoWorkflowResponse,
   UpdateVideoWorkflowModelRequestSchema,
+  UpdateVideoWorkflowSubtitlesRequestSchema,
   VideoWorkflowEventSchema,
   VideoWorkflowIdSchema,
   VideoWorkflowInteractionSchema,
@@ -31,6 +32,7 @@ import {
   type ResolveWorkflowUserIntentResponse,
   type CreateVideoWorkflowResponse,
   type UpdateVideoWorkflowModelResponse,
+  type UpdateVideoWorkflowSubtitlesResponse,
   type VideoWorkflowInteractionResult,
   type VideoWorkflowSnapshot,
 } from "@chat-to-video/contracts";
@@ -121,6 +123,25 @@ export class VideoWorkflowController {
       });
     }
     return this.workflows.updateModel(parseWorkflowId(workflowId), parsed.data.videoModel);
+  }
+
+  @Patch(":workflowId/subtitles")
+  async updateSubtitles(
+    @Param("workflowId") workflowId: unknown,
+    @Body() body: unknown,
+  ): Promise<UpdateVideoWorkflowSubtitlesResponse> {
+    const parsed = UpdateVideoWorkflowSubtitlesRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        code: "INVALID_VIDEO_SUBTITLE_PREFERENCE_REQUEST",
+        message: "Video subtitle preference request is invalid.",
+        issues: parsed.error.issues,
+      });
+    }
+    return this.workflows.updateSubtitles(
+      parseWorkflowId(workflowId),
+      parsed.data.subtitlesEnabled,
+    );
   }
 
   @Post(":workflowId/retry")

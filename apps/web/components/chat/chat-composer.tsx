@@ -1,7 +1,7 @@
 "use client";
 
-import { MAX_REFERENCE_IMAGE_BYTES, MAX_REFERENCE_IMAGES_PER_MESSAGE, type ReferenceImageView, type VideoModel } from "@chat-to-video/contracts";
-import { ChevronDownIcon, Clock3Icon, ImagePlusIcon, VideoIcon, XIcon } from "lucide-react";
+import { MAX_REFERENCE_IMAGE_BYTES, MAX_REFERENCE_IMAGES_PER_MESSAGE, type PersistedChatQueueItem, type ReferenceImageView, type VideoModel } from "@chat-to-video/contracts";
+import { CaptionsIcon, ChevronDownIcon, Clock3Icon, ImagePlusIcon, RotateCcwIcon, VideoIcon, XIcon } from "lucide-react";
 import { forwardRef, useCallback, useImperativeHandle, useRef, useState, type ChangeEvent, type ClipboardEvent, type Ref } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -43,11 +43,7 @@ import {
   QueueSectionTrigger,
 } from "@/src/components/ai-elements/queue";
 
-export interface QueuedChatInput {
-  readonly id: string;
-  readonly text: string;
-  readonly referenceImages: readonly ReferenceImageView[];
-}
+export type QueuedChatInput = PersistedChatQueueItem;
 
 export interface SubmittedChatInput {
   readonly text: string;
@@ -62,13 +58,17 @@ interface ChatComposerProps {
   isGenerating: boolean;
   isVideoModelLocked: boolean;
   onCancelQueuedInput: (id: string) => void;
+  onRetryQueuedInput: (id: string) => void;
   onInputChange: (input: string) => void;
   onStop: () => void;
   onSubmitMessage: (message: SubmittedChatInput) => void;
+  onSubtitlesEnabledChange: (enabled: boolean) => void;
   onVideoModelChange: (model: VideoModel) => void;
   placeholder?: string;
   queuedInputs: readonly QueuedChatInput[];
   textareaRef: Ref<HTMLTextAreaElement>;
+  subtitlesEnabled: boolean;
+  isSubtitlesLocked: boolean;
   videoModel: VideoModel;
   willQueueInput: boolean;
 }
@@ -86,10 +86,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   onInputChange,
   onStop,
   onSubmitMessage,
+  onRetryQueuedInput,
+  onSubtitlesEnabledChange,
   onVideoModelChange,
   placeholder = "输入消息…",
   queuedInputs,
   textareaRef,
+  subtitlesEnabled,
+  isSubtitlesLocked,
   videoModel,
   willQueueInput,
 }: ChatComposerProps, ref) {
@@ -179,11 +183,23 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                 <QueueItem className="rounded-lg border border-border bg-background px-2.5 py-2 hover:bg-background" key={queuedInput.id}>
                   <div className="flex items-center gap-2">
                     <QueueItemIndicator className="mt-0 border-primary/50 bg-primary/10" />
-                    <QueueItemContent className="text-xs text-foreground" title={queuedInput.text}>{queuedInput.text}</QueueItemContent>
+                    <QueueItemContent className="text-xs text-foreground" title={queuedInput.text}>
+                      {queuedInput.text || `${queuedInput.referenceImages.length} 张参考图`}
+                      {queuedInput.status === "failed" ? <span className="mt-0.5 block text-[10px] text-destructive">{queuedInput.errorMessage ?? "发送失败"}</span> : null}
+                      {queuedInput.status === "dispatching" ? <span className="mt-0.5 block text-[10px] text-muted-foreground">正在后台发送…</span> : null}
+                    </QueueItemContent>
                     <QueueItemActions>
+                      {queuedInput.status === "failed" ? <QueueItemAction
+                        aria-label={`重试第 ${index + 1} 条排队消息`}
+                        className="shrink-0 opacity-100"
+                        onClick={() => onRetryQueuedInput(queuedInput.id)}
+                      >
+                        <RotateCcwIcon className="size-3.5" />
+                      </QueueItemAction> : null}
                       <QueueItemAction
                 aria-label={`取消第 ${index + 1} 条排队消息`}
                 className="shrink-0 opacity-100 sm:opacity-0"
+                disabled={queuedInput.status === "dispatching"}
                 onClick={() => onCancelQueuedInput(queuedInput.id)}
               >
                 <XIcon className="size-3.5" />
@@ -263,6 +279,20 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               </ModelSelectorList>
             </ModelSelectorContent>
           </ModelSelector>
+          <Button
+            aria-checked={subtitlesEnabled}
+            aria-label={subtitlesEnabled ? "成片字幕已开启" : "成片字幕已关闭"}
+            className="h-7 border-border bg-background px-2 font-sans text-xs font-medium normal-case tracking-normal text-muted-foreground hover:bg-accent hover:text-foreground"
+            disabled={isSubtitlesLocked || isGenerating}
+            onClick={() => onSubtitlesEnabledChange(!subtitlesEnabled)}
+            role="switch"
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <CaptionsIcon className="size-3.5" />
+            <span>字幕{ subtitlesEnabled ? "开" : "关" }</span>
+          </Button>
           <span className="hidden pl-1 font-sans text-xs font-normal tracking-normal text-muted-foreground sm:inline">Enter 发送 · Shift+Enter 换行</span>
         </PromptInputTools>
         <PromptInputSubmit
@@ -276,7 +306,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     {uploadError ? <p className="mx-auto mt-2 max-w-3xl text-xs text-destructive" role="alert">{uploadError}</p> : null}
     <p className="mt-2 text-center text-[10px] text-muted-foreground">
       {queuedInputs.length > 0
-        ? `已有 ${queuedInputs.length} 条消息排队，将在 Agent 完成当前回复后按序发送。`
+        ? `已有 ${queuedInputs.length} 条消息排队；切换会话或刷新后仍会保留，并在可用时后台发送。`
         : willQueueInput
           ? "当前输入会加入发送队列；你可以继续编辑下一条消息。"
           : "工作流运行期间仍可聊天；只有明确的确认或修改指令才会推进当前视频任务。"}

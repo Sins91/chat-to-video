@@ -1,4 +1,4 @@
-import { NotFoundException } from "@nestjs/common";
+import { ConflictException } from "@nestjs/common";
 import type { ConversationRepository } from "@chat-to-video/database";
 import { describe, expect, it, vi } from "vitest";
 
@@ -145,6 +145,7 @@ describe("ConversationService", () => {
     repository.listCinematicAssetBatches.mockResolvedValue([{
       id: "asset-batch-1",
       workflowId,
+      stageId: "assets",
       planVersion: 6,
       status: "approved",
       assetCount: 5,
@@ -191,20 +192,40 @@ describe("ConversationService", () => {
     expect(detail.entries[0]).toEqual(expect.objectContaining({
       type: "cinematic_asset_batch",
       batchId: "asset-batch-1",
+      stageId: "assets",
       assetCount: 5,
       isSuperseded: false,
     }));
   });
 
-  it("rejects writes to a deleted or unknown conversation", async () => {
+  it("atomically creates a client-reserved conversation ID on its first message", async () => {
     const repository = createRepository();
     repository.findActiveConversation.mockResolvedValue(null);
+    repository.createWithUserMessage.mockResolvedValue(true);
+    const service = new ConversationService(repository as unknown as ConversationRepository, {} as VideoWorkflowService, createReferenceImages() as never);
+    const conversationId = await service.ensureUserMessage({
+      conversationId: "00000000-0000-4000-8000-000000000010",
+      messageId: "user-1",
+      content: "hello",
+    });
+    expect(conversationId).toBe("00000000-0000-4000-8000-000000000010");
+    expect(repository.createWithUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId,
+      messageId: "user-1",
+    }));
+    expect(repository.appendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a reserved conversation ID owned by another scope", async () => {
+    const repository = createRepository();
+    repository.findActiveConversation.mockResolvedValue(null);
+    repository.createWithUserMessage.mockResolvedValue(false);
     const service = new ConversationService(repository as unknown as ConversationRepository, {} as VideoWorkflowService, createReferenceImages() as never);
     await expect(service.ensureUserMessage({
       conversationId: "00000000-0000-4000-8000-000000000010",
       messageId: "user-1",
       content: "hello",
-    })).rejects.toBeInstanceOf(NotFoundException);
+    })).rejects.toBeInstanceOf(ConflictException);
     expect(repository.appendMessage).not.toHaveBeenCalled();
   });
 

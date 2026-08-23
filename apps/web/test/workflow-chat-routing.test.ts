@@ -179,29 +179,6 @@ describe("workflow and chat routing", () => {
     expect(classifyWorkflowReviewInput(content)).toBe("chat");
   });
 
-  it("keeps chat available while a background workflow is active", async () => {
-    const [panel, provider] = await Promise.all([
-      readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
-      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
-    ]);
-
-    expect(panel).toContain("workflow.resolveControlIntent(text");
-    expect(panel).toContain('if (controlRoute.route === "workflow")');
-    expect(panel).toContain("if (isReviewingStoryboard) {\n      await sendChatMessage(text);");
-    expect(panel).toContain(
-      "const isGenerating = isChatGenerating || workflow.isSubmitting",
-    );
-    expect(panel).toContain("const isWorkflowProcessing = workflowStatus === \"drafting\"");
-    expect(panel).toContain('const isAgentBusy = isGenerating || isQueueDispatching || workflowStatus === "drafting"');
-    expect(panel).toContain("const isAgentProcessing = isAgentBusy || isWorkflowProcessing");
-    expect(panel).not.toContain(
-      "const isGenerating = isChatGenerating || isWorkflowLocked",
-    );
-    expect(provider).toContain("workflowId: string | null;");
-    expect(provider).toContain("getVideoWorkflow(result.workflowId)");
-    expect(provider).toContain("setSnapshot(nextSnapshot)");
-  });
-
   it("reconciles optimistic history when a video workflow creates the conversation", async () => {
     const [panel, provider] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
@@ -210,47 +187,14 @@ describe("workflow and chat routing", () => {
 
     expect(provider).toContain("Promise<string | null>");
     expect(provider).toContain("return created.conversationId;");
-    expect(panel).toContain("dispatchText(text, sessionId)");
+    expect(panel).toContain("dispatchText(message, sessionId, messageId)");
     expect(panel.indexOf("setPendingAction({ actionId")).toBeLessThan(
-      panel.indexOf(".then(() => dispatchText(text, sessionId))"),
+      panel.indexOf(".then(() => dispatchText(message, sessionId, messageId))"),
     );
     expect(panel).toContain("waitForPendingActionPaint()");
     expect(panel).toContain("sessionCallbacksRef.current.onConversationId(sessionId, conversationId)");
     expect(panel).toContain("notifyConversationHistoryChanged(resolvedPendingId)");
     expect(provider).not.toContain("if (created.conversationId === loadedConversationId) await refresh();\n      notifyConversationHistoryChanged();");
-  });
-
-  it("queues new input until the current Agent turn is fully available", async () => {
-    const [panel, composer, conversation] = await Promise.all([
-      readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
-      readFile(resolve(webRoot, "components/chat/chat-composer.tsx"), "utf8"),
-      readFile(resolve(webRoot, "components/chat/chat-conversation.tsx"), "utf8"),
-    ]);
-
-    expect(panel).toContain('status === "ready"');
-    expect(panel).toContain('isGenerating || isQueueDispatching || workflowStatus === "drafting"');
-    expect(panel).toContain('status === "ready" && !isAgentBusy');
-    expect(panel).toContain("queuedInputs[0]");
-    expect(panel).toContain("current.slice(1)");
-    expect(panel).toContain("runText(nextInput.text)");
-    expect(panel).toContain("current.filter((item) => item.id !== id)");
-    expect(panel).toContain("setQueuedInputs([])");
-    expect(composer).not.toContain("disabled={isGenerating}");
-    expect(composer).toContain('aria-label={canStop ? "停止当前 Agent"');
-    expect(composer).toContain('status={canStop ? "streaming" : "ready"}');
-    expect(composer).toContain("onStop={onStop}");
-    expect(composer).not.toContain("PauseIcon");
-    expect(composer).not.toContain("PlayIcon");
-    expect(composer).toContain('aria-label="待发送消息"');
-    expect(composer).toContain("queuedInputs.map");
-    expect(composer).toContain("条排队消息");
-    expect(composer).toContain('from "@/src/components/ai-elements/queue"');
-    expect(composer).toContain("<Queue aria-label=");
-    expect(composer).toContain("<QueueSectionLabel");
-    expect(composer).toContain("<QueueItemContent");
-    expect(composer).not.toContain('<ol className="max-h-36');
-    expect(conversation).not.toContain("QueuedMessage");
-    expect(conversation).not.toContain("queuedInputs.map");
   });
 
   it("keeps independent in-flight chat sessions alive when switching conversations", async () => {

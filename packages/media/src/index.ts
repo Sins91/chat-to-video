@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
 import { createHash } from "node:crypto";
+import { burnSubtitles } from "./subtitle-burner.js";
+import { generateSubtitles, type SubtitleSegment } from "./subtitle-generator.js";
 
 export {
   probeAudio,
@@ -91,6 +93,14 @@ export const resizeImageToVideoFrame = async (input: {
   return new Uint8Array(output);
 };
 
+export type CinematicSubtitleTrack = {
+  segments: readonly SubtitleSegment[];
+  fontSize?: number;
+  bottomMargin?: number;
+  maxWordsPerCue?: number;
+  maxCharsPerLine?: number;
+};
+
 export type ReferenceImageInspection = {
   mimeType: "image/jpeg" | "image/png" | "image/webp";
   sizeBytes: number;
@@ -159,6 +169,7 @@ export const composeCinematicVideo = async (input: {
   ffmpegPath: string;
   clips: readonly CinematicClip[];
   music?: CinematicMusicTrack;
+  subtitles?: CinematicSubtitleTrack;
   frameDimensions?: { width: number; height: number };
   timeoutMs?: number;
 }): Promise<Uint8Array> => {
@@ -185,6 +196,23 @@ export const composeCinematicVideo = async (input: {
   );
   if (totalDuration < 4 || totalDuration > 300) {
     throw new Error("Cinematic clips must total between 4 and 300 seconds.");
+  }
+  if (input.subtitles) {
+    if (
+      input.subtitles.segments.length < 1 ||
+      input.subtitles.segments.some((segment) => segment.endSeconds > totalDuration)
+    ) {
+      throw new Error("Cinematic subtitles must contain timed segments within the video duration.");
+    }
+    const subtitles = generateSubtitles({
+      segments: input.subtitles.segments,
+      format: "srt",
+      maxWordsPerCue: input.subtitles.maxWordsPerCue,
+      maxCharsPerLine: input.subtitles.maxCharsPerLine,
+    });
+    if (subtitles.cueCount < 1) {
+      throw new Error("Cinematic subtitles must produce at least one cue.");
+    }
   }
   const frameDimensions = input.frameDimensions ?? { width: 1280, height: 720 };
   if (
@@ -316,7 +344,24 @@ export const composeCinematicVideo = async (input: {
       outputPath,
     ] as const;
     await runFfmpeg(executablePath, args, input.timeoutMs ?? 300_000);
-    const output = new Uint8Array(await readFile(outputPath));
+    const finalOutputPath = input.subtitles
+      ? join(directory, "output-captioned.mp4")
+      : outputPath;
+    if (input.subtitles) {
+      await burnSubtitles({
+        ffmpegPath: executablePath,
+        inputPath: outputPath,
+        outputPath: finalOutputPath,
+        allowedDirectory: directory,
+        segments: input.subtitles.segments,
+        wordsPerCue: input.subtitles.maxWordsPerCue,
+        maxCharsPerLine: input.subtitles.maxCharsPerLine,
+        fontSize: input.subtitles.fontSize,
+        bottomMargin: input.subtitles.bottomMargin,
+        timeoutMs: Math.min(input.timeoutMs ?? 180_000, 300_000),
+      });
+    }
+    const output = new Uint8Array(await readFile(finalOutputPath));
     if (output.byteLength === 0 || output.byteLength > 500 * 1024 * 1024) {
       throw new Error("FFmpeg produced an invalid cinematic output size.");
     }

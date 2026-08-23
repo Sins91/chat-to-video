@@ -8,13 +8,20 @@ import {
 import { createAlova } from "alova";
 import adapterFetch from "alova/fetch";
 
+export class ReferenceImageRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ReferenceImageRequestError";
+  }
+}
+
 const referenceImageApi = createAlova({
   baseURL: "/api",
   requestAdapter: adapterFetch(),
   cacheFor: null,
   responded: async (response) => {
     const body = await response.json().catch(() => null) as unknown;
-    if (!response.ok) throw new Error("参考图服务暂不可用。");
+    if (!response.ok) throw new ReferenceImageRequestError("参考图服务暂不可用。", response.status);
     return body;
   },
 });
@@ -29,6 +36,14 @@ const waitForReady = async (id: string): Promise<ReferenceImageView> => {
     await new Promise((resolve) => window.setTimeout(resolve, 500));
   }
   throw new Error("参考图校验超时，请重试。");
+};
+
+export const getReferenceImage = async (id: string): Promise<ReferenceImageView> => {
+  const image = ReferenceImageViewSchema.parse(
+    await referenceImageApi.Get(`/reference-images/${encodeURIComponent(id)}`).send(true),
+  );
+  if (image.status !== "ready") throw new Error("参考图当前不可用。");
+  return image;
 };
 
 export const uploadReferenceImage = async (

@@ -21,7 +21,7 @@ export const burnSubtitles = async (input: {
     if (subtitlePath.includes("'")) throw new Error("Subtitle task path contains an unsupported character.");
     await writeFile(subtitlePath, subtitles.content, "utf8");
     const escapedPath = subtitlePath.replaceAll("\\", "/").replace(":", "\\:");
-    const filter = `subtitles='${escapedPath}':force_style='FontName=Arial,FontSize=${fontSize},Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=${bottomMargin}'`;
+    const filter = `subtitles='${escapedPath}':force_style='FontName=Noto Sans CJK SC,FontSize=${fontSize},Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=${bottomMargin}'`;
     await runMediaProcess({
       executablePath: validateExecutable(input.ffmpegPath, "FFmpeg"), executableLabel: "FFmpeg", timeoutMs: validateTimeout(input.timeoutMs, 180_000),
       args: ["-hide_banner", "-loglevel", "error", "-y", "-i", source, "-vf", filter, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", output],

@@ -32,8 +32,8 @@ export const CINEMATIC_PIPELINE_DEFINITION = defineWorkflowPipeline({
     { id: "scene_plan", label: "分镜写作", aliases: ["分镜", "分镜写作", "场景规划", "scene plan", "storyboard"], isRestartable: true, allowsDirectEntry: true, intentTopics: ["镜头", "场景顺序", "运镜", "逐镜时长"], ownedArtifactKinds: ["scene_plan"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["consistency_reference"], inputArtifactKinds: ["script"], outputArtifactKinds: ["scene_plan"], execution: "agent", planningReview: { requiresApproval: true, allowsRevision: true }, stageSkillId: "cinematic-scene-plan", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: ["video.probe"], conditional: [] }, tools: { required: [], optional: ["prompt_compressor", "video_analyzer", "audio_probe", "scene_detect", "frame_sampler"] } },
     { id: "consistency_reference", label: "一致性参考图", aliases: ["一致性参考图", "参考图", "锚点图", "consistency reference"], isRestartable: true, allowsDirectEntry: true, intentTopics: ["人物一致性", "产品一致性", "环境一致性", "视觉世界"], ownedArtifactKinds: ["consistency_reference"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["assets"], inputArtifactKinds: ["proposal", "scene_plan"], outputArtifactKinds: ["consistency_reference"], execution: "queue", planningReview: { requiresApproval: true, allowsRevision: true }, executionReview: { requiresApproval: true, allowsRevision: true }, stageSkillId: "cinematic-consistency-reference", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [{ capability: "image.generate.reference", when: "consistency_reference_required" }] }, tools: { required: [], optional: ["prompt_compressor", "image_generator"] } },
     { id: "assets", label: "素材规划", aliases: ["素材规划", "素材阶段", "asset", "assets"], isRestartable: true, allowsDirectEntry: true, intentTopics: ["图片", "视频", "音乐", "场景声音"], ownedArtifactKinds: ["asset_manifest"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["edit"], inputArtifactKinds: ["scene_plan", "consistency_reference"], outputArtifactKinds: ["asset_manifest"], execution: "queue", planningReview: { requiresApproval: true, allowsRevision: true }, executionReview: { requiresApproval: true, allowsRevision: true }, stageSkillId: "cinematic-assets", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [{ capability: "video.generate", when: "motion_required_without_source_video" }, { capability: "video.generate.audio", when: "seedance_audio_planned" }, { capability: "image.generate", when: "generated_image_planned" }, { capability: "image.render.title-card", when: "title_card_planned" }, { capability: "music.generate", when: "music_generation_selected" }] }, tools: { required: [], optional: ["prompt_compressor", "image_selector", "video_selector", "image_generator", "video_generator", "music_generator", "title_card", "subtitle_gen", "audio_enhance"] } },
-    { id: "edit", label: "剪辑方案", aliases: ["剪辑方案", "剪辑", "edit"], isRestartable: false, intentTopics: ["剪辑", "字幕", "同步", "转场"], ownedArtifactKinds: ["edit_decisions"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["compose"], inputArtifactKinds: ["asset_manifest"], outputArtifactKinds: ["edit_decisions"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, stageSkillId: "cinematic-edit", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: ["prompt_compressor", "video_trimmer", "subtitle_burn", "audio_enhance", "silence_cutter", "color_grade"] } },
-    { id: "compose", label: "视频生成", aliases: ["视频生成", "合成", "compose"], stepId: "video-generation", isRestartable: false, intentTopics: ["编码", "分辨率", "音量", "成片"], ownedArtifactKinds: ["render_output"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["edit_decisions"], outputArtifactKinds: ["render_output"], execution: "queue", planningReview: { requiresApproval: false, allowsRevision: false }, stageSkillId: "cinematic-compose", reviewerSkillId: "cinematic-reviewer", capabilities: { required: ["video.compose.ffmpeg"], optional: ["video.probe"], conditional: [{ capability: "audio.mix", when: "audio_asset_planned" }] }, tools: { required: ["video_compose"], optional: ["audio_mixer", "audio_probe", "visual_qa", "av_sync_qa", "export_bundle"] } },
+    { id: "edit", label: "剪辑方案", aliases: ["剪辑方案", "剪辑", "edit"], isRestartable: false, intentTopics: ["剪辑", "字幕", "同步", "转场"], ownedArtifactKinds: ["edit_decisions"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: ["compose"], inputArtifactKinds: ["script", "scene_plan", "asset_manifest"], outputArtifactKinds: ["edit_decisions"], execution: "agent", planningReview: { requiresApproval: false, allowsRevision: false }, stageSkillId: "cinematic-edit", reviewerSkillId: "cinematic-reviewer", capabilities: { required: [], optional: [], conditional: [] }, tools: { required: [], optional: ["prompt_compressor", "video_trimmer", "subtitle_burn", "audio_enhance", "silence_cutter", "color_grade"] } },
+    { id: "compose", label: "视频生成", aliases: ["视频生成", "合成", "compose"], stepId: "video-generation", isRestartable: false, intentTopics: ["编码", "分辨率", "音量", "成片"], ownedArtifactKinds: ["render_output"], allowsAutoAdvanceAfterRevision: false, allowedNextStageIds: [], inputArtifactKinds: ["edit_decisions"], outputArtifactKinds: ["render_output"], execution: "queue", planningReview: { requiresApproval: false, allowsRevision: false }, stageSkillId: "cinematic-compose", reviewerSkillId: "cinematic-reviewer", capabilities: { required: ["video.compose.ffmpeg"], optional: ["video.probe"], conditional: [{ capability: "audio.mix", when: "audio_asset_planned" }, { capability: "video.subtitle.burn", when: "subtitle_track_planned" }] }, tools: { required: ["video_compose"], optional: ["audio_mixer", "subtitle_gen", "subtitle_burn", "audio_probe", "visual_qa", "av_sync_qa", "export_bundle"] } },
   ],
 });
 
@@ -213,6 +213,46 @@ export const CinematicAssetManifestSchema = z.object({
   slideshowRisk: z.number().int().min(0).max(10),
 }).strict();
 
+export const CinematicSubtitleSegmentSchema = z.object({
+  text: z.string().trim().min(1).max(200),
+  startSeconds: z.number().min(0).max(300),
+  endSeconds: z.number().positive().max(300),
+}).strict().refine(
+  (segment) => segment.endSeconds > segment.startSeconds,
+  { message: "Subtitle endSeconds must be greater than startSeconds.", path: ["endSeconds"] },
+);
+
+const CinematicSubtitleStyleSchema = z.object({
+  fontSize: z.number().int().min(12).max(96).default(32),
+  bottomMargin: z.number().int().min(0).max(500).default(64),
+  maxWordsPerCue: z.number().int().min(1).max(20).default(8),
+  maxCharsPerLine: z.number().int().min(8).max(80).default(24),
+}).strict();
+
+export const CinematicSubtitleTrackSchema = z.object({
+  enabled: z.boolean(),
+  segments: z.array(CinematicSubtitleSegmentSchema).max(120),
+  style: CinematicSubtitleStyleSchema.default({
+    fontSize: 32,
+    bottomMargin: 64,
+    maxWordsPerCue: 8,
+    maxCharsPerLine: 24,
+  }),
+}).strict().superRefine((track, context) => {
+  if (track.enabled && track.segments.length === 0) {
+    context.addIssue({ code: "custom", message: "Enabled subtitles require at least one segment.", path: ["segments"] });
+  }
+  if (!track.enabled && track.segments.length > 0) {
+    context.addIssue({ code: "custom", message: "Disabled subtitles cannot contain segments.", path: ["segments"] });
+  }
+  track.segments.forEach((segment, index) => {
+    const previous = index > 0 ? track.segments[index - 1] : undefined;
+    if (previous && segment.startSeconds < previous.endSeconds) {
+      context.addIssue({ code: "custom", message: "Subtitle segments must be ordered and non-overlapping.", path: ["segments", index, "startSeconds"] });
+    }
+  });
+});
+
 export const CinematicEditDecisionsSchema = z.object({
   durationSeconds: CinematicDurationSecondsSchema,
   rendererFamily: z.literal("ffmpeg"),
@@ -225,6 +265,7 @@ export const CinematicEditDecisionsSchema = z.object({
   }).strict()).min(1).max(60),
   colorGrade: z.string().trim().min(1).max(400),
   audioMix: z.string().trim().min(1).max(500),
+  subtitles: CinematicSubtitleTrackSchema.optional(),
   renderPrompt: z.string().trim().min(1).max(
     PRODUCTION_PROMPT_MAX_CHARACTERS.render_generation,
   ),
@@ -237,6 +278,11 @@ export const CinematicEditDecisionsSchema = z.object({
   if (edit.timeline.some((item, index) => item.sceneOrder !== index + 1)) {
     context.addIssue({ code: "custom", message: "Timeline scene order must be contiguous.", path: ["timeline"] });
   }
+  edit.subtitles?.segments.forEach((segment, index) => {
+    if (segment.endSeconds > edit.durationSeconds) {
+      context.addIssue({ code: "custom", message: "Subtitle timing must fit within durationSeconds.", path: ["subtitles", "segments", index, "endSeconds"] });
+    }
+  });
 });
 
 export const CinematicArtifactSchemaByStage = {
@@ -307,6 +353,7 @@ export const CinematicRenderPlanSchema = z.object({
   modelMaxDurationSeconds: CinematicClipDurationSecondsSchema,
   scenes: z.array(CinematicRenderSceneSchema).min(1).max(60),
   usesEmbeddedSceneAudio: z.boolean().default(false),
+  subtitles: CinematicSubtitleTrackSchema.optional(),
   music: z.object({
     objectKey: z.string()
       .regex(/^tenant\/demo\/project\/demo\/derived\/[a-zA-Z0-9-]+\/[a-zA-Z0-9._-]+$/u)
@@ -338,6 +385,11 @@ export const CinematicRenderPlanSchema = z.object({
   if (duration !== plan.durationSeconds) {
     context.addIssue({ code: "custom", message: "Render scenes must total durationSeconds.", path: ["scenes"] });
   }
+  plan.subtitles?.segments.forEach((segment, index) => {
+    if (segment.endSeconds > plan.durationSeconds) {
+      context.addIssue({ code: "custom", message: "Subtitle timing must fit within the render duration.", path: ["subtitles", "segments", index, "endSeconds"] });
+    }
+  });
 });
 
 export type CinematicStage = z.infer<typeof CinematicStageSchema>;
@@ -346,4 +398,6 @@ export type CinematicArtifact = z.infer<typeof CinematicArtifactSchema>;
 export type CinematicArtifactVersion = z.infer<typeof CinematicArtifactVersionSchema>;
 export type CinematicConsistencyReferenceArtifact = z.infer<typeof CinematicConsistencyReferenceArtifactSchema>;
 export type CinematicConsistencyReferenceGroupKind = z.infer<typeof CinematicConsistencyReferenceGroupKindSchema>;
+export type CinematicSubtitleSegment = z.infer<typeof CinematicSubtitleSegmentSchema>;
+export type CinematicSubtitleTrack = z.infer<typeof CinematicSubtitleTrackSchema>;
 export type CinematicRenderPlan = z.infer<typeof CinematicRenderPlanSchema>;

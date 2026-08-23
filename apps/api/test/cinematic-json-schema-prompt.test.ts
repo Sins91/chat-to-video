@@ -14,7 +14,22 @@ const promptFor = (stage: CinematicGenerativeStage): string => buildCinematicPro
   approvedArtifacts: [],
 });
 
+const promptWithoutSubtitles = buildCinematicPrompt({
+  requestId: "00000000-0000-4000-8000-000000000001",
+  workflowId: "00000000-0000-4000-8000-000000000002",
+  initialPrompt: "制作一条十秒美食短片",
+  subtitlesEnabled: false,
+  stage: "edit",
+  videoModel: "doubao-seedance-2.0",
+  durationSeconds: 30,
+  modelMaxDurationSeconds: 15,
+  approvedArtifacts: [],
+});
+
 describe("cinematic JSON Schema prompts", () => {
+  it("makes the persisted no-subtitle preference explicit to the edit stage", () => {
+    expect(promptWithoutSubtitles).toContain("Final subtitle preference: disabled");
+  });
   it("provides DeepSeek the exact research artifact shape", () => {
     const prompt = promptFor("research");
 
@@ -34,6 +49,8 @@ describe("cinematic JSON Schema prompts", () => {
     expect(promptFor("assets")).toContain("single full-length FlowMusic background track");
     expect(promptFor("assets")).toContain("seedanceAudioDirection");
     expect(promptFor("edit")).toContain("concatenate Seedance embedded");
+    expect(promptFor("edit")).toContain("exact spoken dialogue and narration");
+    expect(promptFor("edit")).toContain('"subtitles"');
   });
 
   it.each([

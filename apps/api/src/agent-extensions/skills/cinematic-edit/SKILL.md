@@ -23,8 +23,10 @@ Keep `sceneOrder` contiguous, `startSeconds` monotonic, and timeline durations e
 
 Describe one coherent `colorGrade` tied to the approved palette and lighting rather than a generic “cinematic” preset. Make `renderPrompt` summarize the approved scene, pacing, grade, audio, aspect-ratio, and motion commitments without adding creative scope.
 
+Create a deterministic `subtitles` track from the approved script and scene plan. When dialogue or narration is present, set `enabled: true` and include every exact spoken line as ordered, non-overlapping segments within the final duration. Do not caption ambience, sound effects, music directions, or text already presented only as a title card. When no dialogue or narration exists, set `enabled: false` with an empty segment array. Use the schema defaults for subtitle styling unless an approved requirement calls for another readable size or bottom margin.
+
 Preserve the approved Chinese setting in `renderPrompt` and quality checks. Treat foreign-location drift, mixed regional cues, and inappropriate non-Chinese visible text as continuity failures unless the approved subject requires them as factual exceptions.
 
-Include quality checks for timeline arithmetic, source coverage, continuity, motion-promise preservation, subtitle intent, audio intelligibility, peak control, output duration, and playability.
+Include quality checks for timeline arithmetic, source coverage, continuity, motion-promise preservation, exact subtitle wording, timing, legibility and non-duplication, audio intelligibility, peak control, output duration, and playability.
 
 Before returning, recompute slideshow risk qualitatively: flag repeated layouts, weak shot intent, typography dependence, or a motion-led promise with insufficient real motion.

@@ -97,6 +97,7 @@ export const ResolveVideoWorkflowIntentRequestSchema = ResolveWorkflowUserIntent
   workflowId: z.string().uuid().optional(),
   pendingActionId: z.string().uuid().optional(),
   videoModel: VideoModelSchema.optional(),
+  subtitlesEnabled: z.boolean().default(false),
 }).strict();
 
 export const ResolveWorkflowUserIntentResponseSchema = WorkflowIntentDecisionSchema.extend({

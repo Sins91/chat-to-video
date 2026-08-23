@@ -115,6 +115,7 @@ export class ReferenceImageRepository {
     originalText: string;
     referenceImageIds: string[];
     videoModel: VideoModel;
+    subtitlesEnabled: boolean;
     expiresAt: Date;
   }) {
     await this.database.insert(referenceImageResolutionRequests).values({

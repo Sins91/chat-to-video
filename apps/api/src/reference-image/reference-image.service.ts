@@ -506,6 +506,7 @@ export class ReferenceImageService implements OnModuleDestroy {
     originalText: string;
     referenceImageIds: string[];
     videoModel: "doubao-seedance-2.0" | "MiniMax-Hailuo-2.3";
+    subtitlesEnabled: boolean;
   }) {
     const request = await this.repository.createResolutionRequest({
       id: randomUUID(),

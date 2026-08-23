@@ -161,6 +161,10 @@ describe("cinematic production-prompt normalization", () => {
         ],
         colorGrade: "冷色高反差",
         audioMix: "场景声与低频弦乐混合",
+        subtitles: {
+          enabled: true,
+          segments: [{ text: "信，送到了。", startSeconds: 1, endSeconds: 3 }],
+        },
         renderPrompt: "渲".repeat(4_001),
         qualityChecks: ["检查时长", "检查声音", "检查地域连续性"],
       },
@@ -170,6 +174,7 @@ describe("cinematic production-prompt normalization", () => {
     if (result.stage !== "edit") throw new Error("Expected edit.");
     expect(result.data.renderPrompt).toBe("已压缩-render_generation");
     expect(result.data.timeline).toHaveLength(2);
+    expect(result.data.subtitles?.segments[0]?.text).toBe("信，送到了。");
     expect(compress).toHaveBeenCalledWith(expect.objectContaining({
       purpose: "render_generation",
       maxCharacters: 4_000,

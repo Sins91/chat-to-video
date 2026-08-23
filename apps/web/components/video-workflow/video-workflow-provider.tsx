@@ -32,6 +32,7 @@ import {
   resolveVideoWorkflowIntent,
   resolveReferenceImages,
   updateVideoWorkflowModel,
+  updateVideoWorkflowSubtitles,
   updateReferenceImagePurpose as updateReferenceImagePurposeRequest,
 } from "@/lib/video-workflow-client";
 import { formatVideoWorkflowError, type VideoWorkflowOperation } from "@/lib/video-workflow-error";
@@ -59,7 +60,7 @@ type VideoWorkflowContextValue = {
   recoverWorkflow: () => Promise<void>;
   submitText: (text: string, messageId: string) => Promise<void>;
   resolveUserIntent: (text: string, messageId: string) => Promise<"workflow" | "chat">;
-  resolveControlIntent: (text: string, messageId: string, referenceImages?: readonly ReferenceImageView[]) => Promise<{
+  resolveControlIntent: (text: string, messageId: string, referenceImages?: readonly ReferenceImageView[], preferredConversationId?: string) => Promise<{
     route: "workflow" | "chat";
     conversationId: string | null;
     workflowId: string | null;
@@ -76,6 +77,8 @@ type VideoWorkflowContextValue = {
   newConversation: () => void;
   videoModel: VideoModel;
   setVideoModel: (model: VideoModel) => void;
+  subtitlesEnabled: boolean;
+  setSubtitlesEnabled: (enabled: boolean) => void;
 };
 
 export type ChatViewportLocation = {
@@ -219,6 +222,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
   const activeConversationIdRef = useRef<string | null>(requestedConversationId);
   const preparedConversationIdRef = useRef<string | null>(null);
   const [videoModel, setVideoModel] = useState<VideoModel>(DEFAULT_VIDEO_MODEL);
+  const [subtitlesEnabled, setSubtitlesEnabledState] = useState(false);
 
   const followCurrentWorkflowPreview = useCallback(() => {
     setPreviewVideo(null);
@@ -248,8 +252,10 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     setErrorMessage(null);
     if (detail.videoWorkflow) {
       setVideoModel(detail.videoWorkflow.videoModel);
+      setSubtitlesEnabledState(detail.videoWorkflow.subtitlesEnabled);
     } else {
       setVideoModel(DEFAULT_VIDEO_MODEL);
+      setSubtitlesEnabledState(false);
     }
     return true;
   }, []);
@@ -287,6 +293,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       setStepView(null);
       setErrorMessage(null);
       setVideoModel(DEFAULT_VIDEO_MODEL);
+      setSubtitlesEnabledState(false);
       return;
     }
     if (loadedConversationId === requestedConversationId) return;
@@ -417,6 +424,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         }
         setSnapshot(workflowEvent.data);
         setVideoModel(workflowEvent.data.videoModel);
+        setSubtitlesEnabledState(workflowEvent.data.subtitlesEnabled);
         return;
       }
       if (isWorkflowEventHistoricalReplay(workflowEvent.timestamp, initialSnapshotTimestampMs)) return;
@@ -622,6 +630,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         prompt,
         referenceImageIds: [],
         videoModel,
+        subtitlesEnabled,
       });
       router.replace(`/studio/agent?conversationId=${encodeURIComponent(created.conversationId)}`);
       if (created.conversationId === loadedConversationId) await refresh();
@@ -635,7 +644,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     } finally {
       setIsSubmitting(false);
     }
-  }, [loadedConversationId, refresh, router, videoModel]);
+  }, [loadedConversationId, refresh, router, subtitlesEnabled, videoModel]);
 
   const submitText = useCallback(async (text: string, messageId: string) => {
     const trimmed = text.trim();
@@ -678,6 +687,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     text: string,
     messageId: string,
     referenceImages: readonly ReferenceImageView[] = [],
+    preferredConversationId?: string,
   ): Promise<{ route: "workflow" | "chat"; conversationId: string | null; workflowId: string | null }> => {
     const normalizedText = text.trim();
     const pendingControlKind = snapshotRef.current?.pendingControl?.kind ?? null;
@@ -696,10 +706,11 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         messageId,
         text: normalizedText,
         referenceImageIds: referenceImages.map((image) => image.id),
-        conversationId: loadedConversationId ?? undefined,
+        conversationId: preferredConversationId ?? loadedConversationId ?? undefined,
         workflowId: snapshotRef.current?.workflowId,
         pendingActionId: snapshotRef.current?.pendingControl?.controlRequestId,
         videoModel,
+        subtitlesEnabled,
       });
       if (result.route === "workflow") {
         if (pendingControlKind === "exit_workflow" && result.applied) {
@@ -729,6 +740,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
               setSnapshot(nextSnapshot);
               setLoadedConversationId(result.conversationId);
               setVideoModel(nextSnapshot.videoModel);
+              setSubtitlesEnabledState(nextSnapshot.subtitlesEnabled);
               setStepView(null);
               setErrorMessage(null);
             }
@@ -753,13 +765,13 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       }));
       return {
         route: "workflow",
-        conversationId: loadedConversationId,
+        conversationId: preferredConversationId ?? loadedConversationId,
         workflowId: snapshotRef.current?.workflowId ?? null,
       };
     } finally {
       setIsSubmitting(false);
     }
-  }, [followCurrentWorkflowPreview, loadedConversationId, refresh, router, videoModel]);
+  }, [followCurrentWorkflowPreview, loadedConversationId, refresh, router, subtitlesEnabled, videoModel]);
 
   const resolveReferenceImagePurpose = useCallback(async (
     resolutionRequestId: string,
@@ -781,7 +793,10 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         setEntries(detail.entries);
         setLoadedConversationId(result.conversationId);
         setSnapshot(nextSnapshot ?? detail.videoWorkflow);
-        if (nextSnapshot) setVideoModel(nextSnapshot.videoModel);
+        if (nextSnapshot) {
+          setVideoModel(nextSnapshot.videoModel);
+          setSubtitlesEnabledState(nextSnapshot.subtitlesEnabled);
+        }
         if (result.conversationId !== loadedConversationId) {
           router.replace(`/studio/agent?conversationId=${encodeURIComponent(result.conversationId)}`);
         }
@@ -913,6 +928,28 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     });
   }, [activeSnapshot?.canChangeVideoModel, videoModel, workflowId]);
 
+  const changeSubtitlesEnabled = useCallback((enabled: boolean) => {
+    if (enabled === subtitlesEnabled) return;
+    if (workflowId && !activeSnapshot?.canChangeSubtitles) return;
+    const previous = subtitlesEnabled;
+    setSubtitlesEnabledState(enabled);
+    if (!workflowId) return;
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    void updateVideoWorkflowSubtitles(workflowId, { subtitlesEnabled: enabled }).then(() => {
+      setSnapshot((current) => current ? { ...current, subtitlesEnabled: enabled } : current);
+    }).catch((error: unknown) => {
+      setSubtitlesEnabledState(previous);
+      setErrorMessage(formatVideoWorkflowError(error, {
+        operation: "update_subtitles",
+        workflowId,
+        requestId: snapshotRef.current?.requestId,
+      }));
+    }).finally(() => {
+      setIsSubmitting(false);
+    });
+  }, [activeSnapshot?.canChangeSubtitles, subtitlesEnabled, workflowId]);
+
   const newConversation = useCallback(() => {
     activeConversationIdRef.current = null;
     preparedConversationIdRef.current = null;
@@ -926,6 +963,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     previewReturnLocationRef.current = null;
     setErrorMessage(null);
     setVideoModel(DEFAULT_VIDEO_MODEL);
+    setSubtitlesEnabledState(false);
     router.push("/studio/agent");
   }, [router]);
 
@@ -1052,7 +1090,9 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     newConversation,
     videoModel: activeVideoModel,
     setVideoModel: changeVideoModel,
-  }), [activeEntries, activeErrorMessage, activeSnapshot, activeVideoModel, changeVideoModel, chatScrollRestoreRequest, chatVideoFocusRequest, isConversationLoading, isSubmitting, loadedConversationId, newConversation, openGeneratedVideo, prepareConversationSwitch, previewVideo, recoverWorkflow, refresh, registerChatViewportController, retryWorkflow, returnToCurrentVideo, resolveControlIntent, resolveReferenceImagePurpose, resolveUserIntent, startWorkflow, stepProgress, stepProgressHistory, submitSceneDurations, submitText, updateReferenceImagePurpose]);
+    subtitlesEnabled,
+    setSubtitlesEnabled: changeSubtitlesEnabled,
+  }), [activeEntries, activeErrorMessage, activeSnapshot, activeVideoModel, changeSubtitlesEnabled, changeVideoModel, chatScrollRestoreRequest, chatVideoFocusRequest, isConversationLoading, isSubmitting, loadedConversationId, newConversation, openGeneratedVideo, prepareConversationSwitch, previewVideo, recoverWorkflow, refresh, registerChatViewportController, retryWorkflow, returnToCurrentVideo, resolveControlIntent, resolveReferenceImagePurpose, resolveUserIntent, startWorkflow, stepProgress, stepProgressHistory, submitSceneDurations, submitText, subtitlesEnabled, updateReferenceImagePurpose]);
 
   return <VideoWorkflowContext value={value}>{children}</VideoWorkflowContext>;
 }

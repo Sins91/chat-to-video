@@ -6,6 +6,7 @@ import { ChatAgentService, getChatFallbackReply } from "../src/chat-agent.servic
 const createGateway = () => ({ analyzeReferenceImages: vi.fn(), classifyWorkflowIntent: vi.fn(), inferCinematicDuration: vi.fn(), streamChat: vi.fn(), generateCinematicArtifact: vi.fn() });
 const createConversations = () => ({
   ensureUserMessage: vi.fn().mockResolvedValue("00000000-0000-4000-8000-000000000010"),
+  findMessage: vi.fn().mockResolvedValue(null),
   getScope: vi.fn().mockResolvedValue({ tenantId: "demo", projectId: "demo" }),
   listModelMessages: vi.fn().mockResolvedValue([{ role: "user", content: "hello" }]),
   appendAssistantMessage: vi.fn(),
@@ -47,6 +48,7 @@ describe("ChatAgentService", () => {
     );
     expect(gateway.streamChat).toHaveBeenCalledWith({
       abortSignal: abortController.signal,
+      conversationId: result.conversationId,
       requestId: result.requestId,
       messages: [{ role: "user", content: "hello" }],
       tenantId: "demo",
@@ -107,7 +109,7 @@ describe("ChatAgentService", () => {
     expect(chunks.some((chunk) => chunk.type === "text-delta" && chunk.delta.includes("工具调用"))).toBe(true);
     expect(conversations.appendAssistantMessage).toHaveBeenCalledWith(
       result.conversationId,
-      "assistant-1",
+      expect.stringMatching(/^assistant:/u),
       expect.stringContaining("工具调用"),
     );
   });
@@ -137,7 +139,7 @@ describe("ChatAgentService", () => {
     expect(chunks.some((chunk) => chunk.type === "finish" && chunk.finishReason === "stop")).toBe(true);
     expect(conversations.appendAssistantMessage).toHaveBeenCalledWith(
       result.conversationId,
-      "assistant-aborted",
+      expect.stringMatching(/^assistant:/u),
       expect.stringContaining("不完整"),
     );
   });
@@ -177,6 +179,7 @@ describe("ChatAgentService", () => {
       { type: "text-delta", id: "text-1", delta: "未完成的回答" },
     ], "assistant-incomplete"],
   ] as const)("turns an empty or unfinished upstream stream into a persisted reply", async (sourceChunks, expectedMessageId) => {
+    void expectedMessageId;
     const gateway = createGateway();
     gateway.streamChat.mockResolvedValue({
       stream: new ReadableStream<UIMessageChunk>({
@@ -199,8 +202,34 @@ describe("ChatAgentService", () => {
     expect(chunks.some((chunk) => chunk.type === "finish" && chunk.finishReason === "stop")).toBe(true);
     expect(conversations.appendAssistantMessage).toHaveBeenCalledWith(
       result.conversationId,
-      expectedMessageId === "assistant-empty" ? expect.any(String) : expectedMessageId,
+      expect.stringMatching(/^assistant:/u),
       expect.stringContaining("不完整"),
     );
+  });
+
+  it("returns a persisted assistant reply without repeating a paid model call", async () => {
+    const gateway = createGateway();
+    const conversations = createConversations();
+    conversations.findMessage.mockResolvedValue({
+      role: "assistant",
+      content: "已经完成的回答",
+    });
+    const referenceImages = createReferenceImages();
+    const service = new ChatAgentService(gateway, conversations as never, referenceImages as never);
+
+    const result = await service.stream(
+      {
+        conversationId: "00000000-0000-4000-8000-000000000010",
+        message: { id: "stable-message-id", content: "hello" },
+      },
+      new AbortController().signal,
+    );
+    const chunks = await readChunks(result.stream);
+
+    expect(chunks.some((chunk) =>
+      chunk.type === "text-delta" && chunk.delta === "已经完成的回答"
+    )).toBe(true);
+    expect(gateway.streamChat).not.toHaveBeenCalled();
+    expect(referenceImages.analyze).not.toHaveBeenCalled();
   });
 });

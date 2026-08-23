@@ -30,6 +30,7 @@ import type { ChatScrollRestoreRequest, ChatViewportController } from "@/compone
 import { getVideoModelPresentation } from "@/lib/video-models";
 import { getVideoOutputEstimate } from "@/lib/video-output-estimate";
 import { getChatVideoFocusScrollTop } from "@/lib/chat-video-focus";
+import { deriveWorkflowInteractionState } from "@/lib/workflow-interaction-state";
 import {
   clearProcessingStartedAt,
   readProcessingStartedAt,
@@ -408,7 +409,9 @@ const cinematicAssetBatchSummaryText = (
   const superseded = entry.isSuperseded
     ? "**历史内容：已由重新开始替代**\n\n"
     : "";
-  return `${superseded}**阶段完成：素材生成**\n\n所有素材均已生成并加载到右侧预览区，共 ${entry.assetCount} 项。`;
+  const stageLabel = entry.stageId === "consistency_reference" ? "一致性参考图" : "素材生成";
+  const resultLabel = entry.stageId === "consistency_reference" ? "参考图" : "素材";
+  return `${superseded}**阶段完成：${stageLabel}**\n\n所有${resultLabel}均已生成并加载到右侧预览区，共 ${entry.assetCount} 项。`;
 };
 
 const completedVideoSummary = (snapshot: VideoWorkflowSnapshot): string => {
@@ -444,14 +447,7 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
     ? snapshot
     : null;
   const completedVideoJobId = completedVideoSnapshot?.videoJob?.jobId ?? null;
-  const reviewableAssetBatch = snapshot?.status === "awaiting_input" &&
-    snapshot.assetBatch?.status === "awaiting_approval" &&
-    snapshot.assetBatch.assets.length > 0 &&
-    snapshot.assetBatch.assets.every((asset) =>
-      asset.status === "succeeded" && asset.reviewUrl !== null
-    )
-    ? snapshot.assetBatch
-    : null;
+  const interactionState = deriveWorkflowInteractionState(snapshot);
   const timelineItems = useMemo(() => insertConversationTimelineMarker(entries, completedVideoSnapshot
     ? {
         createdAt: completedVideoSnapshot.updatedAt,
@@ -514,8 +510,8 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
         </div>;
       }
       if (entry.type === "cinematic_artifact") {
-        const canReview = reviewableAssetBatch === null &&
-          snapshot?.status === "awaiting_input" &&
+        const canReview = interactionState.kind === "planning_review" &&
+          snapshot !== null &&
           entry.workflowId === snapshot.workflowId &&
           snapshot.currentArtifact?.version === entry.artifact.version &&
           snapshot.currentArtifact.artifact.stage === entry.artifact.artifact.stage;
@@ -523,11 +519,18 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
         return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={notice} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={cinematicSummaryText(entry.artifact, false)} />;
       }
       if (entry.type === "cinematic_asset_batch") {
-        const canReview = snapshot?.status === "awaiting_input" &&
-          snapshot.assetBatch?.status === "awaiting_approval" &&
-          snapshot.assetBatch.batchId === entry.batchId;
+        const reviewBatch = interactionState.kind === "execution_review"
+          ? interactionState.stageId === "consistency_reference"
+            ? snapshot?.consistencyReferenceBatch
+            : snapshot?.assetBatch
+          : null;
+        const canReview = interactionState.kind === "execution_review" &&
+          (entry.stageId === null || entry.stageId === interactionState.stageId) &&
+          reviewBatch?.batchId === entry.batchId;
         const notice = canReview
-          ? "确认后请回复“确认”；如需调整，请直接说明需要修改或重新生成的素材。"
+          ? entry.stageId === "consistency_reference"
+            ? "确认后请回复“确认”；如需调整，请直接说明需要修改或重新生成的一致性参考图。"
+            : "确认后请回复“确认”；如需调整，请直接说明需要修改或重新生成的素材。"
           : undefined;
         return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={notice} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={cinematicAssetBatchSummaryText(entry)} />;
       }
@@ -536,7 +539,8 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
           <ArchivedVideoMessage entry={entry} processingSeconds={persistedProcessingDurations.get(entry.id)} title={entry.videoTitle ?? "视频成片"} />
         </div>;
       }
-      const canReview = snapshot?.status === "awaiting_input" &&
+      const canReview = interactionState.kind === "planning_review" &&
+        snapshot !== null &&
         entry.workflowId === snapshot.workflowId &&
         snapshot.storyboard?.version === entry.storyboard.version;
       return <TextMessage copyFeedback={copyFeedback} id={entry.id} key={entry.id} notice={canReview ? workflowReviewNotice : undefined} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} role="assistant" text={storyboardSummaryText(entry.storyboard, false)} />;
@@ -601,24 +605,26 @@ export const ChatConversation = memo(function ChatConversation({
   const processingKey = snapshot?.requestId
     ? `workflow:${snapshot.requestId}`
     : `chat:${conversationId ?? "new"}:${lastLiveUserId ?? "pending"}`;
-  const reviewableAssetBatch = snapshot?.status === "awaiting_input" &&
-    snapshot.assetBatch?.status === "awaiting_approval" &&
-    snapshot.assetBatch.assets.length > 0 &&
-    snapshot.assetBatch.assets.every((asset) =>
-      asset.status === "succeeded" && asset.reviewUrl !== null
-    )
-    ? snapshot.assetBatch
-    : null;
-  const hasReviewableWorkflowAnswer = reviewableAssetBatch !== null || snapshot?.status === "awaiting_input" && entries.some((entry) => {
-    if (entry.type === "cinematic_artifact") {
-      return entry.workflowId === snapshot.workflowId
-        && snapshot.currentArtifact?.version === entry.artifact.version
-        && snapshot.currentArtifact.artifact.stage === entry.artifact.artifact.stage;
-    }
-    return entry.type === "storyboard"
-      && entry.workflowId === snapshot.workflowId
-      && snapshot.storyboard?.version === entry.storyboard.version;
-  });
+  const interactionState = deriveWorkflowInteractionState(snapshot);
+  const hasReviewableWorkflowAnswer = interactionState.kind === "execution_review"
+    ? entries.some((entry) => {
+        if (entry.type !== "cinematic_asset_batch") return false;
+        const batch = interactionState.stageId === "consistency_reference"
+          ? snapshot?.consistencyReferenceBatch
+          : snapshot?.assetBatch;
+        return (entry.stageId === null || entry.stageId === interactionState.stageId)
+          && entry.batchId === batch?.batchId;
+      })
+    : interactionState.kind === "planning_review" && snapshot !== null && entries.some((entry) => {
+        if (entry.type === "cinematic_artifact") {
+          return entry.workflowId === snapshot.workflowId
+            && snapshot.currentArtifact?.version === entry.artifact.version
+            && snapshot.currentArtifact.artifact.stage === entry.artifact.artifact.stage;
+        }
+        return entry.type === "storyboard"
+          && entry.workflowId === snapshot.workflowId
+          && snapshot.storyboard?.version === entry.storyboard.version;
+      });
   const completedVideoSnapshot = snapshot?.status === "succeeded" && snapshot.videoJob?.status === "succeeded"
     ? snapshot
     : null;

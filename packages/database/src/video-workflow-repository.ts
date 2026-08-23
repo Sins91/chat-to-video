@@ -63,6 +63,7 @@ type NewWorkflow = {
   currentStageId: WorkflowStageId;
   initialPrompt: string;
   videoModel: VideoModel;
+  subtitlesEnabled: boolean;
   durationSeconds: number;
   outputResolution: VideoOutputResolution;
   message?: { messageId: string; content: string };
@@ -306,6 +307,7 @@ export class VideoWorkflowRepository {
     skippedStageIds: readonly WorkflowStageId[];
     initialPrompt: string;
     videoModel: VideoModel;
+    subtitlesEnabled: boolean;
     durationSeconds: number;
     outputResolution: VideoOutputResolution;
     candidate: WorkflowImportedArtifactCandidate;
@@ -335,6 +337,7 @@ export class VideoWorkflowRepository {
         stateVersion: 1,
         initialPrompt: input.initialPrompt,
         videoModel: input.videoModel,
+        subtitlesEnabled: input.subtitlesEnabled,
         durationSeconds: input.durationSeconds,
         outputResolution: input.outputResolution,
         status: "drafting",
@@ -404,6 +407,7 @@ export class VideoWorkflowRepository {
         currentStageId: input.currentStageId,
         initialPrompt: input.initialPrompt,
         videoModel: input.videoModel,
+        subtitlesEnabled: input.subtitlesEnabled,
         durationSeconds: input.durationSeconds,
         outputResolution: input.outputResolution,
         status: "drafting",
@@ -469,6 +473,7 @@ export class VideoWorkflowRepository {
         currentStageId: input.currentStageId,
         initialPrompt: input.initialPrompt,
         videoModel: input.videoModel,
+        subtitlesEnabled: input.subtitlesEnabled,
         durationSeconds: input.durationSeconds,
         outputResolution: input.outputResolution,
         status: "drafting",
@@ -1078,6 +1083,24 @@ export class VideoWorkflowRepository {
         eq(videoWorkflows.id, workflowId),
         eq(videoWorkflows.status, "awaiting_input"),
         eq(videoWorkflows.currentStageId, "proposal"),
+      ));
+    return readAffectedRows(result) === 1;
+  }
+
+  async updateSubtitlesEnabled(workflowId: string, subtitlesEnabled: boolean): Promise<boolean> {
+    const result: unknown = await this.database.update(videoWorkflows)
+      .set({ subtitlesEnabled, updatedAt: new Date() })
+      .where(and(
+        eq(videoWorkflows.id, workflowId),
+        inArray(videoWorkflows.status, ["drafting", "awaiting_input"]),
+        inArray(videoWorkflows.currentStageId, [
+          "research",
+          "proposal",
+          "script",
+          "scene_plan",
+          "consistency_reference",
+          "assets",
+        ]),
       ));
     return readAffectedRows(result) === 1;
   }

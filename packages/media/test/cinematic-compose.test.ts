@@ -85,4 +85,14 @@ describe("composeCinematicVideo validation", () => {
       frameDimensions: { width: 1921, height: 1080 },
     })).rejects.toThrow("invalid frame dimensions");
   });
+
+  it("rejects subtitle timing beyond the composed duration before starting FFmpeg", async () => {
+    await expect(composeCinematicVideo({
+      ffmpegPath: "ffmpeg",
+      clips: [{ body: new Uint8Array([1]), durationSeconds: 4 }],
+      subtitles: {
+        segments: [{ text: "超出成片", startSeconds: 3, endSeconds: 5 }],
+      },
+    })).rejects.toThrow("within the video duration");
+  });
 });

@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { type ChatAgentMessage } from "@chat-to-video/contracts";
 import type { UIMessageChunk } from "ai";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { ConversationService } from "./conversation/conversation.service.js";
 import { ReferenceImageService } from "./reference-image/reference-image.service.js";
@@ -50,6 +50,13 @@ const createFallbackStream = (messageId: string, text: string): ReadableStream<U
     },
   });
 
+const createAssistantMessageId = (conversationId: string, userMessageId: string): string =>
+  `assistant:${createHash("sha256")
+    .update(conversationId)
+    .update("\0")
+    .update(userMessageId)
+    .digest("hex")}`;
+
 @Injectable()
 export class ChatAgentService {
   private readonly logger = new Logger(ChatAgentService.name);
@@ -71,6 +78,15 @@ export class ChatAgentService {
       content: input.message.content,
       referenceImageIds: input.message.referenceImageIds ?? [],
     });
+    const assistantMessageId = createAssistantMessageId(conversationId, input.message.id);
+    const persistedReply = await this.conversations.findMessage(conversationId, assistantMessageId);
+    if (persistedReply?.role === "assistant") {
+      return {
+        conversationId,
+        requestId,
+        stream: createFallbackStream(assistantMessageId, persistedReply.content),
+      };
+    }
     const scope = await this.conversations.getScope(conversationId);
     try {
       await this.referenceImages.analyze({
@@ -86,7 +102,6 @@ export class ChatAgentService {
         `Reference image analysis failed requestId=${requestId} error=${error instanceof Error ? error.name : "unknown"}`,
       );
       const fallback = CHAT_FALLBACK_REPLIES.image;
-      const assistantMessageId = randomUUID();
       await this.conversations.appendAssistantMessage(conversationId, assistantMessageId, fallback);
       return { conversationId, requestId, stream: createFallbackStream(assistantMessageId, fallback) };
     }
@@ -103,7 +118,6 @@ export class ChatAgentService {
       });
 
       let assistantText = "";
-      let assistantMessageId: string = randomUUID();
       let didFinish = false;
       let hasFailed = false;
       let didStart = false;
@@ -140,7 +154,8 @@ export class ChatAgentService {
               if (hasFailed) continue;
               if (chunk.type === "start") {
                 didStart = true;
-                if (chunk.messageId) assistantMessageId = chunk.messageId;
+                controller.enqueue({ ...chunk, messageId: assistantMessageId });
+                continue;
               }
               if (chunk.type === "text-start") activeTextId = chunk.id;
               if (chunk.type === "text-delta") assistantText += chunk.delta;
@@ -197,7 +212,6 @@ export class ChatAgentService {
       const fallback = getChatFallbackReply(error instanceof ModelGatewayError && error.code === "AGENT_TOOL_CALLING_UNSUPPORTED"
         ? new Error("AGENT_TOOL_CALLING_UNSUPPORTED")
         : error);
-      const assistantMessageId = randomUUID();
       await this.conversations.appendAssistantMessage(conversationId, assistantMessageId, fallback);
       return {
         conversationId,

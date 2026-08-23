@@ -7,6 +7,7 @@ import {
   getRequestedVideoOutputResolution,
   getVideoModelMaxDurationSeconds,
   RecoverVideoWorkflowResponseSchema,
+  UpdateVideoWorkflowSubtitlesResponseSchema,
   UpdateVideoWorkflowModelResponseSchema,
   VideoModelSchema,
   VideoWorkflowInteractionResultSchema,
@@ -19,6 +20,7 @@ import {
   type RetryVideoWorkflowResponse,
   type UpdateReferenceImagePurposeRequest,
   type UpdateVideoWorkflowModelResponse,
+  type UpdateVideoWorkflowSubtitlesResponse,
   type VideoModel,
   type VideoOutputResolution,
   type VideoWorkflowInteraction,
@@ -151,15 +153,14 @@ export class WorkflowLifecycleService {
     }
     const conversationId = input.conversationId ?? randomUUID();
     let previousMessages: ChatAgentMessage[] = [];
+    let shouldCreateConversation = !input.conversationId;
     if (input.conversationId) {
       const conversation = await this.conversations.findActiveConversation(input.conversationId);
-      if (!conversation) {
-        throw new NotFoundException({
-          code: "CONVERSATION_NOT_FOUND",
-          message: "Conversation not found.",
-        });
+      if (conversation) {
+        previousMessages = await this.conversations.listModelMessages(input.conversationId);
+      } else {
+        shouldCreateConversation = true;
       }
-      previousMessages = await this.conversations.listModelMessages(input.conversationId);
     }
     const workflowId = randomUUID();
     const requestId = randomUUID();
@@ -208,13 +209,19 @@ export class WorkflowLifecycleService {
         message: "The final video duration could not be determined from the conversation.",
       });
     }
-    if (!input.conversationId) {
-      await this.conversations.createWithUserMessage({
+    if (shouldCreateConversation) {
+      const isReserved = await this.conversations.createWithUserMessage({
         conversationId,
         title: createConversationTitle(context.messageContent),
         messageId: input.messageId,
         content: context.messageContent,
       });
+      if (isReserved === false) {
+        throw new ConflictException({
+          code: "CONVERSATION_ID_CONFLICT",
+          message: "Conversation ID is unavailable.",
+        });
+      }
     }
     const newWorkflow = {
       id: workflowId,
@@ -224,9 +231,12 @@ export class WorkflowLifecycleService {
       currentStageId: CINEMATIC_PIPELINE_DEFINITION.stages[0]?.id ?? "research",
       initialPrompt: context.initialPrompt,
       videoModel: input.videoModel,
+      subtitlesEnabled: input.subtitlesEnabled ?? false,
       durationSeconds,
       outputResolution: getRequestedVideoOutputResolution(context.initialPrompt),
-      message: input.conversationId
+      message: shouldCreateConversation
+        ? undefined
+        : input.conversationId
         ? { messageId: input.messageId, content: context.messageContent }
         : undefined,
     };
@@ -361,6 +371,30 @@ export class WorkflowLifecycleService {
       });
     }
     return UpdateVideoWorkflowModelResponseSchema.parse({ accepted: true, videoModel });
+  }
+
+  async updateSubtitles(
+    workflowId: string,
+    subtitlesEnabled: boolean,
+  ): Promise<UpdateVideoWorkflowSubtitlesResponse> {
+    const workflow = await this.repository.findWorkflow(workflowId);
+    if (!workflow) {
+      throw new NotFoundException({
+        code: "VIDEO_WORKFLOW_NOT_FOUND",
+        message: "Video workflow not found.",
+      });
+    }
+    if (workflow.subtitlesEnabled === subtitlesEnabled) {
+      return UpdateVideoWorkflowSubtitlesResponseSchema.parse({ accepted: true, subtitlesEnabled });
+    }
+    const isUpdated = await this.repository.updateSubtitlesEnabled(workflowId, subtitlesEnabled);
+    if (!isUpdated) {
+      throw new ConflictException({
+        code: "VIDEO_SUBTITLE_PREFERENCE_LOCKED",
+        message: "Subtitle preference cannot change after editing or rendering has started.",
+      });
+    }
+    return UpdateVideoWorkflowSubtitlesResponseSchema.parse({ accepted: true, subtitlesEnabled });
   }
 
   async retry(workflowId: string): Promise<RetryVideoWorkflowResponse> {

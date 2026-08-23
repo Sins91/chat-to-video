@@ -17,7 +17,8 @@ export type VideoWorkflowOperation =
   | "control"
   | "retry"
   | "recover"
-  | "update_model";
+  | "update_model"
+  | "update_subtitles";
 
 export class VideoWorkflowRequestError extends Error {
   readonly code: string;

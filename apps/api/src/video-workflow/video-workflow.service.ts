@@ -11,6 +11,7 @@ import {
   type RetryVideoWorkflowResponse,
   type UpdateReferenceImagePurposeRequest,
   type UpdateVideoWorkflowModelResponse,
+  type UpdateVideoWorkflowSubtitlesResponse,
   type VideoModel,
   type VideoOutputResolution,
   type VideoWorkflowInteraction,
@@ -70,6 +71,13 @@ export class VideoWorkflowService {
     videoModel: VideoModel,
   ): Promise<UpdateVideoWorkflowModelResponse> {
     return this.lifecycle.updateModel(workflowId, videoModel);
+  }
+
+  updateSubtitles(
+    workflowId: string,
+    subtitlesEnabled: boolean,
+  ): Promise<UpdateVideoWorkflowSubtitlesResponse> {
+    return this.lifecycle.updateSubtitles(workflowId, subtitlesEnabled);
   }
 
   retry(workflowId: string): Promise<RetryVideoWorkflowResponse> {

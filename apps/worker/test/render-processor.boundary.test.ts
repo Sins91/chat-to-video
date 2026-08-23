@@ -19,6 +19,9 @@ describe("RenderProcessor workflow boundary", () => {
     expect(source).toContain('"video-generation"');
     expect(source).toContain('"正在生成镜头 "');
     expect(source).toContain('"所有镜头已就绪，正在合成最终视频。"');
+    expect(source).toContain('"video.subtitle.burn"');
+    expect(source).toContain("subtitles: {");
+    expect(source).toContain('"视频合成与字幕烧录完成，正在准备保存。"');
     expect(source).toContain('"正在保存最终视频。"');
     expect(source).toContain('eventKey + ":" + boundedProgress');
   });

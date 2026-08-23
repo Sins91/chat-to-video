@@ -27,6 +27,7 @@ import type {
 } from "@chat-to-video/contracts";
 import type { Storyboard, VideoWorkflowEvent, WorkflowUserIntent } from "@chat-to-video/contracts";
 import {
+  boolean,
   decimal,
   index,
   int,
@@ -46,6 +47,7 @@ export const videoWorkflows = mysqlTable("video_workflows", {
   requestId: varchar("request_id", { length: 36 }).notNull(),
   pipelineId: varchar("pipeline_id", { length: 64 }).notNull().default("cinematic"),
   videoModel: varchar("video_model", { length: 64 }).notNull(),
+  subtitlesEnabled: boolean("subtitles_enabled").notNull().default(false),
   durationSeconds: int("duration_seconds").notNull().default(10),
   outputResolution: varchar("output_resolution", { length: 16 })
     .$type<VideoOutputResolution>().notNull().default("480p"),
@@ -178,6 +180,7 @@ export const referenceImageResolutionRequests = mysqlTable("reference_image_reso
   originalText: text("original_text").notNull(),
   referenceImageIds: json("reference_image_ids_json").$type<string[]>().notNull(),
   videoModel: varchar("video_model", { length: 64 }).$type<VideoModel>().notNull(),
+  subtitlesEnabled: boolean("subtitles_enabled").notNull().default(false),
   status: varchar("status", { length: 16 }).$type<"pending" | "resolved" | "expired">().notNull(),
   expiresAt: timestamp("expires_at", { mode: "date", fsp: 3 }).notNull(),
   resolvedAt: timestamp("resolved_at", { mode: "date", fsp: 3 }),

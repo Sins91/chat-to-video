@@ -30,6 +30,15 @@ export const canChangeWorkflowVideoModel = (
   workflow.currentStageId === "proposal" &&
   !hasPendingControl;
 
+export const canChangeWorkflowSubtitles = (
+  workflow: { status: string; currentStageId: string },
+  hasPendingControl: boolean,
+): boolean => ["drafting", "awaiting_input"].includes(workflow.status) &&
+  ["research", "proposal", "script", "scene_plan", "consistency_reference", "assets"].includes(
+    workflow.currentStageId,
+  ) &&
+  !hasPendingControl;
+
 export const buildVideoWorkflowSnapshot = async (
   dependencies: SnapshotDependencies,
   workflowId: string,
@@ -163,6 +172,8 @@ export const buildVideoWorkflowSnapshot = async (
       workflow,
       pendingControlRow !== null,
     ),
+    subtitlesEnabled: workflow.subtitlesEnabled,
+    canChangeSubtitles: canChangeWorkflowSubtitles(workflow, pendingControlRow !== null),
     durationSeconds: workflow.durationSeconds,
     outputResolution: workflow.outputResolution,
     initialPrompt: workflow.initialPrompt,

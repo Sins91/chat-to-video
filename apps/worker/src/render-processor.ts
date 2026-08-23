@@ -75,6 +75,9 @@ export class RenderProcessor {
     const required = payload.cinematic
       ? [...new Set([
           "video.compose.ffmpeg" as const,
+          ...(payload.cinematic.subtitles?.enabled === true
+            ? ["video.subtitle.burn" as const]
+            : []),
           ...payload.cinematic.scenes.map((scene) =>
             scene.sourceType === "generated_image"
               ? "image.generate" as const
@@ -364,13 +367,31 @@ export class RenderProcessor {
         ffmpegPath: this.config.ffmpegPath,
         clips,
         music,
+        ...(payload.cinematic.subtitles?.enabled === true
+          ? {
+              subtitles: {
+                segments: payload.cinematic.subtitles.segments,
+                fontSize: payload.cinematic.subtitles.style.fontSize,
+                bottomMargin: payload.cinematic.subtitles.style.bottomMargin,
+                maxWordsPerCue: payload.cinematic.subtitles.style.maxWordsPerCue,
+                maxCharsPerLine: payload.cinematic.subtitles.style.maxCharsPerLine,
+              },
+            }
+          : {}),
         frameDimensions,
         timeoutMs: Math.max(300_000, payload.cinematic.durationSeconds * 4_000),
       });
     } catch (error: unknown) {
       throw renderStageError("成片合成 · FFmpeg", error);
     }
-    await this.progress(payload, 95, "视频合成完成，正在准备保存。", "compose-completed");
+    await this.progress(
+      payload,
+      95,
+      payload.cinematic.subtitles?.enabled === true
+        ? "视频合成与字幕烧录完成，正在准备保存。"
+        : "视频合成完成，正在准备保存。",
+      "compose-completed",
+    );
     return { body, contentType: "video/mp4" };
   }
 

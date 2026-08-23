@@ -15,6 +15,7 @@ export const WorkflowCapabilityIdSchema = z.enum([
   "music.generate",
   "audio.mix",
   "video.compose.ffmpeg",
+  "video.subtitle.burn",
   "video.probe",
 ]);
 
@@ -24,6 +25,7 @@ export const WorkflowCapabilityConditionIdSchema = z.enum([
   "title_card_planned",
   "music_generation_selected",
   "audio_asset_planned",
+  "subtitle_track_planned",
   "seedance_audio_planned",
   "consistency_reference_required",
 ]);
@@ -68,6 +70,7 @@ export const WorkflowCapabilityFactsSchema = z.object({
   hasTitleCard: z.boolean(),
   generatesMusic: z.boolean(),
   hasAudioAsset: z.boolean(),
+  hasSubtitleTrack: z.boolean().default(false),
   hasSeedanceAudio: z.boolean().default(false),
   requiresConsistencyReference: z.boolean().default(false),
 }).strict();
@@ -105,6 +108,7 @@ const conditionMatches = (
     case "title_card_planned": return facts.hasTitleCard;
     case "music_generation_selected": return facts.generatesMusic;
     case "audio_asset_planned": return facts.hasAudioAsset;
+    case "subtitle_track_planned": return facts.hasSubtitleTrack;
     case "seedance_audio_planned": return facts.hasSeedanceAudio;
     case "consistency_reference_required": return facts.requiresConsistencyReference;
   }

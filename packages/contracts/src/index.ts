@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export * from "./apimart-account.js";
+export * from "./chat-queue.js";
 export * from "./cinematic.js";
 export * from "./cinematic-assets.js";
 export * from "./conversation.js";

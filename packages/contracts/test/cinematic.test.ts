@@ -3,6 +3,7 @@ import {
   DEFAULT_VIDEO_MODEL,
   CinematicArtifactSchema,
   CinematicScenePlanSchema,
+  CinematicSubtitleTrackSchema,
   RENDER_JOB_TIMEOUT_MS,
   RenderTimeoutCleanupJobPayloadSchema,
   RenderVideoJobPayloadSchema,
@@ -138,11 +139,40 @@ describe("cinematic contracts", () => {
         modelMaxDurationSeconds: 10,
         scenes,
         usesEmbeddedSceneAudio: true,
+        subtitles: {
+          enabled: true,
+          segments: [
+            { text: "雨夜里，他终于送到了。", startSeconds: 0.5, endSeconds: 3.5 },
+            { text: "这封信，等了很久。", startSeconds: 4.5, endSeconds: 8.5 },
+          ],
+        },
       },
       objectKey: "tenant/demo/project/demo/render/cinematic-job-1/video.mp4",
     });
     expect(payload.cinematic?.rendererFamily).toBe("ffmpeg");
     expect(payload.cinematic?.usesEmbeddedSceneAudio).toBe(true);
+    expect(payload.cinematic?.subtitles?.style.fontSize).toBe(32);
+  });
+
+  it("rejects overlapping or disabled non-empty subtitle tracks", () => {
+    expect(CinematicSubtitleTrackSchema.safeParse({
+      enabled: true,
+      segments: [
+        { text: "第一句", startSeconds: 0, endSeconds: 2 },
+        { text: "第二句", startSeconds: 2, endSeconds: 3 },
+      ],
+    }).success).toBe(true);
+    expect(CinematicSubtitleTrackSchema.safeParse({
+      enabled: true,
+      segments: [
+        { text: "第一句", startSeconds: 0, endSeconds: 2 },
+        { text: "第二句", startSeconds: 1.5, endSeconds: 3 },
+      ],
+    }).success).toBe(false);
+    expect(CinematicSubtitleTrackSchema.safeParse({
+      enabled: false,
+      segments: [{ text: "不应出现", startSeconds: 0, endSeconds: 1 }],
+    }).success).toBe(false);
   });
 
   it("rejects a render duration tier unsupported by the selected model", () => {

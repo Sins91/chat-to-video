@@ -83,7 +83,7 @@ ENV FFMPEG_PATH=/usr/bin/ffmpeg
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ffmpeg \
+    && apt-get install --yes --no-install-recommends ffmpeg fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=worker-build --chown=node:node /app/node_modules ./node_modules

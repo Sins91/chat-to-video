@@ -132,7 +132,7 @@ pnpm --filter @chat-to-video/tools test
 | `script` | `transcriber`、`scene_detect` | 已注册，等待受控源素材 job/对象键交接 |
 | `scene_plan` | `video_analyzer`、`audio_probe`、`scene_detect`、`frame_sampler` | 已注册，等待 `media-probe-jobs` 消费者及授权素材交接 |
 | `assets` | selectors、APIMart TTS、素材音乐、生成器、标题卡、字幕和音频增强 | image/video/music generator 与 title card 已接通；其余按真实依赖发布状态 |
-| `edit` | 裁切、字幕烧录、音频增强、静音裁切、调色 | 已注册，等待 edit job payload 与 Worker 消费者 |
+| `edit` | 裁切、字幕烧录、音频增强、静音裁切、调色 | 字幕轨已通过 edit artifact 与 render payload 接入 Worker；其余能力仍按真实依赖发布状态 |
 | `compose` | `video_compose`、`audio_mixer`、探测、QA、`export_bundle` | FFmpeg compose/audio mix 已接通；QA/export 等待 final review/publish 审批边界 |
 
 Mastra Agent 根据当前 stage 仅暴露该阶段允许的只读 Tool；媒体计算仍通过 BullMQ Worker，未进入 API 请求线程。Worker capability snapshot 会公开每个执行 Tool 的 `available` 或 `unconfigured` 状态及原因，供能力预检和 selector 使用。

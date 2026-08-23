@@ -5,8 +5,10 @@ import {
   findWorkflowPipelineDefinition,
   findWorkflowStage,
   getWorkflowStageIndex,
+  isVideoWorkflowTerminalStatus,
   isVideoWorkflowIntent,
   parseWorkflowControlCommand,
+  VideoWorkflowStatusSchema,
 } from "@chat-to-video/contracts";
 import {
   ConflictException,
@@ -42,9 +44,10 @@ import { UserIntentResolverService } from "./user-intent-resolver.service.js";
 import { ReferenceImageService } from "../reference-image/reference-image.service.js";
 import { WorkflowControlService } from "./workflow-control.service.js";
 import { WorkflowLifecycleService } from "./workflow-lifecycle.service.js";
-const TERMINAL_WORKFLOW_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
-const isTerminalWorkflowStatus = (status: string): boolean =>
-  TERMINAL_WORKFLOW_STATUSES.has(status);
+const isTerminalWorkflowStatus = (status: string): boolean => {
+  const parsed = VideoWorkflowStatusSchema.safeParse(status);
+  return parsed.success && isVideoWorkflowTerminalStatus(parsed.data);
+};
 const isResolvedReferenceImage = (resolution: ReferenceImageResolution | null | undefined): boolean =>
   resolution?.status === "auto_resolved" || resolution?.status === "user_resolved";
 const createPipelineScopeGuidance = (
@@ -399,6 +402,7 @@ export class WorkflowIntentApplicationService {
         messageId: input.messageId,
         prompt: text,
         videoModel: input.videoModel ?? DEFAULT_VIDEO_MODEL,
+        subtitlesEnabled: input.subtitlesEnabled,
         referenceImageIds: effectiveReferenceImageIds,
       });
       return ResolveVideoWorkflowIntentResponseSchema.parse({
@@ -527,6 +531,7 @@ export class WorkflowIntentApplicationService {
       prompt: decision.intent.brief,
       referenceImageIds: input.referenceImageIds ?? [],
       videoModel: input.videoModel ?? DEFAULT_VIDEO_MODEL,
+      subtitlesEnabled: input.subtitlesEnabled,
     }, {
       initialPrompt: decision.intent.brief,
       messageContent: input.text,
@@ -622,6 +627,7 @@ export class WorkflowIntentApplicationService {
       originalText: input.request.text,
       referenceImageIds: input.request.referenceImageIds ?? [],
       videoModel: input.request.videoModel ?? DEFAULT_VIDEO_MODEL,
+      subtitlesEnabled: input.request.subtitlesEnabled ?? false,
     });
     const question = "请确认参考图用途。你可以选择人物、产品、场景、元素或风格；确认完成后我会继续原任务。";
     await this.appendAssistantReply(conversationId, `${input.request.messageId}:reference-clarification`, question);
@@ -830,6 +836,7 @@ export class WorkflowIntentApplicationService {
             conversationId: workflow.conversationId,
             workflowId,
             videoModel: VideoModelSchema.parse(workflow.videoModel),
+            subtitlesEnabled: workflow.subtitlesEnabled,
           },
           conversationId: workflow.conversationId,
           workflow,
@@ -1060,6 +1067,7 @@ export class WorkflowIntentApplicationService {
       conversationId: request.conversationId,
       workflowId: request.workflowId ?? undefined,
       videoModel: request.videoModel,
+      subtitlesEnabled: request.subtitlesEnabled,
     });
   }
 

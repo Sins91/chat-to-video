@@ -137,6 +137,9 @@ export const retryVideoWorkflow = async (
             ),
           })),
           usesEmbeddedSceneAudio: true,
+          ...(workflow.subtitlesEnabled && editArtifact.data.subtitles?.enabled === true
+            ? { subtitles: editArtifact.data.subtitles }
+            : {}),
           ...(music?.mimeType ? {
             music: { objectKey: music.objectKey, mimeType: music.mimeType, gainDb: -12 },
           } : {}),

@@ -12,6 +12,7 @@ const facts = {
   hasTitleCard: false,
   generatesMusic: true,
   hasAudioAsset: true,
+  hasSubtitleTrack: true,
   hasSeedanceAudio: true,
   requiresConsistencyReference: false,
 };
@@ -25,12 +26,14 @@ describe("workflow capability requirements", () => {
         { capability: "video.generate", when: "motion_required_without_source_video" },
         { capability: "image.generate", when: "generated_image_planned" },
         { capability: "music.generate", when: "music_generation_selected" },
+        { capability: "video.subtitle.burn", when: "subtitle_track_planned" },
         { capability: "video.generate.audio", when: "seedance_audio_planned" },
       ],
     }, facts)).toEqual([
       "video.compose.ffmpeg",
       "video.generate",
       "music.generate",
+      "video.subtitle.burn",
       "video.generate.audio",
     ]);
   });

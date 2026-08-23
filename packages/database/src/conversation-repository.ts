@@ -33,20 +33,32 @@ export class ConversationRepository {
     title: string;
     messageId: string;
     content: string;
-  }): Promise<void> {
-    await this.database.transaction(async (transaction) => {
+  }): Promise<boolean> {
+    return this.database.transaction(async (transaction) => {
       await transaction.insert(conversations).values({
         id: input.conversationId,
         tenantId: DEMO_TENANT_ID,
         projectId: DEMO_PROJECT_ID,
         title: input.title,
+      }).onDuplicateKeyUpdate({
+        set: { id: input.conversationId },
       });
+      const rows = await transaction.select({ id: conversations.id }).from(conversations).where(and(
+        eq(conversations.id, input.conversationId),
+        eq(conversations.tenantId, DEMO_TENANT_ID),
+        eq(conversations.projectId, DEMO_PROJECT_ID),
+        isNull(conversations.deletedAt),
+      )).limit(1);
+      if (!rows[0]) return false;
       await transaction.insert(conversationMessages).values({
         conversationId: input.conversationId,
         messageId: input.messageId,
         role: "user",
         content: input.content,
+      }).onDuplicateKeyUpdate({
+        set: { messageId: input.messageId },
       });
+      return true;
     });
   }
 
@@ -75,6 +87,14 @@ export class ConversationRepository {
         isNull(conversations.deletedAt),
       ));
     });
+  }
+
+  async findMessage(conversationId: string, messageId: string) {
+    const rows = await this.database.select().from(conversationMessages).where(and(
+      eq(conversationMessages.conversationId, conversationId),
+      eq(conversationMessages.messageId, messageId),
+    )).limit(1);
+    return rows[0] ?? null;
   }
 
   async listMessages(conversationId: string) {
@@ -128,6 +148,7 @@ export class ConversationRepository {
     return this.database.select({
       id: cinematicAssetBatches.id,
       workflowId: cinematicAssetBatches.workflowId,
+      stageId: cinematicAssetBatches.stageId,
       planVersion: cinematicAssetBatches.planVersion,
       status: cinematicAssetBatches.status,
       assetCount: sql<number>`count(${cinematicAssetJobs.id})`.mapWith(Number),
@@ -142,6 +163,7 @@ export class ConversationRepository {
       .groupBy(
         cinematicAssetBatches.id,
         cinematicAssetBatches.workflowId,
+        cinematicAssetBatches.stageId,
         cinematicAssetBatches.planVersion,
         cinematicAssetBatches.status,
         cinematicAssetBatches.supersededAt,

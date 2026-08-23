@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { ConversationDetailSchema, ConversationListResponseSchema } from "../src/index.js";
+import {
+  ConversationDetailSchema,
+  ConversationEntrySchema,
+  ConversationListResponseSchema,
+} from "../src/index.js";
 
 describe("conversation contracts", () => {
   it("accepts a paged history list", () => {
@@ -59,5 +63,25 @@ describe("conversation contracts", () => {
       initialPrompt: "生成一支雨夜古镇的电影感短片",
       promptTrace: [expect.objectContaining({ kind: "user_input" })],
     });
+  });
+
+  it("keeps cinematic batch stage labels compatible with legacy history", () => {
+    const base = {
+      id: "asset-batch-1",
+      type: "cinematic_asset_batch",
+      workflowId: "00000000-0000-4000-8000-000000000011",
+      batchId: "asset-batch-1",
+      planVersion: 3,
+      status: "awaiting_approval",
+      assetCount: 2,
+      isSuperseded: false,
+      supersededAt: null,
+      createdAt: "2026-08-10T01:00:00.000Z",
+    };
+    expect(ConversationEntrySchema.parse(base)).toMatchObject({ stageId: null });
+    expect(ConversationEntrySchema.parse({
+      ...base,
+      stageId: "consistency_reference",
+    })).toMatchObject({ stageId: "consistency_reference" });
   });
 });

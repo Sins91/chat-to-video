@@ -8,6 +8,13 @@ import {
 import { createAlova } from "alova";
 import adapterFetch from "alova/fetch";
 
+export class ConversationRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ConversationRequestError";
+  }
+}
+
 const conversationApi = createAlova({
   baseURL: "/api",
   requestAdapter: adapterFetch(),
@@ -19,7 +26,7 @@ const conversationApi = createAlova({
       const message = typeof body === "object" && body && "message" in body && typeof body.message === "string"
         ? body.message
         : "会话请求失败，请稍后重试。";
-      throw new Error(message);
+      throw new ConversationRequestError(message, response.status);
     }
     return body;
   },
@@ -74,8 +81,8 @@ const createPendingConversationTitle = (content: string): string => {
   return characters.length <= 40 ? normalized : `${characters.slice(0, 40).join("")}…`;
 };
 
-export const notifyPendingConversationHistory = (content: string): string => {
-  const conversationId = crypto.randomUUID();
+export const notifyPendingConversationHistory = (content: string, reservedConversationId?: string): string => {
+  const conversationId = reservedConversationId ?? crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const detail: ConversationHistoryChangedDetail = {
     type: "pending",
