@@ -21,7 +21,7 @@ Create editorial decisions; do not execute FFmpeg or enqueue the render job.
 
 Keep `sceneOrder` contiguous, `startSeconds` monotonic, and timeline durations equal exactly `durationSeconds`. Keep audio gain within schema bounds. Use `audioMix` to require this deterministic order: concatenate Seedance embedded dialogue, narration, ambience, and synchronized effects; insert silence for static scenes; then mix the one full-length FlowMusic background track underneath with peak control.
 
-Describe one coherent `colorGrade` tied to the approved palette and lighting rather than a generic “cinematic” preset. Make `renderPrompt` summarize the approved scene, pacing, grade, audio, aspect-ratio, and motion commitments without adding creative scope.
+Describe one coherent `colorGrade` tied to the approved palette and lighting rather than a generic “cinematic” preset. Make `renderPrompt` summarize the approved scene, pacing, grade, audio, aspect-ratio, and motion commitments without adding creative scope. Do not regenerate, reorder, or embellish the Seedance generation prompts; those are approved asset-stage inputs, not edit-stage creative material.
 
 Create a deterministic `subtitles` track from the approved script and scene plan. When dialogue or narration is present, set `enabled: true` and include every exact spoken line as ordered, non-overlapping segments within the final duration. Do not caption ambience, sound effects, music directions, or text already presented only as a title card. When no dialogue or narration exists, set `enabled: false` with an empty segment array. Use the schema defaults for subtitle styling unless an approved requirement calls for another readable size or bottom margin.
 

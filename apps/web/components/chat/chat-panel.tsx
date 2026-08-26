@@ -522,9 +522,6 @@ export function ChatPanel() {
           onResolveReferenceImagePurpose={(resolutionRequestId, referenceImageId, purpose) => {
             void workflow.resolveReferenceImagePurpose(resolutionRequestId, referenceImageId, purpose);
           }}
-          onUpdateReferenceImagePurpose={(referenceImageId, purpose) => {
-            void workflow.updateReferenceImagePurpose(referenceImageId, purpose);
-          }}
           snapshot={workflow.snapshot}
           status={status}
           videoFocusRequest={workflow.chatVideoFocusRequest}

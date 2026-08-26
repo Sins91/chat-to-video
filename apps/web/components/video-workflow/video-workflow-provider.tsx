@@ -765,7 +765,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       }));
       return {
         route: "workflow",
-        conversationId: preferredConversationId ?? loadedConversationId,
+        conversationId: null,
         workflowId: snapshotRef.current?.workflowId ?? null,
       };
     } finally {

@@ -76,7 +76,6 @@ interface ChatConversationProps {
     referenceImageId: string,
     purpose: ReferenceImagePurpose,
   ) => void;
-  onUpdateReferenceImagePurpose: (referenceImageId: string, purpose: ReferenceImagePurpose) => void;
   snapshot: VideoWorkflowSnapshot | null;
   status: ChatStatus;
   videoFocusRequest: { requestId: number; videoId: string } | null;
@@ -207,32 +206,6 @@ const ReferenceImageResolutionCard = memo(function ReferenceImageResolutionCard(
       </ConfirmationActions>
     </Confirmation>
   </AssistantSurface>;
-});
-
-const ReferenceImagePurposeEditor = memo(function ReferenceImagePurposeEditor({
-  image,
-  isSubmitting,
-  onUpdate,
-}: {
-  image: ReferenceImageView;
-  isSubmitting: boolean;
-  onUpdate: (referenceImageId: string, purpose: ReferenceImagePurpose) => void;
-}) {
-  if (image.resolution?.status !== "auto_resolved" && image.resolution?.status !== "user_resolved") {
-    return null;
-  }
-  return <details className="group ml-auto max-w-sm text-xs text-muted-foreground">
-    <summary className="cursor-pointer list-none text-right hover:text-foreground">修改“{image.resolution.effectiveLabel ?? image.fileName}”的用途</summary>
-    <div className="mt-2 flex flex-wrap justify-end gap-1.5">
-      {REFERENCE_PURPOSE_OPTIONS.map(([purpose, label]) => <button
-        className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-        disabled={isSubmitting || purpose === image.resolution?.effectivePurpose}
-        key={purpose}
-        onClick={() => onUpdate(image.id, purpose)}
-        type="button"
-      >{label}</button>)}
-    </div>
-  </details>;
 });
 
 const WORKFLOW_PROGRESS_STALL_THRESHOLD_MS = 90_000;
@@ -429,7 +402,6 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
   entries,
   onCopy,
   onResolveReferenceImagePurpose,
-  onUpdateReferenceImagePurpose,
   isWorkflowSubmitting,
   snapshot,
   workflowReviewNotice,
@@ -438,7 +410,6 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
   entries: ConversationEntry[];
   onCopy: (id: string, text: string) => void;
   onResolveReferenceImagePurpose: (resolutionRequestId: string, referenceImageId: string, purpose: ReferenceImagePurpose) => void;
-  onUpdateReferenceImagePurpose: (referenceImageId: string, purpose: ReferenceImagePurpose) => void;
   isWorkflowSubmitting: boolean;
   snapshot: VideoWorkflowSnapshot | null;
   workflowReviewNotice: string;
@@ -506,7 +477,6 @@ const PersistedConversationTimeline = memo(function PersistedConversationTimelin
         return <div className="contents" key={entry.id}>
           <TextMessage copyFeedback={copyFeedback} id={entry.id} notice={message.notice} onCopy={onCopy} processingSeconds={persistedProcessingDurations.get(entry.id)} referenceImages={entry.referenceImages.map((image) => ({ ...image, label: image.resolution?.effectiveLabel ?? image.declaration?.label ?? image.analysis?.label, purpose: image.resolution?.effectivePurpose ?? image.declaration?.purpose ?? image.analysis?.purpose }))} role={entry.role} text={message.text} />
           {entry.role === "user" ? entry.referenceImages.map((image) => <ReferenceImageResolutionCard image={image} isSubmitting={isWorkflowSubmitting} key={`${entry.id}:${image.id}:resolution`} onResolve={onResolveReferenceImagePurpose} />) : null}
-          {entry.role === "user" ? entry.referenceImages.map((image) => <ReferenceImagePurposeEditor image={image} isSubmitting={isWorkflowSubmitting} key={`${entry.id}:${image.id}:purpose-editor`} onUpdate={onUpdateReferenceImagePurpose} />) : null}
         </div>;
       }
       if (entry.type === "cinematic_artifact") {
@@ -557,7 +527,6 @@ export const ChatConversation = memo(function ChatConversation({
   messages,
   onRecoverWorkflow,
   onResolveReferenceImagePurpose,
-  onUpdateReferenceImagePurpose,
   snapshot,
   status,
   videoFocusRequest,
@@ -817,7 +786,6 @@ export const ChatConversation = memo(function ChatConversation({
         isWorkflowSubmitting={isWorkflowSubmitting}
         onCopy={handleCopy}
         onResolveReferenceImagePurpose={onResolveReferenceImagePurpose}
-        onUpdateReferenceImagePurpose={onUpdateReferenceImagePurpose}
         snapshot={snapshot}
         workflowReviewNotice={workflowReviewNotice}
       />

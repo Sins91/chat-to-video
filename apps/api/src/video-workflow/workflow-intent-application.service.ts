@@ -372,9 +372,11 @@ export class WorkflowIntentApplicationService {
         });
       }
       if (!startsVideoWorkflow) {
-        const resolvedConversationId = prepared?.conversationId ?? conversationId ??
-          referenceRows.find((row) => row.conversationId !== null)?.conversationId ??
-          await this.ensureReferenceMessage(input, null);
+        const resolvedConversationId = prepared?.conversationId ??
+          await this.ensureReferenceMessage(
+            input,
+            conversationId ?? referenceRows.find((row) => row.conversationId !== null)?.conversationId ?? null,
+          );
         const labels = referenceRows.flatMap((row) => row.resolution?.effectiveLabel
           ? [row.resolution.effectiveLabel]
           : []);
@@ -562,19 +564,16 @@ export class WorkflowIntentApplicationService {
     conversationId: string | null,
   ): Promise<string> {
     const resolvedConversationId = conversationId ?? randomUUID();
-    if (conversationId) {
-      await this.conversations.appendMessage({
-        conversationId,
-        messageId: input.messageId,
-        role: "user",
-        content: input.text,
-      });
-    } else {
-      await this.conversations.createWithUserMessage({
-        conversationId: resolvedConversationId,
-        title: createConversationTitle(input.text || "参考图片"),
-        messageId: input.messageId,
-        content: input.text,
+    const isReserved = await this.conversations.createWithUserMessage({
+      conversationId: resolvedConversationId,
+      title: createConversationTitle(input.text || "参考图片"),
+      messageId: input.messageId,
+      content: input.text,
+    });
+    if (isReserved === false) {
+      throw new ConflictException({
+        code: "CONVERSATION_ID_CONFLICT",
+        message: "Conversation ID is unavailable.",
       });
     }
     await this.referenceImages.bindToMessage({
@@ -649,22 +648,7 @@ export class WorkflowIntentApplicationService {
     question: string,
     workflowId: string | null = null,
   ): Promise<ResolveVideoWorkflowIntentResponse> {
-    const resolvedConversationId = conversationId ?? randomUUID();
-    if (conversationId) {
-      await this.conversations.appendMessage({
-        conversationId: resolvedConversationId,
-        messageId: input.messageId,
-        role: "user",
-        content: input.text,
-      });
-    } else {
-      await this.conversations.createWithUserMessage({
-        conversationId: resolvedConversationId,
-        title: createConversationTitle(input.text),
-        messageId: input.messageId,
-        content: input.text,
-      });
-    }
+    const resolvedConversationId = await this.ensureReferenceMessage(input, conversationId);
     await this.appendAssistantReply(
       resolvedConversationId,
       `${input.messageId}:workflow-guidance`,

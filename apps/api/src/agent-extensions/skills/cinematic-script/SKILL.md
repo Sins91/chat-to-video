@@ -17,7 +17,7 @@ Write a sparse, visual-first script that realizes the approved direction without
 3. Protect a recognizable reveal, payoff, or emotional landing.
 4. End with the approved brand, message, or call-to-action intent without inventing one.
 
-Give every beat a single narrative purpose, a concrete visual direction, an audio role, a positive integer duration, and contiguous order. In `audio`, write the exact dialogue or narration wording and delivery when speech is present, plus ambience, synchronized effects, or intentional silence. Never put background-score instructions there; the full-length music track is planned separately. Make beat durations total exactly `durationSeconds`.
+Give every beat a single narrative purpose, a concrete visual direction, an audio role, a positive integer duration, and contiguous order. Make the subject behavior observable and executable: identify who or what acts, describe actions in temporal order, and state the relevant expression, gaze, gesture, or product interaction instead of replacing action with an adjective. In `audio`, write the exact dialogue or narration wording and delivery when speech is present, plus ambience, synchronized effects, or intentional silence. Never put background-score instructions there; the full-length music track is planned separately. Make beat durations total exactly `durationSeconds`.
 
 ## Keep words intentional
 
@@ -25,6 +25,7 @@ Give every beat a single narrative purpose, a concrete visual direction, an audi
 - Keep real historical, biographical, brand, artwork, and named-location facts unchanged when localization would make the subject false.
 
 - Use dialogue only when voice adds information or emotional intimacy that visuals cannot carry.
+- Keep each beat to one coherent action chain. Move simultaneous or unrelated actions into separate beats instead of asking a later generation prompt to perform them together.
 - Keep title cards brief enough to read within their beat; avoid turning the piece into slides.
 - Use silence, ambience, music changes, and sound effects as structural devices.
 - Preserve verified facts and approved claims. If a factual dependency is unresolved, keep it out of dialogue and title cards.

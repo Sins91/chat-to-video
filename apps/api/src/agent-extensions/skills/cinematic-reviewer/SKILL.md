@@ -17,17 +17,19 @@ Review inside the same Agent generation. Do not call another reviewer Agent, emi
 3. Check every capability, provider, source, cost, file, and completed-action claim against registered facts.
 4. Check delivery-promise preservation, creative differentiation, continuity, and practical executability.
 5. Check that generic foreign settings were localized to a coherent mainland-Chinese region and that factual exceptions were preserved without introducing mixed regional cues or stereotypes.
-6. Fix critical findings before returning. Keep useful non-critical limitations in fields allowed by the stage schema.
+6. For prompt-bearing stages, check that actions are observable, camera instructions are coherent, style labels are specific, technical claims come from registered constraints, and the stage has not taken over prompt responsibilities owned by another stage.
+7. Fix critical findings before returning. Keep useful non-critical limitations in fields allowed by the stage schema.
 
 Treat as critical: invalid schema, fabricated evidence, unauthorized source media, unavailable provider commitment, duration mismatch, broken ordering, silent motion downgrade, unapproved direction change, missing scene coverage, unjustified foreign-setting drift, mixed regional stereotypes, or an instruction that bypasses ModelGateway, approval, BullMQ, Worker, or storage authorization.
 
 ## Stage focus
 
 - **research:** specific visual/audio evidence, source diversity, honest null URLs, reference differentiation, and no fabricated claims.
-- **proposal:** three materially different directions, valid recommendation, resolved music plan, FFmpeg lock, feasible cost language, and explicit achievable promise.
-- **script:** clear escalation and payoff, restrained dialogue/title cards, contiguous beats, exact duration, and verified claims.
-- **scene_plan:** hero moments, exact timing, model-safe clips, source authorization, continuity, visual variety, and real motion for motion-required scenes.
-- **assets:** complete scene coverage, planned status, provenance, selector-backed routes, consistent prompts, honest cost arithmetic, music resolution, and slideshow risk.
+- **proposal:** three materially different directions, concrete global camera/lighting/style choices, valid recommendation, resolved music plan, FFmpeg lock, feasible cost language, and explicit achievable promise.
+- **script:** clear escalation and payoff, observable single-chain actions, exact spoken wording, restrained dialogue/title cards, contiguous beats, exact duration, and verified claims.
+- **scene_plan:** hero moments, exact timing, model-safe clips, source authorization, continuity, visual variety, one coherent camera setup per scene, concrete setting/time/light facts, and real motion for motion-required scenes; reject a `visualPrompt` that tries to become the final provider prompt.
+- **consistency_reference:** neutral static anchors with stable identity, environment, lighting, style, and continuity details; reject temporal action, camera movement, dialogue, frame-rate language, or unsupported quality claims.
+- **assets:** complete scene coverage, planned status, provenance, selector-backed routes, final video prompts in the registered ordered positive-prompt structure, one continuous shot and action chain, three to five detail modifiers, specific conditional treatment, honest cost arithmetic, music resolution, and slideshow risk.
 - **edit:** full monotonic timeline, supported transitions, emotional pacing, grade/audio consistency, promise preservation, and complete quality checks.
 - **compose/final review:** valid output probe, plausible duration and streams, sampled-frame review, audio and subtitle checks, no silent fallback, and explicit failure when evidence is incomplete.
 - **publish:** only approved passing outputs, accurate metadata, clearly labeled deliverables, and no unsupported distribution claim.

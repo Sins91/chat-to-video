@@ -31,16 +31,14 @@ const FilmPerforations = ({ position }: { readonly position: "bottom" | "top" })
 
 const GeneratedVideoCard = memo(function GeneratedVideoCard({
   isSwitching,
-  onContextMenuOpenChange,
   onSelect,
   video,
 }: {
   readonly isSwitching: boolean;
-  readonly onContextMenuOpenChange: (isOpen: boolean) => void;
   readonly onSelect: (video: GeneratedVideoItem) => void;
   readonly video: GeneratedVideoItem;
 }) {
-  return <VideoDownloadContextMenu onOpenChange={onContextMenuOpenChange} triggerClassName="w-40 shrink-0" video={video}>
+  return <VideoDownloadContextMenu triggerClassName="w-40 shrink-0" video={video}>
       <button
         aria-label={`打开视频：${video.title}`}
         aria-busy={isSwitching}
@@ -76,40 +74,12 @@ export function GeneratedVideoShelf() {
   const [isLoading, setIsLoading] = useState(() => getCachedGeneratedVideos().length === 0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [switchingConversationId, setSwitchingConversationId] = useState<string | null>(null);
-  const [isExpanded, setIsExpanded] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const loadSequenceRef = useRef(0);
-  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isContextMenuOpenRef = useRef(false);
   const dragStateRef = useRef<HorizontalDragState | null>(null);
   const shouldSuppressClickRef = useRef(false);
   const wheelAnimationFrameRef = useRef<number | null>(null);
   const wheelTargetScrollLeftRef = useRef<number | null>(null);
-
-  const clearCollapseTimer = useCallback(() => {
-    if (collapseTimerRef.current === null) return;
-    clearTimeout(collapseTimerRef.current);
-    collapseTimerRef.current = null;
-  }, []);
-
-  const expandShelf = useCallback(() => {
-    clearCollapseTimer();
-    setIsExpanded(true);
-  }, [clearCollapseTimer]);
-
-  const scheduleShelfCollapse = useCallback(() => {
-    clearCollapseTimer();
-    collapseTimerRef.current = setTimeout(() => {
-      collapseTimerRef.current = null;
-      if (!isContextMenuOpenRef.current) setIsExpanded(false);
-    }, 240);
-  }, [clearCollapseTimer]);
-
-  const handleContextMenuOpenChange = useCallback((isOpen: boolean) => {
-    isContextMenuOpenRef.current = isOpen;
-    if (isOpen) expandShelf();
-    else scheduleShelfCollapse();
-  }, [expandShelf, scheduleShelfCollapse]);
 
   const stopWheelScrollAnimation = useCallback(() => {
     if (wheelAnimationFrameRef.current !== null) {
@@ -133,6 +103,14 @@ export function GeneratedVideoShelf() {
   const moveHorizontalDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const dragState = dragStateRef.current;
     if (dragState === null || dragState.pointerId !== event.pointerId) return;
+    if ((event.buttons & 1) === 0) {
+      dragStateRef.current = null;
+      setIsDragging(false);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
     const distanceX = event.clientX - dragState.startX;
     if (!dragState.hasDragged && Math.abs(distanceX) < HORIZONTAL_DRAG_THRESHOLD_PX) return;
     if (!dragState.hasDragged) {
@@ -200,7 +178,6 @@ export function GeneratedVideoShelf() {
     event.preventDefault();
   }, []);
 
-  useEffect(() => clearCollapseTimer, [clearCollapseTimer]);
   useEffect(() => stopWheelScrollAnimation, [stopWheelScrollAnimation]);
 
   const load = useCallback(async () => {
@@ -239,19 +216,7 @@ export function GeneratedVideoShelf() {
 
   return <section
     aria-label="已生成视频胶片"
-    className={cn(
-      "absolute inset-x-0 bottom-0 z-50 overflow-hidden border-t border-stone-700/40 bg-[radial-gradient(circle_at_50%_0%,rgb(68_56_45/0.22),transparent_48%),linear-gradient(180deg,#151310_0%,#070707_100%)] transition-[height,box-shadow] duration-300 ease-out",
-      isExpanded ? "h-[130px]" : "h-5",
-      isExpanded
-        ? "shadow-[inset_0_1px_0_rgb(255_255_255/0.025),0_-10px_30px_rgb(0_0_0/0.32)]"
-        : "shadow-[inset_0_1px_0_rgb(255_255_255/0.025),0_-4px_12px_rgb(0_0_0/0.16)]",
-    )}
-    onBlurCapture={(event) => {
-      if (!event.currentTarget.contains(event.relatedTarget)) scheduleShelfCollapse();
-    }}
-    onFocusCapture={expandShelf}
-    onPointerEnter={expandShelf}
-    onPointerLeave={scheduleShelfCollapse}
+    className="relative z-50 h-[130px] shrink-0 overflow-hidden border-t border-stone-700/40 bg-[radial-gradient(circle_at_50%_0%,rgb(68_56_45/0.22),transparent_48%),linear-gradient(180deg,#151310_0%,#070707_100%)] shadow-[inset_0_1px_0_rgb(255_255_255/0.025),0_-10px_30px_rgb(0_0_0/0.32)]"
   >
     <span aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1 z-10 h-0.5 w-10 -translate-x-1/2 rounded-full bg-stone-400/45 shadow-[0_1px_4px_rgb(0_0_0/0.8)]" />
     <div
@@ -260,6 +225,7 @@ export function GeneratedVideoShelf() {
         isDragging ? "cursor-grabbing select-none" : "cursor-grab",
       )}
       onClickCapture={suppressClickAfterDrag}
+      onLostPointerCapture={finishHorizontalDrag}
       onPointerCancel={finishHorizontalDrag}
       onPointerDown={startHorizontalDrag}
       onPointerMove={moveHorizontalDrag}
@@ -270,7 +236,6 @@ export function GeneratedVideoShelf() {
         {videos.map((video) => <GeneratedVideoCard
           isSwitching={video.conversationId === switchingConversationId}
           key={video.id}
-          onContextMenuOpenChange={handleContextMenuOpenChange}
           onSelect={(item) => void selectVideo(item)}
           video={video}
         />)}

@@ -39,6 +39,8 @@ describe("two-step video workflow UI", () => {
     expect(conversation).toContain("/(无需确认|确认|修改|取消)/u");
     expect(conversation).toContain('part === "无需确认" || part === "确认" || part === "修改" || part === "取消" ? "text-warning-foreground"');
     expect(conversation).not.toContain("onApprove");
+    expect(conversation).not.toContain("ReferenceImagePurposeEditor");
+    expect(conversation).not.toContain("修改“");
     expect(conversation).not.toContain("CinematicArtifactCard");
     expect(conversation).not.toContain("StoryboardArtifactCard");
     expect(conversation).toContain("completedVideoSummary");
@@ -476,8 +478,9 @@ describe("two-step video workflow UI", () => {
     expect(preview).not.toContain("absolute inset-x-4 bottom-4");
     expect(workspace).toContain("VideoWorkflowVisualization");
     expect(workspace).not.toContain("AgentVisualizationPanel");
-    expect(workspace).toContain("min-h-[720px] min-w-[1380px]");
-    expect(workspace).toContain("min-h-0 min-w-0 overflow-hidden max-xl:[display:none!important]");
+    expect(workspace).toContain("h-full min-h-0 min-w-0");
+    expect(workspace).toContain('id="agent-preview"');
+    expect(workspace).not.toContain("max-xl:[display:none!important]");
   });
 
   it("merges live job progress into the preview snapshot and renders generation details", async () => {

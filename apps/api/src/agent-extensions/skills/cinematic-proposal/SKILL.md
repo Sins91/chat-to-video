@@ -24,9 +24,11 @@ Give every direction:
 
 - A specific title and emotional logline.
 - An `emotionalArc` with at least three ordered beats and a clear landing.
-- A concrete visual treatment covering framing, camera behavior, lighting, texture, typography restraint, and editing rhythm.
+- A concrete visual treatment covering the global stability intent, framing and camera language, lighting direction, texture, specific style reference, typography restraint, and editing rhythm.
 - A palette of three to eight usable color or material descriptors.
 - A `musicDirection` for the single full-length background track and a separate `soundDirection` for Seedance scene sound; the latter must say no background music/no score.
+
+Treat these as approved upstream facts for later prompt assembly, not as a finished provider prompt. Describe observable filmmaking choices instead of vague labels such as “premium”, “cinematic”, or “atmospheric”. Do not prescribe unsupported resolution, frame rate, aspect ratio, or other provider parameters here.
 
 Make the directions differ in more than adjectives. Vary the primary emotional arc, shot language, pacing, or sound strategy. Include an intimate or texture-led alternative when spectacle would make all three converge.
 

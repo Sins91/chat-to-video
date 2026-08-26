@@ -13,13 +13,20 @@ describe("generated video shelf", () => {
     ]);
     expect(workspace).toContain("<GeneratedVideoShelf />");
     expect(workspace.indexOf("<GeneratedVideoShelf />")).toBeGreaterThan(workspace.indexOf("<VideoWorkflowVisualization />"));
-    expect(workspace).toContain("relative h-full min-h-0");
+    expect(workspace).toContain("flex h-full min-h-0 flex-col");
+    expect(workspace).toContain('<div className="min-h-0 flex-1"><VideoWorkflowVisualization /></div>');
     expect(workspace).toContain('id="agent-preview"');
     expect(shelf).toContain("overflow-x-auto");
     expect(shelf).toContain("cursor-grabbing select-none");
     expect(shelf).toContain("disabled:cursor-pointer");
     expect(shelf).not.toContain("disabled:cursor-wait");
     expect(shelf).toContain("onPointerDown={startHorizontalDrag}");
+    expect(shelf).toContain("if ((event.buttons & 1) === 0)");
+    expect(shelf.indexOf("if ((event.buttons & 1) === 0)")).toBeLessThan(
+      shelf.indexOf("const distanceX = event.clientX - dragState.startX"),
+    );
+    expect(shelf).toContain("dragStateRef.current = null");
+    expect(shelf).toContain("onLostPointerCapture={finishHorizontalDrag}");
     expect(shelf).toContain("event.currentTarget.scrollLeft = dragState.startScrollLeft - distanceX");
     expect(shelf.indexOf("event.currentTarget.setPointerCapture(event.pointerId)")).toBeGreaterThan(
       shelf.indexOf("dragState.hasDragged = true"),
@@ -35,11 +42,9 @@ describe("generated video shelf", () => {
     expect(shelf).toContain("useEffect(() => stopWheelScrollAnimation");
     expect(shelf).toContain("if (nextTargetScrollLeft === currentTargetScrollLeft");
     expect(shelf).toContain("flex min-w-max gap-1.5");
-    expect(shelf).toContain('isExpanded ? "h-[130px]" : "h-5"');
-    expect(shelf).toContain("transition-[height,box-shadow] duration-300");
-    expect(shelf).toContain("onPointerEnter={expandShelf}");
-    expect(shelf).toContain("onPointerLeave={scheduleShelfCollapse}");
-    expect(shelf).toContain("onContextMenuOpenChange={handleContextMenuOpenChange}");
+    expect(shelf).toContain('className="relative z-50 h-[130px] shrink-0');
+    expect(shelf).not.toContain("isExpanded");
+    expect(shelf).not.toContain("scheduleShelfCollapse");
     expect(shelf).toContain("w-40 shrink-0");
     expect(shelf).toContain("h-[114px]");
     expect(shelf).not.toContain("h-[72px]");
@@ -53,9 +58,8 @@ describe("generated video shelf", () => {
     expect(shelf).not.toContain("video.themeName");
     expect(shelf).toContain("video.durationSeconds");
     expect(shelf).toContain("video.resolution");
-    expect(shelf).toContain("absolute inset-x-0 bottom-0");
-    expect(shelf).toContain("bottom-0 z-50 overflow-hidden");
-    expect(shelf).not.toContain("bottom-0 z-20 overflow-hidden");
+    expect(shelf).not.toContain("absolute inset-x-0 bottom-0");
+
     expect(shelf).toContain("contrast-[1.08]");
     expect(shelf).toContain("saturate-[0.82]");
     expect(shelf).not.toContain("font-serif font-semibold");

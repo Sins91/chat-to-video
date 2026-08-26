@@ -35,6 +35,16 @@ const waitingWorkflow = {
   createdAt: new Date("2026-08-09T00:00:00.000Z"),
   updatedAt: new Date("2026-08-09T00:00:00.000Z"),
 };
+const referenceImageResolution = {
+  referenceImageId: "00000000-0000-4000-8000-000000000032",
+  resolutionRequestId: null,
+  effectivePurpose: "style",
+  effectiveLabel: "服装风格",
+  source: "model",
+  status: "auto_resolved",
+  reason: "model_confident",
+  confidence: 0.9,
+} as const;
 
 describe("VideoWorkflowService interactions", () => {
   const repository = {
@@ -173,7 +183,10 @@ describe("VideoWorkflowService interactions", () => {
     repository.updateVideoModel.mockResolvedValue(true);
     repository.updateOutputResolution.mockResolvedValue(true);
     repository.claimVideoJobRetry.mockResolvedValue(true);
-    conversations.createWithUserMessage.mockResolvedValue(undefined);
+    conversations.createWithUserMessage.mockResolvedValue(true);
+    referenceImages.analyze.mockResolvedValue([]);
+    referenceImages.bindToMessage.mockResolvedValue(undefined);
+    referenceImages.readyRows.mockResolvedValue([]);
     conversations.listModelMessages.mockResolvedValue([]);
     modelGateway.inferCinematicDuration.mockResolvedValue(30);
     runLauncher.launchAttempt.mockResolvedValue(true);
@@ -311,6 +324,57 @@ describe("VideoWorkflowService interactions", () => {
       pipelineId: "cinematic",
       initialPrompt: "帮我编写一个产品视频脚本",
     }));
+  });
+
+  it.each([
+    ["unresolved", null],
+    ["already resolved", referenceImageResolution],
+  ])("creates the reserved conversation before persisting %s reference images", async (_state, resolution) => {
+    const conversationId = "00000000-0000-4000-8000-000000000030";
+    const messageId = "00000000-0000-4000-8000-000000000031";
+    const referenceImageId = referenceImageResolution.referenceImageId;
+    repository.findWorkflow.mockResolvedValue(null);
+    repository.findActiveWorkflowByConversation.mockResolvedValue(null);
+    referenceImages.readyRows.mockResolvedValue([{
+      id: referenceImageId,
+      conversationId: null,
+      resolution,
+    }]);
+    if (resolution === null) {
+      referenceImages.analyze.mockResolvedValue([referenceImageResolution]);
+    }
+
+    await expect(service.resolveVideoIntent({
+      conversationId,
+      messageId,
+      text: "保存这些图片作为风格参考",
+      referenceImageIds: [referenceImageId],
+      videoModel: "doubao-seedance-2.0",
+    })).resolves.toMatchObject({
+      route: "workflow",
+      applied: true,
+      intent: { type: "chat" },
+      conversationId,
+      workflowId: null,
+    });
+
+    expect(conversations.createWithUserMessage).toHaveBeenCalledWith({
+      conversationId,
+      title: "保存这些图片作为风格参考",
+      messageId,
+      content: "保存这些图片作为风格参考",
+    });
+    expect(referenceImages.bindToMessage).toHaveBeenCalledWith({
+      ids: [referenceImageId],
+      conversationId,
+      messageId,
+    });
+    expect(conversations.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId,
+      messageId: `${messageId}:reference-resolved`,
+      role: "assistant",
+    }));
+    expect(repository.createWorkflow).not.toHaveBeenCalled();
   });
 
   it("routes unrelated input to chat after the explicit workflow completed", async () => {

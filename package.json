@@ -20,8 +20,14 @@
     "typecheck": "turbo run typecheck",
     "test": "pnpm run test:scripts && turbo run test",
     "test:scripts": "node --test scripts/*.test.cjs",
-    "test:connectivity:prepaid": "node scripts/video-connectivity-test.cjs prepaid",
-    "test:connectivity:paid": "node scripts/video-connectivity-test.cjs paid",
+    "test:connectivity:prepare": "pnpm --filter @chat-to-video/contracts build",
+    "test:connectivity": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs preflight",
+    "test:connectivity:planning": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs planning",
+    "test:connectivity:prepaid": "pnpm run test:connectivity:planning",
+    "test:connectivity:paid": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs paid",
+    "test:connectivity:image:upload": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:upload",
+    "test:connectivity:image:planning": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:planning",
+    "test:connectivity:image:paid": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:paid",
     "clean": "turbo run clean"
   },
   "devDependencies": {

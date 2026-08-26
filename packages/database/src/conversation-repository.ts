@@ -79,6 +79,19 @@ export class ConversationRepository {
     content: string;
   }): Promise<void> {
     await this.database.transaction(async (transaction) => {
+      const conversationRows = await transaction.select({ id: conversations.id })
+        .from(conversations)
+        .where(and(
+          eq(conversations.id, input.conversationId),
+          eq(conversations.tenantId, DEMO_TENANT_ID),
+          eq(conversations.projectId, DEMO_PROJECT_ID),
+          isNull(conversations.deletedAt),
+        ))
+        .limit(1)
+        .for("update");
+      if (!conversationRows[0]) {
+        throw new Error("Cannot append a message to a missing conversation.");
+      }
       await transaction.insert(conversationMessages).values(input).onDuplicateKeyUpdate({
         set: { messageId: input.messageId },
       });

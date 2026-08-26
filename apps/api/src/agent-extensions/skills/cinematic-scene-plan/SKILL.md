@@ -27,11 +27,13 @@ Use `supplied_video` only when approved server context includes authorized sourc
 
 For every scene specify:
 
-- A concrete `narrativeBeat` and `visualPrompt`.
+- A concrete `narrativeBeat` and `visualPrompt`. Treat `visualPrompt` as an approved semantic blueprint, not the finished provider prompt: record the subject identity, one temporally ordered action chain, the location and time, observable environmental motion, and the lighting type and direction.
 - Source type and honest `motionRequired` value.
-- Camera framing or movement with a reason.
+- One coherent camera setup in `camera`: shot size or angle plus a specific movement when movement is justified. Do not combine incompatible movements or hide a scene change inside one shot.
 - One supported transition.
 - Seedance scene-sound intent covering dialogue, narration, ambience, synchronized effects, or silence. Do not request background music or score in a scene.
+
+Do not turn `visualPrompt` into a complete Seedance template or repeat global style and quality modifiers in every field. The assets stage assembles the final prompt from this approved blueprint, the proposal, the script, and any consistency anchors. Do not invent fixed 8K/4K, 24/30 fps, or other technical promises; aspect ratio and generation quality remain governed by registered model constraints and structured runtime parameters.
 
 Set `audioMode: seedance` only for `generated_video` scenes that need scene sound, and make their `audio` explicitly state `no background music / no score`. Set `audioMode: silence` for generated images, title cards, and intentionally silent video beats. The separate full-length background track still covers silent/static sections during final composition.
 

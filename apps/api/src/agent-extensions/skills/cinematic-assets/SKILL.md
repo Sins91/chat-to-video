@@ -16,13 +16,14 @@ Prioritize approved supplied footage where it exists and is actually suitable. U
 
 Query `image_selector` and `video_selector` before naming generated visual routes. Dialogue and narration are part of Seedance scene sound; do not select or plan a separate TTS route. Treat unavailable selector results as blockers or reasons to revise the plan, not permission to invent a provider.
 
-When an available APIMart generator is selected, read [APIMart generation guidance](references/apimart-generation-guidance.md) before writing its prompt.
+When an available APIMart generator is selected, read [APIMart generation guidance](references/apimart-generation-guidance.md) before writing its prompt. That reference is the single source for final Seedance prompt ordering and conditional prompt treatment.
 
 ## Cover every scene
 
 - Give every scene exactly one required visual asset. Never add per-scene audio entries.
 - Keep every asset `status: planned`.
-- Write prompts that preserve approved subject identity, style, palette, lighting, camera language, and continuity.
+- Assemble prompts from approved upstream facts; do not reinterpret the story, subject identity, action, camera, setting, lighting, or style at this stage.
+- For generated video, follow the exact ordered positive-prompt contract in the APIMart reference. Keep the prompt compact enough for the Worker to append validated scene-sound instructions within the shared character limit.
 - Preserve the approved Chinese region in every prompt through concrete visible details such as people, built environment, transport, signage, wardrobe, props, and customs. Do not let generic provider defaults introduce foreign or mixed-regional cues.
 - Use actual video for motion-required beats. Generated stills and title cards must not silently replace approved motion.
 - Separate source selects from generated support inserts and keep inserts limited to places where they add narrative value.
@@ -35,7 +36,7 @@ Set `seedanceAudioDirection` from the approved sound direction. For every genera
 
 Use only reviewed pricing. Sum `totalEstimatedCostUsd` from the manifest entries and do not imply it is a live quote when pricing is unavailable. Score `slideshowRisk` from 0–10 based on repeated stills, decorative coverage, weak or unjustified motion, repeated layouts, and typography dependence.
 
-Before returning, verify scene coverage, source authorization, provider availability, prompt continuity, music resolution, arithmetic, motion-promise preservation, and the absence of claimed files.
+Before returning, verify scene coverage, source authorization, provider availability, prompt order, one-shot coherence, observable actions, specific style, limited detail modifiers, prompt continuity, music resolution, arithmetic, motion-promise preservation, and the absence of claimed files.
 
 ## Consume approved consistency anchors
 

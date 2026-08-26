@@ -10,6 +10,8 @@ description: Use for compose-stage planning and review of the registered FFmpeg 
 
 Preserve the approved edit decisions when the workflow prepares or reviews the Worker render handoff. The Agent does not execute FFmpeg, build object keys, or mark a render successful.
 
+Consume approved assets and edit decisions as immutable creative inputs. Do not generate or rewrite Seedance prompts during compose; only verify that the handoff preserves the approved media, timing, and delivery requirements.
+
 ## Check hard requirements
 
 - Require the registered `video_compose` capability and every conditional capability implied by the approved plan.

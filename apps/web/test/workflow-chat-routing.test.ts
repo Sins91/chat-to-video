@@ -197,6 +197,21 @@ describe("workflow and chat routing", () => {
     expect(provider).not.toContain("if (created.conversationId === loadedConversationId) await refresh();\n      notifyConversationHistoryChanged();");
   });
 
+  it("does not navigate to a reserved conversation id when intent resolution fails", async () => {
+    const provider = await readFile(
+      resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"),
+      "utf8",
+    );
+
+    const failureBranch = provider.slice(
+      provider.indexOf("} catch (error: unknown) {", provider.indexOf("const resolveControlIntent")),
+      provider.indexOf("} finally {", provider.indexOf("const resolveControlIntent")),
+    );
+    expect(failureBranch).toContain('route: "workflow",');
+    expect(failureBranch).toContain("conversationId: null,");
+    expect(failureBranch).not.toContain("preferredConversationId ?? loadedConversationId");
+  });
+
   it("keeps independent in-flight chat sessions alive when switching conversations", async () => {
     const [panel, conversation] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
