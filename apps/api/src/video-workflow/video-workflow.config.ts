@@ -1,4 +1,4 @@
-import type { StorageConfig } from "@chat-to-video/storage";
+import { loadStorageConfigFromEnvironment, type StorageConfig } from "@chat-to-video/storage";
 
 const required = (name: string): string => {
   const value = process.env[name]?.trim();
@@ -19,11 +19,4 @@ export const loadRedisUrl = (): string => required("REDIS_URL");
 export const isCinematicCreationEnabled = (): boolean =>
   booleanValue("CINEMATIC_CREATION_ENABLED", true);
 
-export const loadStorageConfig = (): StorageConfig => ({
-  endpoint: required("S3_ENDPOINT"),
-  region: required("S3_REGION"),
-  accessKeyId: required("S3_ACCESS_KEY"),
-  secretAccessKey: required("S3_SECRET_KEY"),
-  bucket: required("S3_BUCKET"),
-  forcePathStyle: booleanValue("S3_FORCE_PATH_STYLE", true),
-});
+export const loadStorageConfig = (): StorageConfig => loadStorageConfigFromEnvironment(process.env);

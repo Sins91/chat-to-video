@@ -37,7 +37,7 @@ Chat-to-Video 将聊天、创作决策与异步媒体生产整合为一条确定
 | 暂停、恢复与重启 | 审批点可暂停和恢复，可从可重启阶段创建新分支并保留 checkpoint 历史 |
 | 异步媒体执行 | BullMQ 按资源特征隔离 Agent、图片、渲染和清理任务，Worker 独立于在线 API |
 | 可恢复进度流 | SSE 传输 Agent 文本和任务进度，重连后先恢复快照，再补发增量事件 |
-| 媒体与对象存储 | FFmpeg、FFprobe 与 Sharp 负责安全的媒体处理，MinIO/S3 保存素材和成片 |
+| 媒体与对象存储 | FFmpeg、FFprobe 与 Sharp 负责安全处理；本地 MinIO、生产阿里云 OSS 保存素材和成片 |
 | 全栈类型边界 | Web、API 与 Worker 复用 `@chat-to-video/contracts` 中的 Zod Schema 和推导类型 |
 
 ## 从对话到成片
@@ -49,7 +49,7 @@ Chat-to-Video 将聊天、创作决策与异步媒体生产整合为一条确定
    ↓
 素材规划（审核）→ 异步素材生成 → 素材结果（再次审核）
    ↓
-剪辑方案 → FFmpeg 合成 → MinIO/S3 成片 → SSE 完成事件
+剪辑方案 → FFmpeg 合成 → ObjectStorage 成片 → SSE 完成事件
 ```
 
 - **审核优先**：付费素材生成和最终合成只在对应审批完成后发生。
@@ -70,7 +70,7 @@ flowchart LR
     API --> MYSQL["MySQL<br/>业务事实"]
     API --> REDIS["Redis<br/>快照与事件"]
     API --> QUEUE["BullMQ<br/>异步任务"]
-    API --> OBJECTS["MinIO / S3<br/>媒体对象"]
+    API --> OBJECTS["MinIO / 阿里云 OSS<br/>媒体对象"]
 
     QUEUE --> WORKER["独立 Worker"]
     WORKER --> MEDIA["FFmpeg / FFprobe / Sharp"]
@@ -79,7 +79,7 @@ flowchart LR
     WORKER <--> OBJECTS
 ```
 
-核心部署形态是“模块化单体 NestJS API + 独立 BullMQ Worker + Next.js Web”。耗时媒体计算不会进入 Web 或 API 请求进程；MySQL 是业务事实来源，Redis 和 MinIO/S3 分别承担短期运行状态与媒体二进制。
+核心部署形态是“模块化单体 NestJS API + 独立 BullMQ Worker + Next.js Web”。耗时媒体计算不会进入 Web 或 API 请求进程；MySQL 是业务事实来源，Redis 和对象存储分别承担短期运行状态与媒体二进制。业务层只依赖 `ObjectStorage`：本地使用 MinIO，生产使用阿里云 OSS，不双写也不自动降级。
 
 ## 快速开始
 
@@ -101,7 +101,18 @@ cp .env.example .env.local
 
 ```dotenv
 APIMART_API_KEY=your-api-key
+AUTH_ENABLED=true
+INTERNAL_ACCESS_PASSWORD=<非空的内部共享密码，生产环境建议使用强密码>
+AUTH_SESSION_SECRET=<至少32字符的独立随机值>
+INTERNAL_API_TOKEN=<至少32字符的独立随机值>
+STORAGE_PROVIDER=minio
+S3_ENDPOINT=http://localhost:9000
+S3_PUBLIC_ENDPOINT=http://localhost:9000
 ```
+
+`AUTH_SESSION_SECRET` 用于签名 7 天登录会话，`INTERNAL_API_TOKEN` 只用于 Web 到 API
+的服务端认证。两者不得与共享密码复用，也不得提交到 Git。本地开发可显式设置
+`AUTH_ENABLED=false` 关闭门禁；生产环境禁止关闭。
 
 构建并启动 MySQL、Redis、MinIO、数据库迁移、API、Worker 与 Web：
 
@@ -122,6 +133,38 @@ docker compose --env-file .env.local up --build
 ```bash
 docker compose down
 ```
+
+### 导出 Linux 部署镜像
+
+一键拉取 MySQL、Redis，构建数据库迁移、API、Worker、Web 的
+`linux/amd64` 镜像，并导出为单个 gzip 压缩包：
+
+```bash
+pnpm docker:images:export
+```
+
+产物位于 `outputs/images/chat-to-video-images-linux-amd64.tar.gz`。该归档不包含
+MinIO Server 或 MinIO Client 镜像，适用于使用阿里云 OSS 的 ECS 部署。例如：
+
+```bash
+scp outputs/images/chat-to-video-images-linux-amd64.tar.gz <user>@<ecs-host>:/path/to/deployment/
+ssh <user>@<ecs-host>
+cd /path/to/deployment
+docker load -i chat-to-video-images-linux-amd64.tar.gz
+```
+
+脚本要求 Docker daemon 使用 Linux 容器。只有全部镜像成功拉取或构建并通过
+`linux/amd64` 平台校验后，才会替换已有归档。
+
+Worker 构建时默认通过 `http://mirrors.aliyun.com` 安装 Debian 软件包，镜像不可用
+时会自动回退到 Debian 官方源。也可在单独构建 Worker 时覆盖镜像站：
+
+```bash
+docker compose build --build-arg DEBIAN_MIRROR=http://<mirror-host> worker
+```
+
+Docker Hub 基础镜像以及 MySQL、Redis 的拉取加速仍由构建主机的 Docker daemon
+`registry-mirrors` 配置负责，仓库不硬编码与账户、地域相关的专属加速地址。
 
 ## 本地开发
 
@@ -170,6 +213,7 @@ pnpm deps:install:cn
 | `pnpm lint` | 执行 ESLint 检查 |
 | `pnpm typecheck` | 执行 TypeScript 类型检查 |
 | `pnpm test` | 运行脚本测试与各 workspace 测试 |
+| `pnpm test:storage:connectivity` | 经显式写删确认后验证当前对象存储，不调用模型 |
 | `pnpm db:seed:history` | 幂等写入对话历史演示数据 |
 | `pnpm sdk:docs:ai -- "ToolLoopAgent"` | 搜索当前锁定 AI SDK 版本附带的文档 |
 
@@ -184,7 +228,7 @@ apps/
 packages/
 ├── contracts/    跨边界 Zod Schema、DTO、队列与 SSE 协议
 ├── database/     Drizzle Schema、迁移与数据访问
-├── storage/      S3/MinIO 接口与对象键约束
+├── storage/      MinIO/阿里云 OSS 适配器、统一配置与对象键约束
 ├── media/        FFmpeg、FFprobe、Sharp 安全封装
 ├── tools/        可复用工具定义与适配能力
 └── config/       共享工程配置
@@ -201,7 +245,7 @@ docs/             架构决策、实施方案与验证报告
 - 租户与项目命名空间仍固定为 `tenant/demo/project/demo`，客户端不能指定真实租户或项目。
 - APIMart 是受内部 `ModelGateway` 隔离的默认模型网关；工具调用、结构化输出、限流、重试、错误码和用量语义仍需在真实账户上完成完整门禁验证。
 - APIMart 视频与素材生成会消耗真实额度，不建议在缺少配额、成本和审计策略时开放给非受信用户。
-- 身份认证、资源级授权、生产密钥管理、可观测性和灾备尚未形成完整生产方案。
+- 当前只有内部共享密码门禁，个人身份、资源级授权、生产密钥管理、可观测性和灾备尚未形成完整生产方案。
 - `package.json` 当前版本为 `0.0.0`，暂无稳定 API、迁移兼容性或发布节奏承诺。
 
 ## 延伸阅读

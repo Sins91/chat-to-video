@@ -13,6 +13,7 @@
     "deps:install:cn": "node scripts/install-with-registry-fallback.cjs",
     "db:seed:history": "pnpm --filter @chat-to-video/database db:seed:history",
     "sdk:docs:ai": "node scripts/search-sdk-docs.cjs ai",
+    "docker:images:export": "node scripts/export-docker-images.cjs",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "dev:chat": "node scripts/run-chat-dev.cjs",
@@ -28,6 +29,8 @@
     "test:connectivity:image:upload": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:upload",
     "test:connectivity:image:planning": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:planning",
     "test:connectivity:image:paid": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:paid",
+    "test:storage:connectivity:prepare": "pnpm --filter @chat-to-video/storage build",
+    "test:storage:connectivity": "pnpm run test:storage:connectivity:prepare && node scripts/storage-connectivity-test.cjs",
     "test:templates:planning:prepare": "pnpm --filter @chat-to-video/api build",
     "test:templates:planning": "pnpm run test:templates:planning:prepare && node scripts/template-prompt-planning-test.cjs planning",
     "clean": "turbo run clean"

@@ -1,4 +1,5 @@
 import { fetchUpstreamRead } from "@/lib/upstream-readiness";
+import { withInternalApiAuthentication } from "@/lib/internal-auth/upstream";
 
 const DEFAULT_API_BASE_URL = "http://localhost:4101";
 
@@ -14,6 +15,7 @@ export const proxyConversationRequest = async (request: Request, path: string): 
     const requestInit: RequestInit = {
       method: request.method,
       cache: "no-store",
+      headers: withInternalApiAuthentication(),
       signal: request.signal,
     };
     const upstream = request.method === "GET"

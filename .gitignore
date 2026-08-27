@@ -21,6 +21,8 @@ tmp/
 temp/
 workdir/
 artifacts/
+/output/
+/outputs/
 
 # Local generated reports
 /openmontage-cinematic-skills-tools.xlsx

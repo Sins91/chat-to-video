@@ -1,472 +1,254 @@
-# Chat-to-Video 全新 Linux 服务器部署指南
+# Chat-to-Video Linux 生产部署指南
 
-本文说明如何在一台全新的 Linux 服务器上，以 Docker Compose 部署当前仓库的 Web、API、Worker、MySQL、Redis 和 MinIO。流程以 Ubuntu 24.04 LTS、单机、单域名/双域名、Docker Compose V2 为示例。
+本文说明如何在与阿里云 OSS Bucket 同地域的 ECS 上，以 Docker Compose 部署 Web、API、Worker、MySQL 和 Redis。生产对象存储使用预先创建的私有 OSS Bucket；本地开发仍使用基础 `compose.yaml` 中的 MinIO。
 
-> [!IMPORTANT]
-> 当前项目处于 **Engineering Preview** 阶段，适合内网、测试和受控演示，不应直接作为公网生产系统开放。仓库目前尚未完成身份认证、资源级授权、生产密钥管理、完整可观测性和灾备；租户/项目命名空间仍固定为 `tenant/demo/project/demo`，模型和视频生成还会产生真实费用。
-
-## 1. 部署结果与拓扑
-
-推荐在单机上保持以下边界：
+## 1. 生产拓扑
 
 ```text
-Internet
-   │  HTTPS 443
-   ▼
-Nginx（宿主机）
-   ├── app.example.com   → 127.0.0.1:4000 → Next.js Web → NestJS API
-   └── media.example.com → 127.0.0.1:9000 → MinIO S3 API
-
-Docker Compose 内部网络
-   ├── Web
-   ├── API
-   ├── Worker（FFmpeg/FFprobe/Sharp）
-   ├── MySQL（业务事实）
-   ├── Redis AOF（BullMQ、工作流快照与事件）
-   └── MinIO（素材、中间产物和成片）
+浏览器 → HTTPS 反向代理 → Next.js Web → NestJS API
+                                      ├→ MySQL
+                                      ├→ Redis / BullMQ
+                                      └→ OSS（内网检查、公网 V4 签名）
+                                              ↑
+                                     Worker 走内网 Endpoint
 ```
 
-公网只开放 SSH、HTTP 和 HTTPS。MySQL、Redis、API、MinIO Console 不应直接暴露到公网。Web 通过服务端 BFF 访问 API；浏览器使用 API 签发的 MinIO 预签名 URL 直传和下载，因此 `S3_ENDPOINT` 必须是浏览器可访问的 HTTPS 地址。
+API 通过 OSS 公网 Endpoint 签发浏览器可访问的 V4 上传/下载 URL，但对象检查和服务端读写使用内网 Endpoint。Worker 全部使用内网 Endpoint。生产覆盖文件会停用 MinIO 服务和 `minio-init` 依赖，不创建 MinIO 数据卷，也不会把 OSS 失败回退到 MinIO。
 
-## 2. 上线前必须确认
+公网只开放 SSH、HTTP 和 HTTPS。MySQL、Redis、API 仅绑定回环地址。OSS Bucket 保持私有，浏览器只能使用短时效签名 URL。
 
-### 2.1 当前仓库状态门禁
+## 2. 前置条件
 
-部署固定的 Git tag 或 commit，不要直接部署会继续变化的分支。执行：
+- Ubuntu 24.04 LTS 或等价 Linux；
+- Docker Engine 与 Docker Compose V2；
+- 与目标 OSS Bucket 同地域的 ECS；
+- 已备案并解析到服务器的 Web 域名；
+- 已预先创建的私有 OSS Bucket；
+- 已创建仅允许访问目标 Bucket 受控前缀的 RAM 用户 AccessKey；
+- 可用的模型服务配置；
+- MySQL、Redis 和 OSS 的备份与恢复方案。
+
+固定部署 Git tag 或 commit，不要直接部署持续变化的分支。部署前在评审环境完成类型检查、Lint、测试与镜像构建。
+
+## 3. 安装 Docker
+
+按 Docker 官方仓库安装 Engine 与 Compose 插件，并确认：
 
 ```bash
-git status --short
-git rev-parse HEAD
-docker compose --env-file .env.local config --quiet
-docker compose --env-file .env.local build database-migrate api worker web
+docker version
+docker compose version
 ```
 
-只有配置解析和全部镜像构建成功后才能继续。
-
-> [!WARNING]
-> 截至本文编写时，`infra/docker/Dockerfile` 的依赖阶段未复制 `packages/tools/package.json`，API 构建阶段也未复制 `packages/tools` 及其依赖的 `packages/media`。但 `apps/api/package.json` 已依赖 `@chat-to-video/tools`，因此当前版本很可能无法通过上述镜像构建门禁。部署前应先在代码库中修复并走正常评审；不要在服务器上临时手改后跳过版本管理。
-
-### 2.2 生产就绪门禁
-
-若目标是正式公网生产环境，还必须在上线前补齐并验证：
-
-- 用户身份认证、租户和项目级授权；
-- 密钥托管与轮换，且日志不输出 Token、签名 URL 或敏感内容；
-- APIMart 工具调用、结构化输出、超时、限流、重试、用量与错误语义的真实账户验收；
-- 费用上限、并发上限、内容安全和滥用防护；
-- MySQL、Redis AOF、MinIO 的异机备份及恢复演练；
-- 日志、指标、告警、磁盘容量和 Worker 资源监控；
-- 发布、数据库迁移兼容性和回滚方案。
-
-未满足这些条件时，按“受控验证环境”管理：限制访问来源，不对不受信用户开放。
-
-## 3. 服务器与域名准备
-
-建议起步规格：
-
-- Ubuntu 24.04 LTS x86_64；
-- 4 核 CPU、16 GiB 内存、100 GiB 以上 SSD；
-- Worker 的 CPU、内存和临时磁盘按并发及素材大小继续扩容；
-- 两个解析到服务器公网 IP 的域名，例如 `app.example.com` 和 `media.example.com`；
-- 云安全组只放行 TCP `22`、`80`、`443`，SSH 最好再限制来源 IP。
-
-视频和中间产物会快速消耗空间。正式使用前应根据保留周期评估容量，并为 Docker 数据目录、MySQL 和 MinIO 分配独立磁盘或独立挂载点。
-
-## 4. 初始化 Linux
-
-以下命令以具备 `sudo` 权限的部署用户执行：
+生产命令统一使用两个 Compose 文件：
 
 ```bash
-sudo apt update
-sudo apt upgrade -y
-sudo apt install -y ca-certificates curl git nginx openssl
-sudo timedatectl set-timezone Asia/Shanghai
+COMPOSE="docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml"
 ```
 
-按 [Docker 官方 Ubuntu 安装文档](https://docs.docker.com/engine/install/ubuntu/) 配置 Docker 官方 apt 仓库，然后安装：
+`compose.production.yaml` 已受版本控制，不要在服务器上另写同名覆盖文件。
 
-```bash
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo systemctl enable --now docker
-sudo docker run --rm hello-world
-sudo docker compose version
+## 4. 创建 OSS Bucket
+
+在与 ECS 相同的 OSS Region 创建全新 Bucket，例如 `oss-cn-hangzhou`。要求：
+
+- ACL 为私有；
+- 禁止公共读写；
+- 不迁移或挂载本地 MinIO 数据；
+- 按业务保留期启用版本控制、生命周期和备份；
+- Bucket 名和 Region 与环境配置完全一致。
+
+建议给应用专用 RAM 用户绑定仅覆盖目标 Bucket 命名空间的策略。当前演示命名空间为 `tenant/demo/project/demo/*`，示例策略如下；上线真实多租户前应改为真实授权边界：
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetObject", "oss:PutObject", "oss:DeleteObject"],
+      "Resource": ["acs:oss:*:*:<OSS_BUCKET>/tenant/demo/project/demo/*"]
+    }
+  ]
+}
 ```
 
-可选地允许部署用户使用 Docker：
+不要给 RAM 用户授予 `oss:*`。创建专用 AccessKey 后，通过部署环境或密钥管理服务注入 API 和 Worker；不要复用主账号 AccessKey，不要把真实凭证提交到 Git、构建参数、镜像、客户端代码或日志。
+
+## 5. 配置 OSS CORS
+
+在 OSS 控制台为 Bucket 配置 CORS：
+
+- 来源：真实 Web Origin，例如 `https://app.example.com`，不得使用 `*`；
+- 允许方法：`GET`、`PUT`、`HEAD`；
+- 允许请求头：至少 `Content-Type`，以及浏览器实际发送的必要 OSS 签名头；
+- 暴露响应头：按前端需要配置 `ETag`；
+- 缓存时间：按变更频率设置有限值。
+
+上传签名包含 `Content-Type`，浏览器 PUT 时必须发送与申请签名时完全一致的值，否则 OSS 会拒绝签名。
+
+## 6. 生产环境变量
+
+复制模板并填写真实值：
 
 ```bash
-sudo usermod -aG docker "$USER"
-```
-
-重新登录后生效。`docker` 组等同于较高的主机权限，只应授予受信运维用户。
-
-## 5. 获取代码
-
-推荐把应用放在 `/opt/chat-to-video`：
-
-```bash
-sudo install -d -o "$USER" -g "$USER" /opt/chat-to-video
-git clone <YOUR_REPOSITORY_URL> /opt/chat-to-video
-cd /opt/chat-to-video
-git fetch --tags
-git checkout <RELEASE_TAG_OR_COMMIT>
-git status --short
-git rev-parse HEAD
-```
-
-服务器无需额外安装 Node.js、pnpm、FFmpeg 或 FFprobe；当前多阶段镜像固定 Node.js 26.7.0 和 pnpm 11.20.0，Worker 镜像安装 FFmpeg 与 Noto CJK 字体。
-
-## 6. 创建服务器环境变量
-
-复制模板并限制权限：
-
-```bash
-cd /opt/chat-to-video
 cp .env.example .env.local
 chmod 600 .env.local
 ```
 
-生成 URI 安全的随机值。每条命令分别保存输出，再填入 `.env.local`，不要把真实值提交到 Git：
-
-```bash
-openssl rand -hex 24
-openssl rand -hex 32
-openssl rand -hex 32
-```
-
-至少核对以下配置。示例值必须全部替换：
+对象存储至少配置：
 
 ```dotenv
 NODE_ENV=production
-
-WEB_PORT=4000
-API_PORT=4101
-
-MYSQL_PORT=4002
-MYSQL_DATABASE=chat_to_video
-MYSQL_USER=chat_to_video
-MYSQL_PASSWORD=<HEX_DATABASE_PASSWORD>
-MYSQL_ROOT_PASSWORD=<HEX_DATABASE_ROOT_PASSWORD>
-
-REDIS_PORT=4003
-
-S3_PORT=9000
-S3_CONSOLE_PORT=9001
-S3_REGION=us-east-1
-S3_ACCESS_KEY=chat_to_video
-S3_SECRET_KEY=<HEX_MINIO_SECRET>
-S3_BUCKET=chat-to-video
-S3_FORCE_PATH_STYLE=true
-
-LLM_PROVIDER=apimart
-LLM_TOOL_CALLING_ENABLED=true
-CINEMATIC_SINGLE_PASS_STAGES=
-CINEMATIC_CREATION_ENABLED=true
-
-APIMART_BASE_URL=https://api.apimart.ai/v1
-APIMART_API_KEY=<REAL_APIMART_API_KEY>
-APIMART_CHAT_MODEL=gpt-5-mini
-APIMART_TIMEOUT_MS=600000
-APIMART_STORYBOARD_TIMEOUT_MS=120000
-APIMART_VIDEO_MODEL=doubao-seedance-2.0
-APIMART_VIDEO_DURATION_SECONDS=10
-APIMART_REFERENCE_INPUTS_VERIFIED=false
-APIMART_VIDEO_POLL_INTERVAL_MS=5000
-APIMART_VIDEO_RESULT_HOSTS=apimart.ai,getapib.org
-APIMART_VIDEO_TASK_TIMEOUT_MS=900000
+STORAGE_PROVIDER=aliyun-oss
+OSS_REGION=oss-cn-hangzhou
+OSS_BUCKET=<私有 Bucket 名>
+OSS_INTERNAL_ENDPOINT=https://oss-cn-hangzhou-internal.aliyuncs.com
+OSS_PUBLIC_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
+OSS_ACCESS_KEY_ID=<专用 RAM 用户 AccessKey ID>
+OSS_ACCESS_KEY_SECRET=<专用 RAM 用户 AccessKey Secret>
 ```
 
-注意：
+Endpoint 必须与 `OSS_REGION` 匹配。生产公网 Endpoint 必须使用 HTTPS；当前实现只接受标准 `aliyuncs.com` OSS Endpoint，不接受 CDN 或自定义 CNAME。
 
-- 使用十六进制密码可避免 `DATABASE_URL` 中的 URI 特殊字符转义问题；
-- API 在选择 APIMart 时仍会强制要求 `APIMART_API_KEY`、`APIMART_BASE_URL` 和 `APIMART_CHAT_MODEL`；
-- Worker 还强制要求 APIMart 视频配置、数据库、Redis、S3 和 `FFMPEG_PATH`，现有 Compose 已注入其余连接值；
-- `APIMART_REFERENCE_INPUTS_VERIFIED` 只有在引用图输入集成合同验收通过后才能改为 `true`；
-- `.env.local` 同时被 Compose 用于变量插值，并被 Worker 的 `env_file` 引用，文件名不能随意省略。
+还需填写数据库、Redis、模型网关和内部认证配置。安全随机值可用：
 
-## 7. 添加单机部署覆盖文件
-
-现有 `compose.yaml` 面向本地体验，会把 MySQL、Redis、API、Web 和 MinIO 端口发布到所有网卡。服务器上新增 `compose.production.yaml`，只绑定到回环地址，并让 API 使用公网 MinIO 域名签发 URL：
-
-```yaml
-services:
-  mysql:
-    ports: !override
-      - "127.0.0.1:${MYSQL_PORT:-4002}:${MYSQL_PORT:-4002}"
-
-  redis:
-    ports: !override
-      - "127.0.0.1:${REDIS_PORT:-4003}:${REDIS_PORT:-4003}"
-
-  minio:
-    ports: !override
-      - "127.0.0.1:${S3_PORT:-9000}:9000"
-      - "127.0.0.1:${S3_CONSOLE_PORT:-9001}:9001"
-
-  api:
-    environment:
-      S3_ENDPOINT: "https://${MEDIA_DOMAIN}"
-    ports: !override
-      - "127.0.0.1:${API_PORT:-4101}:${API_PORT:-4101}"
-
-  web:
-    ports: !override
-      - "127.0.0.1:${WEB_PORT:-4000}:${WEB_PORT:-4000}"
+```bash
+openssl rand -hex 32
 ```
-
-并在 `.env.local` 增加：
 
 ```dotenv
-MEDIA_DOMAIN=media.example.com
+AUTH_ENABLED=true
+INTERNAL_ACCESS_PASSWORD=<非空的共享密码，生产环境建议使用强密码>
+AUTH_SESSION_SECRET=<至少32字符的随机值>
+INTERNAL_API_TOKEN=<另一个至少32字符的随机值>
+MYSQL_PASSWORD=<强随机密码>
+MYSQL_ROOT_PASSWORD=<强随机密码>
+APIMART_API_KEY=<服务端密钥>
 ```
 
-Compose 的 `!override` 标签需要较新的 Compose V2。用下列命令确认最终结果中没有 `0.0.0.0` 端口绑定，也不要把展开后的配置保存或上传，因为其中含密钥：
+密码、Token、OSS AccessKey 和签名 URL 不得进入 Git、客户端代码、日志或错误响应。若使用 `.env.local` 注入，必须保持 `chmod 600`，并确保文件不进入镜像构建上下文和备份归档。
+
+## 7. 校验 Compose
+
+在启动前检查最终配置：
 
 ```bash
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml config --quiet
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml config
+$COMPOSE config --quiet
+$COMPOSE config
 ```
 
-## 8. 配置 Nginx 与 HTTPS
+确认：
 
-为 `app.example.com` 创建站点配置。SSE 需要关闭代理缓冲并提高读取超时：
+- API 和 Worker 的 `STORAGE_PROVIDER` 为 `aliyun-oss`；
+- 两者接收相同 OSS Region、Bucket、Endpoint 和 AccessKey 配置；
+- API/Worker 不再依赖 `minio-init`；
+- MinIO 服务带 `local-only` profile，不在生产默认服务集合中；
+- MySQL、Redis、API、Web 只绑定 `127.0.0.1`；
+- 展开的 Compose 配置只在受控终端检查，不保存、不上传且不写入日志。
 
-```nginx
-server {
-    listen 80;
-    server_name app.example.com;
+## 8. 构建与启动
 
-    location / {
-        proxy_pass http://127.0.0.1:4000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_read_timeout 3600s;
-    }
-}
-```
-
-为 `media.example.com` 创建 MinIO S3 API 代理。上传由浏览器直接执行，必须允许业务所需的最大文件大小并关闭请求缓冲：
-
-```nginx
-server {
-    listen 80;
-    server_name media.example.com;
-
-    client_max_body_size 2g;
-
-    location / {
-        proxy_pass http://127.0.0.1:9000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_request_buffering off;
-        proxy_buffering off;
-        proxy_read_timeout 3600s;
-    }
-}
-```
-
-启用配置前先检查：
+构建应用镜像：
 
 ```bash
-sudo nginx -t
-sudo systemctl enable --now nginx
-sudo systemctl reload nginx
+$COMPOSE build database-migrate api worker web
 ```
 
-使用受信 ACME 客户端为两个域名申请证书，并配置 HTTP 自动跳转 HTTPS。可参考 [Nginx 官方代理文档](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)。证书生效后再次确认 `.env.local` 的 `MEDIA_DOMAIN` 与证书域名完全一致。
-
-浏览器从 `app.example.com` 直传到 `media.example.com` 属于跨域请求，因此还必须在 MinIO 初始化后设置 bucket CORS；具体命令见下一节。
-
-## 9. 构建并启动
-
-先执行不会产生第三方模型费用的静态门禁：
+先启动有状态基础设施，再执行迁移：
 
 ```bash
-cd /opt/chat-to-video
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml config --quiet
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml build database-migrate api worker web
+$COMPOSE up -d mysql redis
+$COMPOSE run --rm database-migrate
 ```
 
-构建成功后启动基础设施：
+确认迁移成功后启动应用：
 
 ```bash
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml up -d mysql redis minio minio-init
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml ps
+$COMPOSE up -d api worker web
+$COMPOSE ps
 ```
 
-为 bucket 设置只允许真实 Web 域名的 CORS 规则：
+不要在生产命令中启用 `local-only` profile；该 profile 只为本地 MinIO 保留。
+
+## 9. HTTPS 反向代理
+
+只将 Web 域名反向代理到 `127.0.0.1:4000`。浏览器业务 API 经 Next.js BFF 转发；`127.0.0.1:4101` 不直接暴露公网。上传和下载由浏览器直接请求 OSS 公网 HTTPS Endpoint，因此无需为 OSS 在本机配置 Nginx 代理。
+
+反向代理需保留流式响应语义，关闭 SSE 路径的代理缓冲，并设置合理的长连接超时。TLS 证书续期应纳入监控。
+
+## 10. 无模型费用的存储验收
+
+验收脚本只创建一个唯一 `temp` 对象，执行 V4 签名上传、Head、服务端读取、签名下载，并在 `finally` 中精确删除该对象。它不调用模型，但会真实写入和删除 OSS，因此必须在 RAM 用户权限、AccessKey 注入、Bucket 和 CORS 配置完成后人工运行：
 
 ```bash
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml \
-  run --rm --entrypoint /bin/sh minio-init -c '
-    mc alias set local http://minio:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" &&
-    mc cors set "local/$S3_BUCKET" -
-  ' <<'XML'
-<CORSConfiguration>
-  <CORSRule>
-    <AllowedOrigin>https://app.example.com</AllowedOrigin>
-    <AllowedMethod>GET</AllowedMethod>
-    <AllowedMethod>PUT</AllowedMethod>
-    <AllowedMethod>HEAD</AllowedMethod>
-    <AllowedHeader>*</AllowedHeader>
-    <ExposeHeader>ETag</ExposeHeader>
-    <MaxAgeSeconds>3600</MaxAgeSeconds>
-  </CORSRule>
-</CORSConfiguration>
-XML
+STORAGE_CONNECTIVITY_CONFIRM=WRITE_AND_DELETE_TEMP_OBJECT pnpm test:storage:connectivity
 ```
 
-把域名替换为真实 Web 域名，并按 [MinIO 官方 CORS 文档](https://docs.min.io/aistor/administration/cors-configuration/) 验证生效。不要使用允许任意来源、任意方法的生产配置。
+真实 OSS 验收应在目标 ECS 或等价的受控部署环境执行。脚本不会输出签名 URL、凭证或对象内容；验收结束后确认临时对象已删除，并按组织策略轮换或托管 AccessKey。
 
-确认三项基础设施健康后，执行一次数据库迁移：
+随后人工验证：
+
+1. `GET /health` 匿名返回成功；
+2. 未登录页面跳转登录页，未登录 BFF 返回 `AUTH_REQUIRED`；
+3. 登录后上传小型图片，浏览器 PUT 的 `Content-Type` 与签名一致；
+4. API 能经内网 Endpoint 完成 Head，Worker 能读取并写回派生产物；
+5. 浏览器下载 URL 使用 OSS 公网 HTTPS Endpoint；
+6. Bucket 中没有遗留的 connectivity 临时对象。
+
+## 11. 日常运维与备份
+
+持续监控：
+
+- MySQL 容量、慢查询、备份和恢复演练；
+- Redis AOF、BullMQ 积压、Mastra 快照与内存；
+- OSS 请求错误、容量、生命周期、版本控制和备份状态；
+- OSS AccessKey 有效性、RAM 权限范围与系统时钟；
+- API/Worker 错误率、任务失败率和磁盘空间。
+
+MySQL 是业务事实来源，OSS 保存媒体对象，Redis 保存队列、Mastra 快照和短期事件。三者都要备份并定期做恢复演练。仅备份 Docker volume 不包含 OSS，也不能天然提供跨组件一致时间点。
+
+升级流程：
 
 ```bash
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml run --rm database-migrate
-```
-
-迁移会修改数据库。每次发布前都应先备份，并阅读本次新增迁移；不要在生产环境使用 ORM 自动同步。
-
-最后启动应用：
-
-```bash
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml up -d api worker web
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml ps
-```
-
-Compose 的单机生产用法与覆盖文件模式可参考 [Docker 官方说明](https://docs.docker.com/compose/how-tos/production/)。
-
-## 10. 验收
-
-### 10.1 不产生模型费用的检查
-
-```bash
-curl --fail --silent http://127.0.0.1:4101/health
-curl --fail --head http://127.0.0.1:4000/
-curl --fail --silent http://127.0.0.1:9000/minio/health/live
-curl --fail --silent https://app.example.com/
-curl --fail --silent https://media.example.com/minio/health/live
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml ps
-```
-
-API 健康检查应返回：
-
-```json
-{"status":"ok"}
-```
-
-再检查最近日志，避免输出完整配置或预签名 URL：
-
-```bash
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml logs --tail=200 api worker web database-migrate
-```
-
-### 10.2 业务检查
-
-1. 打开 `https://app.example.com/studio/agent`；
-2. 创建普通对话，确认 Web 到 API 的代理正常；
-3. 上传一个小型测试图片，确认预签名 URL、HTTPS、MinIO CORS 和对象存在性检查正常；
-4. 确认 Worker 已在 Redis 发布能力快照，队列消费者无启动错误；
-5. 最后才执行会调用模型或生成视频的付费链路，并预先确认 APIMart 余额和成本上限。
-
-不要把“容器 healthy”当作完整业务验收。API `/health` 当前只返回进程存活状态，不会深度检查 MySQL、Redis、MinIO、Worker 或 APIMart。
-
-## 11. 日常运维
-
-常用命令：
-
-```bash
-cd /opt/chat-to-video
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml ps
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml logs -f --tail=200 api worker web
-docker stats
-df -h
-```
-
-停止应用但保留数据卷：
-
-```bash
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml down
-```
-
-> [!CAUTION]
-> 不要执行 `docker compose down -v`，它会删除 Compose 管理的 MySQL、Redis 和 MinIO 数据卷。也不要在未核实目标和备份的情况下运行 Docker 全局 prune。
-
-建议至少监控：
-
-- 主机 CPU、内存、磁盘、inode 和 Docker daemon；
-- API 5xx、SSE 断连、请求延迟；
-- BullMQ 等待、运行、失败和超时任务；
-- Worker CPU/内存、FFmpeg 超时和临时目录；
-- MySQL 连接、慢查询、容量；
-- Redis AOF 状态、内存和持久化错误；
-- MinIO 容量、对象错误和备份状态；
-- APIMart 错误率、限流、用量和余额。
-
-## 12. 备份、恢复与发布
-
-### 12.1 备份原则
-
-MySQL 是业务事实来源，MinIO 保存媒体对象，Redis 保存 BullMQ、Mastra 快照和短期事件；三者必须纳入备份。至少每日异机备份，并定期做真实恢复演练。
-
-发布前：
-
-1. 暂停新流量和新任务；
-2. 等待正在执行的 Worker 任务结束，或按业务规则安全取消；
-3. 备份 MySQL；
-4. 备份 MinIO bucket；
-5. 备份 Redis AOF/快照，并验证文件可恢复；
-6. 记录当前 Git commit、镜像 ID 和迁移版本。
-
-只备份 Docker volume 目录并不能天然保证跨 MySQL、Redis、MinIO 的一致时间点。生产环境应使用各组件支持的备份方式或托管服务快照，并把备份复制到另一台机器或对象存储账户。
-
-### 12.2 发布更新
-
-```bash
-cd /opt/chat-to-video
 git fetch --tags
-git checkout <NEW_RELEASE_TAG_OR_COMMIT>
-git status --short
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml config --quiet
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml build database-migrate api worker web
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml run --rm database-migrate
-docker compose --env-file .env.local -f compose.yaml -f compose.production.yaml up -d api worker web
+git checkout <已评审的 tag 或 commit>
+$COMPOSE config --quiet
+$COMPOSE build database-migrate api worker web
+$COMPOSE run --rm database-migrate
+$COMPOSE up -d api worker web
 ```
 
-随后完整执行第 10 节验收。不要使用 `git pull` 后无版本记录地直接重建。
+停止应用但保留数据：
 
-### 12.3 回滚限制
+```bash
+$COMPOSE down
+```
 
-应用镜像可以回到上一个已知 commit，但数据库迁移未承诺可逆，旧应用也不一定兼容新 schema。若迁移后验收失败，应按发布前验证过的恢复方案处理，而不是直接降级容器并假设兼容。
+不要执行 `docker compose down -v`，不要删除 OSS Bucket，也不要在未确认目标和备份时运行全局 prune。
 
-## 13. 故障排查顺序
+## 12. 配置轮换
 
-1. `docker compose ... ps`：检查健康状态和退出码；
-2. `docker compose ... logs --tail=200 <service>`：定位第一个失败服务；
-3. `database-migrate` 失败：检查 MySQL 健康、凭据和迁移 SQL；
-4. API 启动失败：检查 APIMart、MySQL、Redis、S3 必填变量；
-5. Worker 启动失败：检查 APIMart 视频变量、Redis、S3、`/usr/bin/ffmpeg`；
-6. 上传失败：检查预签名 URL 的域名、HTTPS、MinIO CORS、Nginx 大小限制和系统时钟；
-7. SSE 中断：检查 Nginx `proxy_buffering off` 与 `proxy_read_timeout`；
-8. 页面正常但任务不推进：检查 Worker 能力快照、BullMQ 队列和 Redis AOF；
-9. 外部模型失败：检查供应商余额、限流、超时和允许的结果域名，不要在日志或工单中粘贴密钥。
+- 共享密码轮换只影响后续登录；
+- `AUTH_SESSION_SECRET` 轮换会立即注销全部会话；
+- `INTERNAL_API_TOKEN` 轮换需同步重启 Web 与 API；
+- OSS AccessKey 轮换时先创建并验证新凭证，再同步更新 API/Worker 配置并滚动重启，确认稳定后禁用旧凭证；
+- OSS Region、Bucket 或 Endpoint 不支持热切换、双写或自动回退，变更前必须制定独立迁移方案。
 
-## 14. 部署完成清单
+## 13. 故障排查
 
-- [ ] 使用固定 tag/commit，工作区无临时修改；
-- [ ] Compose 配置解析和四个应用镜像构建通过；
-- [ ] `.env.local` 权限为 `600`，所有默认密码已替换；
-- [ ] 公网仅开放 `22/80/443`，其他服务只绑定回环地址；
-- [ ] 两个域名 HTTPS 有效，MinIO 预签名 URL 使用公网域名；
-- [ ] MySQL 迁移成功，Redis AOF 已启用，MinIO bucket 已创建；
-- [ ] API、Web、MinIO 健康检查通过；
-- [ ] 上传、对象检查、SSE 和 Worker 队列链路通过；
-- [ ] 付费测试前已确认余额、成本上限和审批边界；
-- [ ] 异机备份、恢复演练、监控和告警已落实；
-- [ ] 若对公网开放，生产就绪门禁已全部完成。
+按顺序检查：
+
+1. `$COMPOSE ps` 和 `$COMPOSE logs --tail=200 api worker web database-migrate`；
+2. `STORAGE_PROVIDER` 是否为 `aliyun-oss`，变量是否完整；
+3. Endpoint hostname 是否与 Region 一致，公网 Endpoint 是否 HTTPS；
+4. `OSS_ACCESS_KEY_ID` 和 `OSS_ACCESS_KEY_SECRET` 是否成对注入且仍然有效；
+5. RAM Policy 的 Bucket 和对象前缀是否正确；
+6. 上传失败时检查 OSS CORS、浏览器 Origin、系统时钟和 `Content-Type`；
+7. 服务端可读但浏览器不可用时检查公网 Endpoint，浏览器可上传但 Worker 不可读时检查内网 Endpoint与 RAM 权限。
+
+应用错误会统一脱敏，不会返回供应商凭证、Endpoint 签名细节或原始 OSS 错误。诊断供应商问题应在受控运维环境查看脱敏后的服务日志与阿里云审计记录。
+
+官方参考：
+
+- [使用 Node.js SDK V4 签名 URL 上传对象](https://help.aliyun.com/en/oss/developer-reference/upload-objects-using-a-signed-url-generated-with-oss-sdk-for-node-js)
+- [Node.js SDK 配置访问凭证](https://help.aliyun.com/en/oss/node-js-configure-access-credentials)

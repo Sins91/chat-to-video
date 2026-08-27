@@ -26,7 +26,9 @@ const config: WorkerConfig = {
     taskTimeoutMs: 900_000,
   },
   storage: {
+    provider: "minio",
     endpoint: "http://unused",
+    publicEndpoint: "http://unused",
     region: "unused",
     accessKeyId: "unused",
     secretAccessKey: "unused",

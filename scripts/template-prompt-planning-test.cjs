@@ -108,7 +108,12 @@ const createScenePlan = (contracts, testCase) => {
 
 const getBalance = async (baseUrl) => {
   const response = await fetch(`${baseUrl}/apimart/account/balance`, {
-    headers: { accept: "application/json" },
+    headers: {
+      accept: "application/json",
+      ...(process.env.INTERNAL_API_TOKEN?.trim()
+        ? { "x-internal-access-token": process.env.INTERNAL_API_TOKEN.trim() }
+        : {}),
+    },
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`Balance lookup failed (${response.status}).`);

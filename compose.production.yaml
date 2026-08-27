@@ -1,0 +1,54 @@
+services:
+  minio:
+    profiles: ["local-only"]
+
+  minio-init:
+    profiles: ["local-only"]
+
+  mysql:
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-4002}:${MYSQL_PORT:-4002}"
+
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-4003}:${REDIS_PORT:-4003}"
+
+  api:
+    environment:
+      STORAGE_PROVIDER: aliyun-oss
+      OSS_REGION: "${OSS_REGION:?OSS_REGION is required}"
+      OSS_BUCKET: "${OSS_BUCKET:?OSS_BUCKET is required}"
+      OSS_INTERNAL_ENDPOINT: "${OSS_INTERNAL_ENDPOINT:?OSS_INTERNAL_ENDPOINT is required}"
+      OSS_PUBLIC_ENDPOINT: "${OSS_PUBLIC_ENDPOINT:?OSS_PUBLIC_ENDPOINT is required}"
+      OSS_ACCESS_KEY_ID: "${OSS_ACCESS_KEY_ID:?OSS_ACCESS_KEY_ID is required}"
+      OSS_ACCESS_KEY_SECRET: "${OSS_ACCESS_KEY_SECRET:?OSS_ACCESS_KEY_SECRET is required}"
+    depends_on: !override
+      database-migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${API_PORT:-4101}:${API_PORT:-4101}"
+
+  worker:
+    environment:
+      STORAGE_PROVIDER: aliyun-oss
+      OSS_REGION: "${OSS_REGION:?OSS_REGION is required}"
+      OSS_BUCKET: "${OSS_BUCKET:?OSS_BUCKET is required}"
+      OSS_INTERNAL_ENDPOINT: "${OSS_INTERNAL_ENDPOINT:?OSS_INTERNAL_ENDPOINT is required}"
+      OSS_PUBLIC_ENDPOINT: "${OSS_PUBLIC_ENDPOINT:?OSS_PUBLIC_ENDPOINT is required}"
+      OSS_ACCESS_KEY_ID: "${OSS_ACCESS_KEY_ID:?OSS_ACCESS_KEY_ID is required}"
+      OSS_ACCESS_KEY_SECRET: "${OSS_ACCESS_KEY_SECRET:?OSS_ACCESS_KEY_SECRET is required}"
+    depends_on: !override
+      database-migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    ports:
+      - "127.0.0.1:${WEB_PORT:-4000}:${WEB_PORT:-4000}"

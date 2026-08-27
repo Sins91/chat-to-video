@@ -1,3 +1,5 @@
+import { withInternalApiAuthentication } from "@/lib/internal-auth/upstream";
+
 const DEFAULT_API_BASE_URL = "http://localhost:4101";
 const FORWARDED_RESPONSE_HEADERS = [
   "cache-control",
@@ -37,7 +39,9 @@ export async function POST(request: Request): Promise<Response> {
     const upstream = await fetch(`${getApiBaseUrl()}/chat-agent/messages`, {
       method: "POST",
       body: await request.text(),
-      headers: { "content-type": "application/json" },
+      headers: withInternalApiAuthentication(
+        new Headers({ "content-type": "application/json" }),
+      ),
       signal: request.signal,
     });
 

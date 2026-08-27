@@ -23,6 +23,7 @@ COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/database/package.json ./packages/database/package.json
 COPY packages/media/package.json ./packages/media/package.json
 COPY packages/storage/package.json ./packages/storage/package.json
+COPY packages/tools/package.json ./packages/tools/package.json
 
 RUN node scripts/install-with-registry-fallback.cjs --frozen-lockfile
 
@@ -44,7 +45,9 @@ COPY tsconfig.base.json ./tsconfig.base.json
 COPY apps/api ./apps/api
 COPY packages/contracts ./packages/contracts
 COPY packages/database ./packages/database
+COPY packages/media ./packages/media
 COPY packages/storage ./packages/storage
+COPY packages/tools ./packages/tools
 
 RUN pnpm --filter @chat-to-video/api... build
 
@@ -78,12 +81,22 @@ RUN pnpm --filter @chat-to-video/worker... build
 
 FROM node:26.7.0-bookworm-slim AS worker-runtime
 
+ARG DEBIAN_MIRROR=http://mirrors.aliyun.com
+
 ENV NODE_ENV=production
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ffmpeg fonts-noto-cjk \
+RUN cp /etc/apt/sources.list.d/debian.sources /tmp/debian.sources \
+    && sed -i "s|http://deb.debian.org/debian|${DEBIAN_MIRROR%/}/debian|g" /etc/apt/sources.list.d/debian.sources \
+    && grep -Fq "${DEBIAN_MIRROR%/}/debian" /etc/apt/sources.list.d/debian.sources \
+    && (apt-get -o Acquire::Retries=3 update \
+        && apt-get -o Acquire::Retries=3 install --yes --no-install-recommends ffmpeg fonts-noto-cjk \
+        || (echo "APT mirror failed; retrying with the official Debian source." >&2 \
+            && cp /tmp/debian.sources /etc/apt/sources.list.d/debian.sources \
+            && apt-get -o Acquire::Retries=3 update \
+            && apt-get -o Acquire::Retries=3 install --yes --no-install-recommends ffmpeg fonts-noto-cjk)) \
+    && rm -f /tmp/debian.sources \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=worker-build --chown=node:node /app/node_modules ./node_modules

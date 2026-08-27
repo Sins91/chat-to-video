@@ -2,6 +2,7 @@ import { NestFactory } from "@nestjs/core";
 
 import { AppModule } from "./app.module.js";
 import { loadRepositoryEnvironment } from "./environment.js";
+import { readApiAuthConfig } from "./internal-auth/internal-auth.config.js";
 
 const parseApiPort = (value: string): number => {
   const port = Number(value);
@@ -15,6 +16,7 @@ const parseApiPort = (value: string): number => {
 
 const bootstrap = async (): Promise<void> => {
   loadRepositoryEnvironment();
+  readApiAuthConfig();
 
   const apiPort = parseApiPort(process.env.API_PORT ?? "4101");
   process.env.PORT = String(apiPort);

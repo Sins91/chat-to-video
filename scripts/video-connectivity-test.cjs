@@ -146,6 +146,11 @@ const fetchWithTimeout = (url, init, timeoutMs) => fetch(url, {
   signal: AbortSignal.timeout(timeoutMs),
 });
 
+const internalApiHeaders = () => {
+  const token = process.env.INTERNAL_API_TOKEN?.trim();
+  return token ? { "x-internal-access-token": token } : {};
+};
+
 const parseResponseBody = async (response) => {
   const text = await response.text();
   if (!text) return null;
@@ -161,6 +166,7 @@ const requestJson = async (baseUrl, path, init = {}, timeoutMs = 30_000) => {
     ...init,
     headers: {
       accept: "application/json",
+      ...internalApiHeaders(),
       ...(init.body === undefined ? {} : { "content-type": "application/json" }),
       ...init.headers,
     },
@@ -352,7 +358,7 @@ const startEventMonitor = (configuration, workflowId) => {
   const done = (async () => {
     while (!stopped) {
       activeController = new AbortController();
-      const headers = { accept: "text/event-stream" };
+      const headers = { accept: "text/event-stream", ...internalApiHeaders() };
       if (highestSequence > 0) {
         headers["last-event-id"] = String(highestSequence);
         reconnectHeaderCount += 1;

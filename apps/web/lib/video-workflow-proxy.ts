@@ -1,3 +1,5 @@
+import { withInternalApiAuthentication } from "@/lib/internal-auth/upstream";
+
 const DEFAULT_API_BASE_URL = "http://localhost:4101";
 
 export const getVideoApiBaseUrl = (): string => {
@@ -14,6 +16,7 @@ export const proxyVideoWorkflow = async (request: Request, path: string): Promis
     const lastEventId = request.headers.get("last-event-id");
     if (contentType) headers.set("content-type", contentType);
     if (lastEventId) headers.set("last-event-id", lastEventId);
+    withInternalApiAuthentication(headers);
     const upstream = await fetch(`${getVideoApiBaseUrl()}${path}`, {
       method: request.method,
       body: request.method === "GET" ? undefined : await request.text(),

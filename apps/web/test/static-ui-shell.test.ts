@@ -5,6 +5,25 @@ import { describe, expect, it } from "vitest";
 const webRoot = resolve(import.meta.dirname, "..");
 
 describe("Agent UI shell", () => {
+  it("uses a minimal login layout with the password visible by default", async () => {
+    const [page, form] = await Promise.all([
+      readFile(resolve(webRoot, "app/login/page.tsx"), "utf8"),
+      readFile(resolve(webRoot, "app/login/login-form.tsx"), "utf8"),
+    ]);
+
+    expect(page).toContain('className="w-full max-w-[22rem]"');
+    expect(page).not.toContain("shadow-xl");
+    expect(page).not.toContain("LockKeyholeIcon");
+    expect(form).toContain("useState(true)");
+    expect(form).toContain('type={isPasswordVisible ? "text" : "password"}');
+    expect(form).toContain("setIsPasswordVisible((current) => !current)");
+    expect(form).toContain("focus-visible:border-foreground/40 focus-visible:ring-0");
+    expect(form).toContain('className="h-9 px-4"');
+    expect(form).not.toContain('className="h-9 w-full"');
+    expect(form).not.toContain("h-11");
+    expect(form).not.toContain("LockKeyholeIcon");
+  });
+
   it("mounts the chat Agent below the Studio route", async () => {
     const [agentPage, workspace] = await Promise.all([
       readFile(resolve(webRoot, "app/(studio)/studio/agent/page.tsx"), "utf8"),

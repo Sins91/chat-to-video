@@ -11,6 +11,7 @@ import {
   CircleCheckIcon,
   CirclePauseIcon,
   LoaderCircleIcon,
+  LogOutIcon,
   ImagePlusIcon,
   PlusIcon,
 } from "lucide-react";
@@ -77,6 +78,7 @@ export function ChatPanel() {
   const [isQueueDispatching, setIsQueueDispatching] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingActionPresentation | null>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const conversationIdRef = useRef(workflow.conversationId ?? undefined);
   const previousConversationIdRef = useRef(workflow.conversationId);
   const adoptedConversationIdRef = useRef<string | null>(null);
@@ -479,6 +481,16 @@ export function ChatPanel() {
     composerTextareaRef.current?.focus();
   }, []);
 
+  const handleLogout = useCallback(async (): Promise<void> => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      window.location.assign("/login");
+    }
+  }, [isLoggingOut]);
+
   return <div
     className="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-background"
     onDragEnter={handleImageDragEnter}
@@ -502,6 +514,7 @@ export function ChatPanel() {
         </span>
         <ApimartBalanceIndicator />
         <Button aria-label="开始新对话" className="text-xs text-muted-foreground hover:text-foreground" onClick={handleNewChat} size="sm" type="button" variant="ghost"><PlusIcon /><span className="hidden sm:inline">新对话</span></Button>
+        <Button aria-label="退出登录" className="text-xs text-muted-foreground hover:text-foreground" disabled={isLoggingOut} onClick={() => void handleLogout()} size="sm" type="button" variant="ghost"><LogOutIcon /><span className="hidden sm:inline">退出</span></Button>
       </div>
     </header>
     <div className="relative flex min-h-0 min-w-0">

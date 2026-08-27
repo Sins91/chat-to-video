@@ -1,4 +1,5 @@
 import { fetchUpstreamRead } from "@/lib/upstream-readiness";
+import { withInternalApiAuthentication } from "@/lib/internal-auth/upstream";
 
 const DEFAULT_API_BASE_URL = "http://localhost:4101";
 
@@ -18,6 +19,7 @@ export const proxyApimartAccountBalance = async (
     const upstream = await fetchUpstreamRead(`${getApiBaseUrl()}/apimart/account/balance`, {
       method: "GET",
       cache: "no-store",
+      headers: withInternalApiAuthentication(),
       signal: request.signal,
     });
     return new Response(upstream.body, {
