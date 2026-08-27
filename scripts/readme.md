@@ -11,8 +11,11 @@ pnpm.cmd test:connectivity
 ```powershell
 $env:CONNECTIVITY_MAX_TOTAL_COST_USD = "0.30"
 $env:CONNECTIVITY_PLANNING_CONFIRM = "CALL_TEXT_MODELS"
+$env:CONNECTIVITY_REPORT_PROMPTS = "true"
 pnpm.cmd test:connectivity:planning
 ```
+
+启用 `CONNECTIVITY_REPORT_PROMPTS=true` 时，脚本从编译后的 API 模板注册表输出初始提示词、实际命中的 Skill ID，以及 `assets` 审批点的全部最终素材提示词；仍不会发送素材生成审批。首次使用前需先运行 `pnpm --filter @chat-to-video/api build`。
 
 `test:connectivity:prepaid` 保留为 `planning` 的兼容别名。
 

@@ -22,13 +22,65 @@ import {
   CINEMATIC_GOVERNANCE_SKILL_ID,
   CINEMATIC_PUBLISH_SKILL_ID,
   CINEMATIC_REFERENCE_ANALYST_SKILL_ID,
+  getCinematicStageSkillId,
   resolveAgentSkillRoot,
 } from "../src/agent-extensions/agent-skill.catalog.js";
+import {
+  CINEMATIC_SKILL_TEMPLATE_DEFINITIONS,
+  SHORT_VIDEO_FILM_LOOK_SKILL_ID,
+  SHORT_VIDEO_FASHION_OUTFIT_CHANGE_SKILL_ID,
+  SHORT_VIDEO_HANDHELD_DV_VLOG_SKILL_ID,
+  SHORT_VIDEO_JIAOLU_FOOD_SKILL_ID,
+  SHORT_VIDEO_MAGIC_LAMP_SKILL_ID,
+  SHORT_VIDEO_STORE_VISIT_SKILL_ID,
+  SHORT_VIDEO_TALKING_HEAD_SKILL_ID,
+  matchCinematicSkillTemplate,
+  validateCinematicSkillTemplateDefinitions,
+  type CinematicSkillTemplateDefinition,
+  type CinematicSkillTemplateId,
+} from "../src/agent-extensions/cinematic-skill-template.registry.js";
 import { createPromptCompressionRuntime } from "../src/agent-extensions/prompt-compression.tool.js";
 
 const requestId = "00000000-0000-4000-8000-000000000001";
 const conversationId = "00000000-0000-4000-8000-000000000002";
 const workflowId = "00000000-0000-4000-8000-000000000003";
+
+const templateMatchCases = [
+  {
+    skillId: SHORT_VIDEO_JIAOLU_FOOD_SKILL_ID,
+    prompts: ["制作角卤视频", "角 卤-熟食门店"],
+  },
+  {
+    skillId: SHORT_VIDEO_MAGIC_LAMP_SKILL_ID,
+    prompts: ["拍摄沙漠神灯短片", "GENIE LAMP reveal"],
+  },
+  {
+    skillId: SHORT_VIDEO_HANDHELD_DV_VLOG_SKILL_ID,
+    prompts: ["手持 MiniDV 自拍", "BACKSTAGE VLOG"],
+  },
+  {
+    skillId: SHORT_VIDEO_FASHION_OUTFIT_CHANGE_SKILL_ID,
+    prompts: [
+      "生成模特换装视频",
+      "做一个穿 搭-变装短片",
+      "多套造型切换，保持人物一致",
+      "生成一位23岁潮流模特女生的丝滑变装视频",
+      "MODEL OUTFIT CHANGE",
+    ],
+  },
+  {
+    skillId: SHORT_VIDEO_STORE_VISIT_SKILL_ID,
+    prompts: ["制作美食探店视频", "SHOP VISIT"],
+  },
+  {
+    skillId: SHORT_VIDEO_TALKING_HEAD_SKILL_ID,
+    prompts: ["生成办公室真人口播", "TALKING HEAD sales video"],
+  },
+  {
+    skillId: SHORT_VIDEO_FILM_LOOK_SKILL_ID,
+    prompts: ["采用35MM 电 影-感", "CINEMATIC FILM LOOK"],
+  },
+] as const;
 
 describe("agent extension boundaries", () => {
   it("builds a validated chat RequestContext", () => {
@@ -49,14 +101,68 @@ describe("agent extension boundaries", () => {
   });
 
   it("builds a stage-scoped cinematic RequestContext", () => {
-    expect(createCinematicAgentRequestContext({
+    const context = createCinematicAgentRequestContext({
       requestId,
       conversationId,
       workflowId,
       stage: "scene_plan",
       tenantId: "tenant-1",
       projectId: "project-1",
-    }).get("stage")).toBe("scene_plan");
+      templateSkillId: SHORT_VIDEO_FASHION_OUTFIT_CHANGE_SKILL_ID,
+    });
+    expect(context.get("stage")).toBe("scene_plan");
+    expect(context.get("templateSkillId")).toBe(
+      SHORT_VIDEO_FASHION_OUTFIT_CHANGE_SKILL_ID,
+    );
+  });
+
+  it("matches normalized short-video template keyword families", () => {
+    for (const { prompts, skillId } of templateMatchCases) {
+      for (const prompt of prompts) {
+        expect(matchCinematicSkillTemplate(prompt)?.skillId).toBe(skillId);
+      }
+    }
+  });
+
+  it("rejects negated and unrelated template phrases", () => {
+    expect(matchCinematicSkillTemplate("只做模特展示，不需要变装")).toBeNull();
+    expect(matchCinematicSkillTemplate("不要模特换装，改成产品开箱")).toBeNull();
+    expect(matchCinematicSkillTemplate("无需制作探店视频，改做开箱")).toBeNull();
+    expect(matchCinematicSkillTemplate("不要拍摄神灯视频")).toBeNull();
+    expect(matchCinematicSkillTemplate("不需要采用自然主义摄影")).toBeNull();
+    expect(matchCinematicSkillTemplate("without a talking head")).toBeNull();
+    expect(matchCinematicSkillTemplate("设计游戏换装界面")).toBeNull();
+    expect(matchCinematicSkillTemplate("维护直播间后台系统")).toBeNull();
+    expect(matchCinematicSkillTemplate("撰写电影史文章")).toBeNull();
+  });
+
+  it("selects the highest-priority template for overlapping matches", () => {
+    expect(matchCinematicSkillTemplate("角卤探店视频")?.skillId)
+      .toBe(SHORT_VIDEO_JIAOLU_FOOD_SKILL_ID);
+    expect(matchCinematicSkillTemplate("手持 DV 口播视频")?.skillId)
+      .toBe(SHORT_VIDEO_HANDHELD_DV_VLOG_SKILL_ID);
+    expect(matchCinematicSkillTemplate("电影效果的探店视频")?.skillId)
+      .toBe(SHORT_VIDEO_STORE_VISIT_SKILL_ID);
+    expect(matchCinematicSkillTemplate("电影效果模特换装")?.skillId)
+      .toBe(SHORT_VIDEO_FASHION_OUTFIT_CHANGE_SKILL_ID);
+  });
+
+  it("rejects ambiguous cinematic Skill template definitions", () => {
+    const base: CinematicSkillTemplateDefinition = {
+      skillId: SHORT_VIDEO_FASHION_OUTFIT_CHANGE_SKILL_ID,
+      priority: 100,
+      keywords: ["模特换装"],
+      stages: ["proposal"],
+    };
+    expect(() => validateCinematicSkillTemplateDefinitions([base, base]))
+      .toThrow("Duplicate cinematic Skill template ID");
+    expect(() => validateCinematicSkillTemplateDefinitions([
+      base,
+      {
+        ...base,
+        skillId: "future-template" as CinematicSkillTemplateId,
+      },
+    ])).toThrow("Duplicate cinematic Skill template priority");
   });
 
   it("uses an explicit stage Skill whitelist", () => {
@@ -74,6 +180,22 @@ describe("agent extension boundaries", () => {
     expect(catalog.forCinematic("research")).toEqual(expect.arrayContaining([
       expect.stringMatching(/cinematic-reference-analyst$/u),
     ]));
+    for (const definition of CINEMATIC_SKILL_TEMPLATE_DEFINITIONS) {
+      for (const stage of ["proposal", "script", "scene_plan", "assets"] as const) {
+        expect(catalog.forCinematic(stage, definition.skillId)).toEqual([
+          expect.stringMatching(/cinematic-governance$/u),
+          expect.stringMatching(new RegExp(`${definition.skillId}$`, "u")),
+          expect.stringMatching(/cinematic-reviewer$/u),
+        ]);
+      }
+      expect(catalog.forCinematic("edit", definition.skillId)).toEqual([
+        expect.stringMatching(/cinematic-governance$/u),
+        expect.stringMatching(/cinematic-edit$/u),
+        expect.stringMatching(/cinematic-reviewer$/u),
+      ]);
+      expect(ALL_CINEMATIC_SKILL_IDS).toContain(definition.skillId);
+    }
+    expect(getCinematicStageSkillId("scene_plan")).toBe("cinematic-scene-plan");
     expect(ALL_CINEMATIC_SKILL_IDS).toContain(CINEMATIC_GOVERNANCE_SKILL_ID);
     expect(ALL_CINEMATIC_SKILL_IDS).toContain(CINEMATIC_COMPOSE_SKILL_ID);
     expect(ALL_CINEMATIC_SKILL_IDS).toEqual(expect.arrayContaining([

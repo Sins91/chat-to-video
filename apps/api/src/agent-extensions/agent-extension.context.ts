@@ -5,6 +5,11 @@ import {
 import { RequestContext } from "@mastra/core/request-context";
 import { z } from "zod";
 
+import {
+  CinematicSkillTemplateIdSchema,
+  type CinematicSkillTemplateId,
+} from "./cinematic-skill-template.registry.js";
+
 export const AgentExtensionAgentIdSchema = z.enum([
   "chat-default",
   "cinematic-stage-agent",
@@ -28,6 +33,7 @@ export const CinematicAgentRequestContextSchema = z.object({
   agentId: z.literal("cinematic-stage-agent"),
   workflowId: z.string().uuid(),
   stage: CinematicGenerativeStageSchema,
+  templateSkillId: CinematicSkillTemplateIdSchema.optional(),
 }).strict();
 
 export const WorkflowIntentAgentRequestContextSchema = z.object({
@@ -88,6 +94,7 @@ export const createCinematicAgentRequestContext = (input: {
   workflowId: string;
   stage: CinematicGenerativeStage;
   tenantId: string;
+  templateSkillId?: CinematicSkillTemplateId;
   projectId: string;
 }): RequestContext<CinematicAgentRequestContext> => {
   const parsed = CinematicAgentRequestContextSchema.parse({
@@ -101,6 +108,7 @@ export const createCinematicAgentRequestContext = (input: {
   context.set("workflowId", parsed.workflowId);
   context.set("stage", parsed.stage);
   context.set("tenantId", parsed.tenantId);
+  if (parsed.templateSkillId) context.set("templateSkillId", parsed.templateSkillId);
   context.set("projectId", parsed.projectId);
   return context;
 };

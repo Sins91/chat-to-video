@@ -44,6 +44,10 @@ import {
   type ChatAgentRequestContext,
   type CinematicAgentRequestContext,
 } from "../agent-extensions/agent-extension.context.js";
+import {
+  isCinematicSkillTemplateStage,
+  matchCinematicSkillTemplate,
+} from "../agent-extensions/cinematic-skill-template.registry.js";
 import type {
   PromptCompressionInput,
   PromptCompressionOutput,
@@ -432,21 +436,20 @@ const toolCallParts = (result: unknown): unknown[] => {
 
 const describeEvidenceExtensions = (
   result: unknown,
-  stage: CinematicGenerativeStage,
+  expectedSkillId: string,
 ): string => {
   const calls = toolCallParts(result);
   const names = [...new Set(calls.map((call) => diagnosticToken(
     unknownProperty(call, "toolName") ?? unknownProperty(unknownProperty(call, "payload"), "toolName"),
   )))].slice(0, 16);
-  const expectedStageSkill = `cinematic-${stage.replaceAll("_", "-")}`;
-  const expectedStageSkillCalled = calls.some((call) => {
+  const expectedSkillCalled = calls.some((call) => {
     try {
-      return JSON.stringify(call).includes(expectedStageSkill);
+      return JSON.stringify(call).includes(expectedSkillId);
     } catch {
       return false;
     }
   });
-  return `extensions=[${names.join(",") || "none"}] expectedStageSkill=${expectedStageSkill} expectedStageSkillCalled=${expectedStageSkillCalled}`;
+  return `extensions=[${names.join(",") || "none"}] expectedSkill=${expectedSkillId} expectedSkillCalled=${expectedSkillCalled}`;
 };
 const objectKeys = (value: unknown): string =>
   typeof value === "object" && value !== null
@@ -1004,6 +1007,13 @@ export class ApimartModelGateway implements ModelGateway {
   ): Promise<CinematicArtifact> {
     const startedAt = performance.now();
     const prompt = buildCinematicPrompt(request);
+    const matchedSkillTemplate = matchCinematicSkillTemplate(request.initialPrompt);
+    const templateSkillId = matchedSkillTemplate &&
+        isCinematicSkillTemplateStage(matchedSkillTemplate.skillId, request.stage)
+      ? matchedSkillTemplate.skillId
+      : undefined;
+    const expectedProductionSkillId = templateSkillId ??
+      `cinematic-${request.stage.replaceAll("_", "-")}`;
     const stageSchema: z.ZodType<unknown> =
       CinematicArtifactCandidateSchemaByStage[request.stage];
     const auditContext: CinematicAgentRequestContext = {
@@ -1014,9 +1024,11 @@ export class ApimartModelGateway implements ModelGateway {
       stage: request.stage,
       tenantId: request.tenantId,
       projectId: request.projectId,
+      ...(templateSkillId ? { templateSkillId } : {}),
     };
     const requestContext = createCinematicAgentRequestContext(auditContext);
-    const singlePassEnabled = (this.agents.singlePassStages ?? []).includes(request.stage);
+    const singlePassEnabled = templateSkillId === undefined &&
+      (this.agents.singlePassStages ?? []).includes(request.stage);
     const singlePassAttempts = singlePassEnabled ? 1 : 0;
     let singlePassUsage: unknown = null;
     let singlePassFailureReason: string | null = null;
@@ -1176,7 +1188,7 @@ export class ApimartModelGateway implements ModelGateway {
         if (typeof evidenceText !== "string" || !evidenceText.trim()) {
           this.logger.warn(
             `Cinematic evidence completed without text requestId=${request.requestId} stage=${request.stage} ` +
-              `${describeMissingStructuredOutput(result)} ${describeEvidenceExtensions(result, request.stage)} recoveredByStructurer=true`,
+              `${describeMissingStructuredOutput(result)} ${describeEvidenceExtensions(result, expectedProductionSkillId)} recoveredByStructurer=true`,
           );
         }
         break;

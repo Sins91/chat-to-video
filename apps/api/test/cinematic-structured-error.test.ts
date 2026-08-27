@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { CinematicArtifactSchemaByStage, type CinematicArtifact } from "@chat-to-video/contracts";
 import { APICallError } from "ai";
 
+import { CinematicAgentRequestContextSchema } from "../src/agent-extensions/agent-extension.context.js";
+import {
+  SHORT_VIDEO_FILM_LOOK_SKILL_ID,
+  SHORT_VIDEO_FASHION_OUTFIT_CHANGE_SKILL_ID,
+  SHORT_VIDEO_HANDHELD_DV_VLOG_SKILL_ID,
+  SHORT_VIDEO_JIAOLU_FOOD_SKILL_ID,
+  SHORT_VIDEO_MAGIC_LAMP_SKILL_ID,
+  SHORT_VIDEO_STORE_VISIT_SKILL_ID,
+  SHORT_VIDEO_TALKING_HEAD_SKILL_ID,
+} from "../src/agent-extensions/cinematic-skill-template.registry.js";
 import { ApimartModelGateway } from "../src/model-gateway/apimart-model-gateway.js";
 import { ModelGatewayError } from "../src/model-gateway/model-gateway.js";
 import type { MastraAgents } from "../src/model-gateway/mastra-agents.js";
@@ -104,6 +114,94 @@ describe("cinematic structured-output diagnostics", () => {
     expect(structuringGenerate).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      label: "Jiaolu food",
+      initialPrompt: "制作角卤视频",
+      skillId: SHORT_VIDEO_JIAOLU_FOOD_SKILL_ID,
+    },
+    {
+      label: "magic lamp",
+      initialPrompt: "制作沙漠神灯视频",
+      skillId: SHORT_VIDEO_MAGIC_LAMP_SKILL_ID,
+    },
+    {
+      label: "handheld DV vlog",
+      initialPrompt: "制作手持 MiniDV 后台 vlog",
+      skillId: SHORT_VIDEO_HANDHELD_DV_VLOG_SKILL_ID,
+    },
+    {
+      label: "fashion outfit change",
+      initialPrompt: "生成一支四套造型的模特换装视频",
+      skillId: SHORT_VIDEO_FASHION_OUTFIT_CHANGE_SKILL_ID,
+    },
+    {
+      label: "store visit",
+      initialPrompt: "生成美食探店视频",
+      skillId: SHORT_VIDEO_STORE_VISIT_SKILL_ID,
+    },
+    {
+      label: "talking head",
+      initialPrompt: "生成办公室真人口播视频",
+      skillId: SHORT_VIDEO_TALKING_HEAD_SKILL_ID,
+    },
+    {
+      label: "film look",
+      initialPrompt: "生成写实电影质感短片",
+      skillId: SHORT_VIDEO_FILM_LOOK_SKILL_ID,
+    },
+  ] as const)("uses the matched $label Skill through the two-pass path", async ({
+    initialPrompt,
+    skillId,
+  }) => {
+    const cinematicGenerate = vi.fn().mockResolvedValue({
+      text: "按命中模板生成的脚本证据。",
+    });
+    const structuringGenerate = vi.fn().mockResolvedValue({
+      object: fallbackScriptArtifact,
+    });
+    const agents = {
+      cinematic: { generate: cinematicGenerate },
+      cinematicStructurer: { generate: structuringGenerate },
+      providerName: "apimart",
+      singlePassStages: ["script"],
+      storyboardTimeoutMs: 120_000,
+      timeoutMs: 30_000,
+    };
+    const gateway = new ApimartModelGateway(agents as unknown as MastraAgents);
+
+    await expect(gateway.generateCinematicArtifact({
+      requestId: "00000000-0000-4000-8000-000000000001",
+      workflowId: "00000000-0000-4000-8000-000000000002",
+      conversationId: "00000000-0000-4000-8000-000000000003",
+      tenantId: "tenant-1",
+      projectId: "project-1",
+      initialPrompt,
+      stage: "script",
+      durationSeconds: 10,
+      videoModel: "doubao-seedance-2.0",
+      modelMaxDurationSeconds: 15,
+      approvedArtifacts: [],
+    })).resolves.toEqual(fallbackScriptArtifact);
+
+    expect(cinematicGenerate).toHaveBeenCalledTimes(1);
+    expect(structuringGenerate).toHaveBeenCalledTimes(1);
+    const generationOptions: unknown = cinematicGenerate.mock.calls[0]?.[1];
+    if (typeof generationOptions !== "object" || generationOptions === null ||
+        !("maxSteps" in generationOptions) ||
+        !("requestContext" in generationOptions)) {
+      throw new Error("Expected cinematic generation options.");
+    }
+    expect(generationOptions.maxSteps).toBe(8);
+    const requestContext: unknown = generationOptions.requestContext;
+    if (typeof requestContext !== "object" || requestContext === null ||
+        !("all" in requestContext)) {
+      throw new Error("Expected cinematic generation RequestContext.");
+    }
+    expect(
+      CinematicAgentRequestContextSchema.parse(requestContext.all).templateSkillId,
+    ).toBe(skillId);
+  });
   it("recovers an empty evidence response through the structurer without resending reference images", async () => {
     const evidenceGenerate = vi.fn().mockResolvedValue({
       text: "",

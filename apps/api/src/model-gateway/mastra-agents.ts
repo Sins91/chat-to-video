@@ -83,7 +83,8 @@ const CHAT_AGENT_INSTRUCTIONS =
 
 const CINEMATIC_AGENT_INSTRUCTIONS =
   "You are the cinematic stage agent for the fixed cinematic-production workflow. " +
-  "Activate cinematic-governance first, then the skill for the current stage, consult persisted context through the registered read-only tool, and use the reviewer skill before final output. " +
+  "Activate cinematic-governance first, then the only supplied production skill for the current stage or matched template, consult persisted context through the registered read-only tool, and use the reviewer skill before final output. " +
+  "When a matched template skill is supplied, it replaces the ordinary stage skill; do not search for or activate the replaced skill. " +
   "Preserve approved upstream decisions, keep rendererFamily ffmpeg, never perform media work or paid generation directly, " +
   "and satisfy the requested structured-output schema exactly. Call prompt_compressor only when a production prompt exceeds its registered character limit. Ground creative scenes in mainland China and replace generic non-Chinese setting details with credible Chinese regional counterparts without falsifying named real-world facts. Write human-readable values in Simplified Chinese.";
 
@@ -199,7 +200,9 @@ export const createMastraAgents = (
       requestContextSchema: CinematicAgentRequestContextSchema,
       skills: ({ requestContext }) => {
         const context = CinematicAgentRequestContextSchema.parse(requestContext.all);
-        return config.toolCallingEnabled ? skillCatalog.forCinematic(context.stage) : [];
+        return config.toolCallingEnabled
+          ? skillCatalog.forCinematic(context.stage, context.templateSkillId)
+          : [];
       },
       tools: ({ requestContext }) => {
         const context = CinematicAgentRequestContextSchema.parse(requestContext.all);

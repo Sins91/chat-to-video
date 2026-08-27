@@ -7,6 +7,10 @@ const { loadRepositoryEnvironment } = require("./repository-environment.cjs");
 
 const REPOSITORY_ROOT = resolve(__dirname, "..");
 const CONTRACTS_ENTRY = resolve(REPOSITORY_ROOT, "packages/contracts/dist/index.js");
+const API_TEMPLATE_REGISTRY_ENTRY = resolve(
+  REPOSITORY_ROOT,
+  "apps/api/dist/src/agent-extensions/cinematic-skill-template.registry.js",
+);
 const DEFAULT_API_BASE_URL = "http://localhost:4101";
 const DEFAULT_MODEL = "doubao-seedance-2.0";
 const DEFAULT_PROMPT =
@@ -117,6 +121,24 @@ const loadContracts = async () => {
     throw new Error("Built contracts are stale: consistency_reference is not registered.");
   }
   return contracts;
+};
+
+const loadTemplateMatcher = async () => {
+  let registry;
+  try {
+    registry = await import(pathToFileURL(API_TEMPLATE_REGISTRY_ENTRY).href);
+  } catch (error) {
+    throw new Error(
+      "Built API template registry is required for prompt reporting. Run " +
+      "`pnpm --filter @chat-to-video/api build` first. " +
+      `Cause: ${redactSecrets(error instanceof Error ? error.message : error)}`,
+      { cause: error },
+    );
+  }
+  if (typeof registry.matchCinematicSkillTemplate !== "function") {
+    throw new Error("Built API template registry is missing matchCinematicSkillTemplate.");
+  }
+  return registry.matchCinematicSkillTemplate;
 };
 
 const fetchWithTimeout = (url, init, timeoutMs) => fetch(url, {
@@ -586,6 +608,31 @@ const assetPlanFromSnapshot = (snapshot) => {
   return artifact.data;
 };
 
+const resolveConnectivityPrompt = (configuration, referenceImage = null) =>
+  configuration.prompt || (referenceImage ? DEFAULT_IMAGE_PROMPT : DEFAULT_PROMPT);
+
+const createPlanningPromptReport = ({ initialPrompt, matchedTemplate, plan }) => ({
+  initialPrompt,
+  triggeredTemplateName: matchedTemplate?.skillId ?? null,
+  finalPrompts: plan.assets.map((asset) => ({
+    sceneOrder: asset.sceneOrder,
+    kind: asset.kind,
+    prompt: asset.prompt,
+  })),
+});
+
+const printPlanningPromptReport = (configuration, plan, referenceImage) => {
+  if (!configuration.reportPrompts || !configuration.matchSkillTemplate) return;
+  const initialPrompt = resolveConnectivityPrompt(configuration, referenceImage);
+  const report = createPlanningPromptReport({
+    initialPrompt,
+    matchedTemplate: configuration.matchSkillTemplate(initialPrompt),
+    plan,
+  });
+  console.log("\nTemplate planning prompt report");
+  console.log(JSON.stringify(report, null, 2));
+};
+
 const assertPlanningGate = (snapshot) => {
   const plan = assetPlanFromSnapshot(snapshot);
   if (snapshot.currentStage !== "assets" || snapshot.status !== "awaiting_input") {
@@ -746,7 +793,7 @@ const refreshReferenceImage = async (configuration, id) =>
   );
 
 const createWorkflow = async (configuration, referenceImage) => {
-  const prompt = configuration.prompt || (referenceImage ? DEFAULT_IMAGE_PROMPT : DEFAULT_PROMPT);
+  const prompt = resolveConnectivityPrompt(configuration, referenceImage);
   const request = configuration.contracts.CreateVideoWorkflowRequestSchema.parse({
     messageId: `connectivity-${Date.now()}-${randomUUID().slice(0, 8)}`,
     prompt,
@@ -909,6 +956,7 @@ const runPlanning = async (configuration, referenceImage) => {
     );
     printPricing(pricing);
     printCostPlan(result.plan, live, planningDelta, configuration.maximumTotalCostUsd);
+    printPlanningPromptReport(configuration, result.plan, referenceImage);
     if (planningDelta !== null && planningDelta > configuration.maximumTotalCostUsd) {
       throw new Error("Observed planning cost exceeded CONNECTIVITY_MAX_TOTAL_COST_USD.");
     }
@@ -1005,6 +1053,7 @@ const configurationFromEnvironment = async (mode) => {
       "Use CONNECTIVITY_MAX_TOTAL_COST_USD.",
     );
   }
+  const reportPrompts = process.env.CONNECTIVITY_REPORT_PROMPTS === "true";
   return {
     mode,
     contracts: await loadContracts(),
@@ -1012,6 +1061,8 @@ const configurationFromEnvironment = async (mode) => {
       process.env.CONNECTIVITY_API_BASE_URL ?? process.env.API_BASE_URL ?? DEFAULT_API_BASE_URL,
     ),
     prompt: process.env.CONNECTIVITY_PROMPT?.trim() || null,
+    reportPrompts,
+    matchSkillTemplate: reportPrompts ? await loadTemplateMatcher() : null,
     videoModel: process.env.CONNECTIVITY_VIDEO_MODEL?.trim() || DEFAULT_MODEL,
     pollIntervalMs: parsePositiveInteger("CONNECTIVITY_POLL_INTERVAL_MS", 2_000),
     balancePollIntervalMs: parsePositiveInteger("CONNECTIVITY_BALANCE_POLL_INTERVAL_MS", 2_000),
@@ -1061,11 +1112,13 @@ module.exports = {
   assertSuppliedReferenceBatch,
   assertTotalBudget,
   calculateLiveMediaEstimate,
+  createPlanningPromptReport,
   detectImageMime,
   normalizeBaseUrl,
   normalizeMode,
   parseSseFrame,
   redactSecrets,
   requestJson,
+  resolveConnectivityPrompt,
   validateImageInput,
 };

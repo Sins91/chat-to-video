@@ -14,12 +14,14 @@ const {
   assertSuppliedReferenceBatch,
   assertTotalBudget,
   calculateLiveMediaEstimate,
+  createPlanningPromptReport,
   detectImageMime,
   normalizeBaseUrl,
   normalizeMode,
   parseSseFrame,
   redactSecrets,
   requestJson,
+  resolveConnectivityPrompt,
   validateImageInput,
 } = require("./video-connectivity-test.cjs");
 
@@ -143,6 +145,32 @@ test("planning gate rejects snapshots after an asset queue handoff", () => {
     () => assertPlanningGate({ ...planningSnapshot(), assetBatch: { status: "queued" } }),
     /already crossed the queue handoff boundary/u,
   );
+});
+
+test("planning prompt report exposes the initial prompt, matched Skill and final prompts", () => {
+  const configuration = { prompt: "生成办公室真人口播视频" };
+  assert.equal(resolveConnectivityPrompt(configuration), configuration.prompt);
+  assert.deepEqual(createPlanningPromptReport({
+    initialPrompt: configuration.prompt,
+    matchedTemplate: { skillId: "short-video-talking-head" },
+    plan: assetPlan([
+      {
+        sceneOrder: 1,
+        kind: "video",
+        sourceMode: "generate",
+        prompt: "固定正面中近景，精确口型同步。",
+        estimatedCostUsd: 0.71,
+      },
+    ]),
+  }), {
+    initialPrompt: configuration.prompt,
+    triggeredTemplateName: "short-video-talking-head",
+    finalPrompts: [{
+      sceneOrder: 1,
+      kind: "video",
+      prompt: "固定正面中近景，精确口型同步。",
+    }],
+  });
 });
 
 test("terminal workflow and batch states fail with persisted diagnostics", () => {

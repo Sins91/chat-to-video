@@ -1,7 +1,18 @@
 import { Injectable } from "@nestjs/common";
-import type { CinematicGenerativeStage } from "@chat-to-video/contracts";
+import {
+  CINEMATIC_PIPELINE_DEFINITION,
+  CinematicGenerativeStageSchema,
+  findWorkflowStage,
+  type CinematicGenerativeStage,
+} from "@chat-to-video/contracts";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+
+import {
+  CINEMATIC_SKILL_TEMPLATE_DEFINITIONS,
+  isCinematicSkillTemplateStage,
+  type CinematicSkillTemplateId,
+} from "./cinematic-skill-template.registry.js";
 
 export const CHAT_CAPABILITIES_SKILL_ID = "cinematic-capabilities";
 export const CINEMATIC_GOVERNANCE_SKILL_ID = "cinematic-governance";
@@ -16,15 +27,27 @@ export const CINEMATIC_DEFERRED_STAGE_SKILL_IDS = Object.freeze({
   publish: CINEMATIC_PUBLISH_SKILL_ID,
 });
 
-export const CINEMATIC_STAGE_SKILL_IDS = Object.freeze({
-  research: "cinematic-research",
-  proposal: "cinematic-proposal",
-  script: "cinematic-script",
-  scene_plan: "cinematic-scene-plan",
-  consistency_reference: "cinematic-consistency-reference",
-  assets: "cinematic-assets",
-  edit: "cinematic-edit",
-} as const satisfies Record<CinematicGenerativeStage, string>);
+export const getCinematicStageSkillId = (
+  stage: CinematicGenerativeStage,
+): string => {
+  const skillId = findWorkflowStage(
+    CINEMATIC_PIPELINE_DEFINITION,
+    stage,
+  )?.stageSkillId;
+  if (!skillId) {
+    throw new Error("Cinematic stage Skill is not registered: " + stage + ".");
+  }
+  return skillId;
+};
+
+export const CINEMATIC_STAGE_SKILL_IDS = Object.freeze(
+  Object.fromEntries(
+    CinematicGenerativeStageSchema.options.map((stage) => [
+      stage,
+      getCinematicStageSkillId(stage),
+    ]),
+  ) as Record<CinematicGenerativeStage, string>,
+);
 
 export const ALL_CINEMATIC_SKILL_IDS = Object.freeze([
   CINEMATIC_GOVERNANCE_SKILL_ID,
@@ -32,6 +55,7 @@ export const ALL_CINEMATIC_SKILL_IDS = Object.freeze([
   CINEMATIC_REFERENCE_ANALYST_SKILL_ID,
   ...Object.values(CINEMATIC_STAGE_SKILL_IDS),
   CINEMATIC_COMPOSE_SKILL_ID,
+  ...CINEMATIC_SKILL_TEMPLATE_DEFINITIONS.map((definition) => definition.skillId),
   CINEMATIC_REVIEWER_SKILL_ID,
 ]);
 
@@ -76,10 +100,17 @@ export class AgentSkillCatalog {
     ];
   }
 
-  forCinematic(stage: CinematicGenerativeStage): string[] {
+  forCinematic(
+    stage: CinematicGenerativeStage,
+    templateSkillId?: CinematicSkillTemplateId,
+  ): string[] {
+    const stageSkillId = templateSkillId &&
+        isCinematicSkillTemplateStage(templateSkillId, stage)
+      ? templateSkillId
+      : CINEMATIC_STAGE_SKILL_IDS[stage];
     return [
       this.getRequiredPath(CINEMATIC_GOVERNANCE_SKILL_ID),
-      this.getRequiredPath(CINEMATIC_STAGE_SKILL_IDS[stage]),
+      this.getRequiredPath(stageSkillId),
       ...(stage === "research"
         ? [this.getRequiredPath(CINEMATIC_REFERENCE_ANALYST_SKILL_ID)]
         : []),
