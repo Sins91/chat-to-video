@@ -17,6 +17,16 @@ pnpm.cmd test:connectivity:planning
 
 启用 `CONNECTIVITY_REPORT_PROMPTS=true` 时，脚本从编译后的 API 模板注册表输出初始提示词、实际命中的 Skill ID，以及 `assets` 审批点的全部最终素材提示词；仍不会发送素材生成审批。首次使用前需先运行 `pnpm --filter @chat-to-video/api build`。
 
+批量验证全部短视频模板且完全绕过一致性参考图、素材和视频队列时，使用提示词规划测试：
+
+```powershell
+$env:TEMPLATE_PLANNING_MAX_TOTAL_COST_USD = "0.30"
+$env:TEMPLATE_PLANNING_CONFIRM = "CALL_TEXT_MODELS"
+pnpm.cmd test:templates:planning
+```
+
+该脚本复用编译后的真实模板注册表、Mastra Agent、Skill、结构化 assets Schema 和 APIMart 文本模型，只生成最终素材提示词并输出报告；不会写数据库、审批工作流或调用图片、视频、音乐 Provider。
+
 `test:connectivity:prepaid` 保留为 `planning` 的兼容别名。
 
 真实成片测试需要独立确认令牌：

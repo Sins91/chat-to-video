@@ -28,6 +28,8 @@
     "test:connectivity:image:upload": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:upload",
     "test:connectivity:image:planning": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:planning",
     "test:connectivity:image:paid": "pnpm run test:connectivity:prepare && node scripts/video-connectivity-test.cjs image:paid",
+    "test:templates:planning:prepare": "pnpm --filter @chat-to-video/api build",
+    "test:templates:planning": "pnpm run test:templates:planning:prepare && node scripts/template-prompt-planning-test.cjs planning",
     "clean": "turbo run clean"
   },
   "devDependencies": {
