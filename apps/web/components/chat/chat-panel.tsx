@@ -28,6 +28,7 @@ import { ChatHistorySidebar } from "@/components/chat/chat-history-sidebar";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-provider";
+import { confirmCompletedChatMessages } from "@/lib/chat-message-handoff";
 import { createChatTransport, createChatUserMessage } from "@/lib/chat-transport";
 import { chatQueueItemsForConversation, useChatQueueStore } from "@/lib/chat-queue-store";
 import { notifyConversationHistoryChanged, notifyPendingConversationHistory } from "@/lib/conversation-client";
@@ -41,6 +42,7 @@ import {
 
 type ChatSession = {
   chat: Chat<UIMessage>;
+  completedMessageIds: Set<string>;
   conversationId: string | null;
   id: string;
   isDispatching: boolean;
@@ -89,7 +91,7 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
   const conversationIdRef = useRef(workflow.conversationId ?? undefined);
   const previousConversationIdRef = useRef(workflow.conversationId);
   const adoptedConversationIdRef = useRef<string | null>(null);
-  const refreshConversationRef = useRef(workflow.refresh);
+  const refreshConversationRef = useRef(workflow.refreshConversation);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<ChatComposerHandle>(null);
   const imageDragDepthRef = useRef(0);
@@ -128,6 +130,7 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
     });
     const session: ChatSession = {
       chat,
+      completedMessageIds: new Set(),
       conversationId,
       id: sessionId,
       isDispatching: false,
@@ -150,8 +153,8 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
 
   useEffect(() => {
     conversationIdRef.current = workflow.conversationId ?? undefined;
-    refreshConversationRef.current = workflow.refresh;
-  }, [workflow.conversationId, workflow.refresh]);
+    refreshConversationRef.current = workflow.refreshConversation;
+  }, [workflow.conversationId, workflow.refreshConversation]);
 
   const getOrCreateConversationSession = useCallback((conversationId: string): ChatSession => {
     const existingSessionId = conversationSessionIdsRef.current.get(conversationId);
@@ -175,6 +178,24 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
     setActiveSessionId(session.id);
     return session;
   }, [createChatSession, getOrCreateConversationSession]);
+
+  const syncCompletedSession = useCallback((session: ChatSession): void => {
+    const conversationId = session.conversationId;
+    if (!conversationId || activeSessionIdRef.current !== session.id || session.completedMessageIds.size === 0) return;
+    void confirmCompletedChatMessages({
+      conversationId,
+      completedIds: session.completedMessageIds,
+      load: (id) => refreshConversationRef.current(id),
+      isCurrent: () => activeSessionIdRef.current === session.id && session.conversationId === conversationId,
+      getMessages: () => session.chat.messages,
+      setMessages: (next) => { session.chat.messages = next; },
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const session = sessionsRef.current.get(activeSessionId);
+    if (session?.conversationId === workflow.conversationId) syncCompletedSession(session);
+  }, [activeSessionId, syncCompletedSession, workflow.conversationId]);
 
   sessionCallbacksRef.current.onConversationId = (sessionId, conversationId) => {
     const session = sessionsRef.current.get(sessionId);
@@ -202,18 +223,8 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
       notifyConversationHistoryChanged();
       return;
     }
-    const completedIds = new Set(completedMessageIds);
-    const releasePersistedMessages = (): void => {
-      session.chat.messages = session.chat.messages.filter((message) => !completedIds.has(message.id));
-    };
-    if (activeSessionIdRef.current === sessionId && conversationIdRef.current === session.conversationId) {
-      void refreshConversationRef.current().then(() => {
-        releasePersistedMessages();
-        notifyConversationHistoryChanged();
-      }).catch(() => undefined);
-      return;
-    }
-    releasePersistedMessages();
+    for (const id of completedMessageIds) session.completedMessageIds.add(id);
+    syncCompletedSession(session);
     notifyConversationHistoryChanged();
   };
   sessionCallbacksRef.current.onError = (sessionId) => {
@@ -312,6 +323,7 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
       messageId,
       message.referenceImages,
       session?.conversationId ?? undefined,
+      () => activeSessionIdRef.current === sessionId,
     );
     if (controlRoute.route === "workflow") {
       if (controlRoute.conversationId) {
@@ -375,9 +387,10 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
     activeSession.conversationId,
   ), [activeSession.conversationId, queueItems]);
 
-  const sendInput = useCallback((message: SubmittedChatInput) => {
+  const sendInput = useCallback((message: SubmittedChatInput): boolean => {
+    if (!workflow.canSubmitInput) return false;
     const trimmed = message.text.trim();
-    if (!trimmed && message.referenceImages.length === 0) return;
+    if (!trimmed && message.referenceImages.length === 0) return false;
     const normalized = { ...message, text: trimmed };
     setInput("");
     if (!activeSession.conversationId) {
@@ -407,10 +420,11 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
         videoModel: workflow.videoModel,
         subtitlesEnabled: workflow.subtitlesEnabled,
       });
-      return;
+      return true;
     }
     runText(normalized, messageId);
-  }, [activeSession, enqueueInput, hasActiveWorkflow, isAgentAvailable, pendingControl, queuedInputs.length, runText, workflow.snapshot, workflow.subtitlesEnabled, workflow.videoModel]);
+    return true;
+  }, [workflow.canSubmitInput, activeSession, enqueueInput, hasActiveWorkflow, isAgentAvailable, pendingControl, queuedInputs.length, runText, workflow.snapshot, workflow.subtitlesEnabled, workflow.videoModel]);
 
   const cancelQueuedInput = useCallback((id: string) => {
     const removed = queuedInputs.find((item) => item.id === id);
@@ -426,6 +440,9 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
   }, [isChatGenerating, stop]);
 
   const handleNewChat = useCallback(() => {
+    conversationIdRef.current = undefined;
+    adoptedConversationIdRef.current = null;
+    setIsHistoryOpen(false);
     activateConversation(null);
     workflow.newConversation();
     setInput("");
@@ -557,8 +574,10 @@ export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
           workflowStepProgressHistory={workflow.stepProgressHistory}
         />
         <ChatComposer
+          key={activeSession.id}
           ref={composerRef}
           canStop={isChatGenerating}
+          canSubmitInput={workflow.canSubmitInput}
           input={input}
           isGenerating={isAgentBusy}
           isSubtitlesLocked={workflow.snapshot !== null && !workflow.snapshot.canChangeSubtitles}

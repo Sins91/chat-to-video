@@ -58,11 +58,10 @@ export const listConversations = (cursor?: string): Promise<ConversationListResp
   );
 };
 
-export const getConversation = (conversationId: string): Promise<ConversationDetail> => {
+export const getConversation = (conversationId: string, options: { fresh?: boolean } = {}): Promise<ConversationDetail> => {
   const path = `/conversations/${encodeURIComponent(conversationId)}`;
-  return shareInFlight(conversationDetailRequests, path, async () =>
-    ConversationDetailSchema.parse(await conversationApi.Get(path).send(true))
-  );
+  const load = async () => ConversationDetailSchema.parse(await conversationApi.Get(path, { shareRequest: !options.fresh }).send(true));
+  return options.fresh ? load() : shareInFlight(conversationDetailRequests, path, load);
 };
 
 export const deleteConversation = async (conversationId: string): Promise<void> => {

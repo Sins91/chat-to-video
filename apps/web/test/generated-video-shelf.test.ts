@@ -103,9 +103,9 @@ describe("generated video shelf", () => {
     expect(provider).toContain("setChatVideoFocusRequest({ requestId: chatVideoFocusSequenceRef.current, videoId })");
     expect(provider).toContain("chatViewportControllerRef.current?.capture()");
     expect(provider).toContain("previewReturnLocationRef.current");
-    expect(provider).toContain("await prepareConversationSwitch(returnLocation.conversationId)");
+    expect(provider).toContain("await prepareConversationSwitch(returnLocation.conversationId, { preservePreviewNavigation: true })");
     expect(provider).toContain("setChatScrollRestoreRequest({");
-    expect(provider.indexOf("chatViewportControllerRef.current?.capture()")).toBeLessThan(provider.indexOf("await prepareConversationSwitch(video.conversationId)"));
+    expect(provider.indexOf("chatViewportControllerRef.current?.capture()")).toBeLessThan(provider.indexOf("await prepareConversationSwitch(video.conversationId, { preservePreviewNavigation: true })"));
     expect(panel).toContain("scrollRestoreRequest={workflow.chatScrollRestoreRequest}");
     expect(panel).toContain("onViewportControllerChange={workflow.registerChatViewportController}");
     expect(conversation).toContain("data-chat-video-id={entry.jobId}");

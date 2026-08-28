@@ -9,6 +9,7 @@ import {
   VideoWorkflowEventSchema,
   WorkflowStepProgressSchema,
   type ConversationEntry,
+  type ConversationDetail,
   type ReferenceImageView,
   type ReferenceImagePurpose,
   type GeneratedVideoPromptTrace,
@@ -21,7 +22,9 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
+import { createConversationOperationScope } from "@/lib/conversation-operation-scope";
 import { getConversation, notifyConversationHistoryChanged } from "@/lib/conversation-client";
+import { canSubmitConversation, getNewConversationPendingId, getConversationRouteAction } from "@/lib/conversation-route";
 import {
   createVideoWorkflow,
   getVideoWorkflow,
@@ -46,6 +49,7 @@ type VideoWorkflowContextValue = {
   snapshot: VideoWorkflowSnapshot | null;
   errorMessage: string | null;
   isLoading: boolean;
+  canSubmitInput: boolean;
   isSubmitting: boolean;
   stepProgress: WorkflowStepProgress | null;
   stepProgressHistory: readonly WorkflowStepProgress[];
@@ -60,7 +64,7 @@ type VideoWorkflowContextValue = {
   recoverWorkflow: () => Promise<void>;
   submitText: (text: string, messageId: string) => Promise<void>;
   resolveUserIntent: (text: string, messageId: string) => Promise<"workflow" | "chat">;
-  resolveControlIntent: (text: string, messageId: string, referenceImages?: readonly ReferenceImageView[], preferredConversationId?: string) => Promise<{
+  resolveControlIntent: (text: string, messageId: string, referenceImages?: readonly ReferenceImageView[], preferredConversationId?: string, isCurrentConversation?: () => boolean) => Promise<{
     route: "workflow" | "chat";
     conversationId: string | null;
     workflowId: string | null;
@@ -73,6 +77,7 @@ type VideoWorkflowContextValue = {
   updateReferenceImagePurpose: (referenceImageId: string, purpose: ReferenceImagePurpose) => Promise<void>;
   submitSceneDurations: (scenes: ReadonlyArray<{ order: number; durationSeconds: number }>) => Promise<void>;
   refresh: () => Promise<void>;
+  refreshConversation: (conversationId: string) => Promise<ConversationDetail | null>;
   prepareConversationSwitch: (conversationId: string) => Promise<boolean>;
   newConversation: () => void;
   videoModel: VideoModel;
@@ -209,6 +214,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
   const [loadedConversationId, setLoadedConversationId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSwitchingConversation, setIsSwitchingConversation] = useState(false);
   const [stepView, setStepView] = useState<WorkflowStepView | null>(null);
   const [previewVideo, setPreviewVideo] = useState<PreviewVideo | null>(null);
   const [chatVideoFocusRequest, setChatVideoFocusRequest] = useState<{ requestId: number; videoId: string } | null>(null);
@@ -218,33 +224,41 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
   const chatScrollRestoreSequenceRef = useRef(0);
   const chatViewportControllerRef = useRef<ChatViewportController | null>(null);
   const previewReturnLocationRef = useRef<ChatViewportLocation | null>(null);
-  const isPreviewConversationSwitchRef = useRef(false);
   const activeConversationIdRef = useRef<string | null>(requestedConversationId);
-  const preparedConversationIdRef = useRef<string | null>(null);
+  const preparedConversationIdRef = useRef<string | null | undefined>(undefined);
+  const [operations] = useState(createConversationOperationScope);
+  const [previewOperations] = useState(createConversationOperationScope);
   const [videoModel, setVideoModel] = useState<VideoModel>(DEFAULT_VIDEO_MODEL);
   const [subtitlesEnabled, setSubtitlesEnabledState] = useState(false);
 
   const followCurrentWorkflowPreview = useCallback(() => {
+    previewOperations.invalidate();
     setPreviewVideo(null);
     previewReturnLocationRef.current = null;
     setChatVideoFocusRequest(null);
-  }, []);
+  }, [previewOperations]);
 
   const loadConversation = useCallback(async (
     conversationId: string,
-    options: { preserveTransientUi?: boolean } = {},
-  ): Promise<boolean> => {
-    const detail = await getConversation(conversationId);
-    if (activeConversationIdRef.current !== conversationId) return false;
+    options: { preserveTransientUi?: boolean; preservePreviewNavigation?: boolean; fresh?: boolean } = {},
+  ): Promise<ConversationDetail | null> => {
+    const isCurrent = operations.start("load");
+    let detail: ConversationDetail;
+    try {
+      detail = await getConversation(conversationId, { fresh: options.fresh });
+    } catch (error: unknown) {
+      if (!isCurrent() || activeConversationIdRef.current !== conversationId) return null;
+      throw error;
+    }
+    if (!isCurrent() || activeConversationIdRef.current !== conversationId) return null;
     setEntries(detail.entries);
     setSnapshot(detail.videoWorkflow);
     setLoadedConversationId(conversationId);
-    setIsSubmitting(false);
     if (!options.preserveTransientUi) {
       setStepView(null);
       setPreviewVideo(null);
       setChatVideoFocusRequest(null);
-      if (!isPreviewConversationSwitchRef.current) {
+      if (!options.preservePreviewNavigation) {
         setChatScrollRestoreRequest(null);
         previewReturnLocationRef.current = null;
       }
@@ -257,33 +271,66 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       setVideoModel(DEFAULT_VIDEO_MODEL);
       setSubtitlesEnabledState(false);
     }
-    return true;
-  }, []);
+    return detail;
+  }, [operations]);
 
-  const prepareConversationSwitch = useCallback(async (nextConversationId: string): Promise<boolean> => {
-    if (nextConversationId === loadedConversationId) return true;
+  const prepareConversationSwitch = useCallback(async (
+    nextConversationId: string,
+    options: { preservePreviewNavigation?: boolean } = {},
+  ): Promise<boolean> => {
+    if (nextConversationId === loadedConversationId && activeConversationIdRef.current === nextConversationId) return true;
+    operations.invalidate();
+    if (!options.preservePreviewNavigation) previewOperations.invalidate();
+    const isCurrent = operations.capture();
+    setIsSubmitting(false);
     activeConversationIdRef.current = nextConversationId;
-    preparedConversationIdRef.current = nextConversationId;
+    preparedConversationIdRef.current = requestedConversationId === nextConversationId ? undefined : nextConversationId;
+    setIsSwitchingConversation(true);
     try {
-      return await loadConversation(nextConversationId);
+      return (await loadConversation(nextConversationId, options)) !== null;
     } catch (error: unknown) {
-      if (activeConversationIdRef.current !== nextConversationId) return false;
-      preparedConversationIdRef.current = null;
+      if (!isCurrent() || activeConversationIdRef.current !== nextConversationId) return false;
+      preparedConversationIdRef.current = undefined;
+      activeConversationIdRef.current = loadedConversationId;
+      setIsSwitchingConversation(false);
       setErrorMessage(formatVideoWorkflowError(error, { operation: "load" }));
       return false;
+    } finally {
+      if (isCurrent() && activeConversationIdRef.current === nextConversationId) setIsSwitchingConversation(false);
     }
+  }, [loadConversation, loadedConversationId, operations, previewOperations, requestedConversationId]);
+
+  const refreshConversation = useCallback(async (conversationId: string): Promise<ConversationDetail | null> => {
+    if (activeConversationIdRef.current !== conversationId || loadedConversationId !== conversationId) return null;
+    return loadConversation(conversationId, { preserveTransientUi: true, fresh: true });
   }, [loadConversation, loadedConversationId]);
 
   const refresh = useCallback(async () => {
-    const conversationId = loadedConversationId ?? requestedConversationId;
+    const conversationId = activeConversationIdRef.current;
     if (!conversationId) return;
-    await loadConversation(conversationId, { preserveTransientUi: true });
-  }, [loadConversation, loadedConversationId, requestedConversationId]);
+    await refreshConversation(conversationId);
+  }, [refreshConversation]);
 
   useEffect(() => {
-    if (preparedConversationIdRef.current !== null && preparedConversationIdRef.current === loadedConversationId) {
-      if (requestedConversationId !== loadedConversationId) return;
-      preparedConversationIdRef.current = null;
+    const routeAction = getConversationRouteAction({
+      requestedConversationId,
+      loadedConversationId,
+      preparedConversationId: preparedConversationIdRef.current,
+    });
+    if (routeAction.type === "wait") return;
+    if (preparedConversationIdRef.current === loadedConversationId &&
+        requestedConversationId === loadedConversationId) {
+      preparedConversationIdRef.current = undefined;
+    }
+    if (activeConversationIdRef.current !== requestedConversationId) {
+      operations.invalidate();
+      previewOperations.invalidate();
+      setIsSubmitting(false);
+      setIsSwitchingConversation(false);
+      setPreviewVideo(null);
+      setChatVideoFocusRequest(null);
+      setChatScrollRestoreRequest(null);
+      previewReturnLocationRef.current = null;
     }
     activeConversationIdRef.current = requestedConversationId;
     if (!requestedConversationId) {
@@ -296,20 +343,29 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       setSubtitlesEnabledState(false);
       return;
     }
-    if (loadedConversationId === requestedConversationId) return;
-    void loadConversation(requestedConversationId).catch((error: unknown) => {
+    if (routeAction.type !== "load") return;
+    void loadConversation(routeAction.conversationId).catch((error: unknown) => {
       if (activeConversationIdRef.current !== requestedConversationId) return;
       setErrorMessage(formatVideoWorkflowError(error, { operation: "load" }));
     });
-  }, [loadConversation, loadedConversationId, requestedConversationId]);
+  }, [loadConversation, loadedConversationId, operations, previewOperations, requestedConversationId]);
 
   const activeEntries = entries;
   const activeSnapshot = snapshot;
   const activeErrorMessage = errorMessage;
   const activeVideoModel = videoModel;
-  const isConversationLoading = requestedConversationId !== null && loadedConversationId === null && errorMessage === null;
+  const canSubmitInput = canSubmitConversation({
+    requestedConversationId, loadedConversationId,
+    preparedConversationId: preparedConversationIdRef.current,
+    isSwitching: isSwitchingConversation,
+  });
+  const isConversationLoading = !canSubmitInput && errorMessage === null;
 
   useEffect(() => {
+    if (snapshotRef.current?.workflowId !== activeSnapshot?.workflowId) {
+      operations.invalidate("mutation");
+      setIsSubmitting(false);
+    }
     snapshotRef.current = activeSnapshot;
     if (!activeSnapshot) return;
     if (activeSnapshot.status === "cancelled") {
@@ -325,7 +381,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         current.progress.stepId === snapshotProgress.stepId
       ? current
       : null);
-  }, [activeSnapshot]);
+  }, [activeSnapshot, operations]);
 
   const workflowId = activeSnapshot?.workflowId;
   const stepProgress = activeSnapshot?.status === "cancelled"
@@ -349,14 +405,16 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
   useEffect(() => {
     if (!queuedWorkflowId) return;
     let isActive = true;
+    const isCurrent = () => isActive && activeConversationIdRef.current === loadedConversationId &&
+      snapshotRef.current?.workflowId === queuedWorkflowId;
     let isRequestInFlight = false;
     const updateQueuePosition = async (): Promise<void> => {
-      if (isRequestInFlight) return;
+      if (isRequestInFlight || !isCurrent()) return;
       isRequestInFlight = true;
       try {
         const latest = await getVideoWorkflow(queuedWorkflowId);
-        if (isActive) {
-          setSnapshot((current) => hasSameQueueHint(current, latest) ? current : latest);
+        if (isCurrent()) {
+          setSnapshot((current) => current?.workflowId !== queuedWorkflowId || hasSameQueueHint(current, latest) ? current : latest);
         }
       } catch {
         // SSE remains the primary status channel; the next interval retries this hint.
@@ -371,11 +429,13 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       isActive = false;
       window.clearInterval(interval);
     };
-  }, [queuedWorkflowId]);
+  }, [loadedConversationId, queuedWorkflowId]);
 
   useEffect(() => {
     if (!workflowId) return;
     let isActive = true;
+    const isCurrent = () => isActive && activeConversationIdRef.current === loadedConversationId &&
+      snapshotRef.current?.workflowId === workflowId;
     let initialSnapshotTimestampMs: number | null = null;
     let refreshTimer: number | null = null;
     let isRefreshInFlight = false;
@@ -390,7 +450,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       if (refreshTimer !== null) return;
       refreshTimer = window.setTimeout(() => {
         refreshTimer = null;
-        if (!isActive || !isRefreshQueued) return;
+        if (!isCurrent() || !isRefreshQueued) return;
         if (isRefreshInFlight) {
           scheduleRefresh(false);
           return;
@@ -401,17 +461,17 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         shouldNotifyHistory = false;
         void refresh()
           .then(() => {
-            if (isActive && notifyHistoryAfterRefresh) notifyConversationHistoryChanged();
+            if (isCurrent() && notifyHistoryAfterRefresh) notifyConversationHistoryChanged();
           })
           .catch(() => undefined)
           .finally(() => {
             isRefreshInFlight = false;
-            if (isActive && isRefreshQueued) scheduleRefresh(false);
+            if (isCurrent() && isRefreshQueued) scheduleRefresh(false);
           });
       }, WORKFLOW_EVENT_REFRESH_COALESCE_MS);
     };
     const handleEvent = (event: Event): void => {
-      if (!(event instanceof MessageEvent) || !isActive) return;
+      if (!(event instanceof MessageEvent) || !isCurrent()) return;
       const parsed = VideoWorkflowEventSchema.safeParse(JSON.parse(String(event.data)) as unknown);
       if (!parsed.success) return;
       const workflowEvent = parsed.data;
@@ -574,11 +634,13 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       for (const type of eventTypes) source.removeEventListener(type, handleEvent);
       source.close();
     };
-  }, [refresh, workflowId]);
+  }, [loadedConversationId, refresh, workflowId]);
 
   const postInteraction = useCallback(async (body: VideoWorkflowInteraction) => {
+    if (!canSubmitInput) return;
     if (!workflowId) return;
     followCurrentWorkflowPreview();
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setErrorMessage(null);
     const previousProgress = stepProgress;
@@ -596,10 +658,12 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     }
     try {
       await interactWithVideoWorkflow(workflowId, body);
-      setSnapshot((current) => current ? { ...current, status: "drafting" } : current);
-      await refresh();
       notifyConversationHistoryChanged();
+      if (!isCurrent()) return;
+      setSnapshot((current) => current?.workflowId === workflowId ? { ...current, status: "drafting" } : current);
+      await refresh();
     } catch (error: unknown) {
+      if (!isCurrent()) return;
       if (previousProgress) setStepView(createWorkflowStepView(workflowId, previousProgress));
       const operation: VideoWorkflowOperation = body.type === "approve" ? "approve" : "revise";
       setErrorMessage(formatVideoWorkflowError(error, {
@@ -608,13 +672,15 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         requestId: snapshotRef.current?.requestId,
       }));
     } finally {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     }
-  }, [followCurrentWorkflowPreview, refresh, stepProgress, workflowId]);
+  }, [canSubmitInput, operations, followCurrentWorkflowPreview, refresh, stepProgress, workflowId]);
   const startWorkflow = useCallback(async (text: string, messageId: string) => {
+    if (!canSubmitInput) return null;
     const prompt = text.trim();
     if (!prompt) return null;
     followCurrentWorkflowPreview();
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setStepView(null);
     setErrorMessage(null);
@@ -632,19 +698,24 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         videoModel,
         subtitlesEnabled,
       });
+      if (!isCurrent()) {
+        notifyConversationHistoryChanged();
+        return created.conversationId;
+      }
       router.replace(`/studio/agent?conversationId=${encodeURIComponent(created.conversationId)}`);
       if (created.conversationId === loadedConversationId) await refresh();
       return created.conversationId;
     } catch (error: unknown) {
+      if (!isCurrent()) return null;
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "create",
         requestId: snapshotRef.current?.requestId,
       }));
       return null;
     } finally {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     }
-  }, [loadedConversationId, refresh, router, subtitlesEnabled, videoModel]);
+  }, [canSubmitInput, operations, followCurrentWorkflowPreview, loadedConversationId, refresh, router, subtitlesEnabled, videoModel]);
 
   const submitText = useCallback(async (text: string, messageId: string) => {
     const trimmed = text.trim();
@@ -660,11 +731,17 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     text: string,
     messageId: string,
   ): Promise<"workflow" | "chat"> => {
+    if (!canSubmitInput) return "workflow";
     if (!workflowId) return "chat";
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
       const result = await resolveWorkflowUserIntent(workflowId, { messageId, text, referenceImageIds: [] });
+      if (!isCurrent()) {
+        notifyConversationHistoryChanged();
+        return result.applied ? "workflow" : "chat";
+      }
       if (result.applied) {
         await refresh();
         notifyConversationHistoryChanged();
@@ -672,6 +749,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       }
       return "chat";
     } catch (error: unknown) {
+      if (!isCurrent()) return "workflow";
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "revise",
         workflowId,
@@ -679,27 +757,32 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       }));
       return "workflow";
     } finally {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     }
-  }, [refresh, workflowId]);
+  }, [canSubmitInput, operations, refresh, workflowId]);
 
   const resolveControlIntent = useCallback(async (
     text: string,
     messageId: string,
     referenceImages: readonly ReferenceImageView[] = [],
     preferredConversationId?: string,
+    isCurrentConversation: () => boolean = () => true,
   ): Promise<{ route: "workflow" | "chat"; conversationId: string | null; workflowId: string | null }> => {
+    const isCurrent = canSubmitInput && isCurrentConversation() ? operations.start("mutation") : () => false;
+    const requestSnapshot = activeSnapshot;
     const normalizedText = text.trim();
-    const pendingControlKind = snapshotRef.current?.pendingControl?.kind ?? null;
-    followCurrentWorkflowPreview();
-    setIsSubmitting(true);
-    setErrorMessage(null);
-    setEntries((current) => appendOptimisticUserEntry(current, {
-      messageId,
-      text: normalizedText,
-      referenceImages,
-      createdAt: new Date().toISOString(),
-    }));
+    const pendingControlKind = requestSnapshot?.pendingControl?.kind ?? null;
+    if (isCurrent()) {
+      followCurrentWorkflowPreview();
+      setIsSubmitting(true);
+      setErrorMessage(null);
+      setEntries((current) => appendOptimisticUserEntry(current, {
+        messageId,
+        text: normalizedText,
+        referenceImages,
+        createdAt: new Date().toISOString(),
+      }));
+    }
     try {
       await waitForUiPaint();
       const result = await resolveVideoWorkflowIntent({
@@ -707,11 +790,15 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         text: normalizedText,
         referenceImageIds: referenceImages.map((image) => image.id),
         conversationId: preferredConversationId ?? loadedConversationId ?? undefined,
-        workflowId: snapshotRef.current?.workflowId,
-        pendingActionId: snapshotRef.current?.pendingControl?.controlRequestId,
+        workflowId: requestSnapshot?.workflowId,
+        pendingActionId: requestSnapshot?.pendingControl?.controlRequestId,
         videoModel,
         subtitlesEnabled,
       });
+      if (!isCurrent() || !isCurrentConversation()) {
+        notifyConversationHistoryChanged();
+        return { route: result.route, conversationId: result.conversationId, workflowId: result.workflowId };
+      }
       if (result.route === "workflow") {
         if (pendingControlKind === "exit_workflow" && result.applied) {
           setSnapshot((current) => current ? {
@@ -735,7 +822,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
               getConversation(result.conversationId),
               getVideoWorkflow(result.workflowId),
             ]);
-            if (activeConversationIdRef.current === result.conversationId) {
+            if (isCurrent() && isCurrentConversation() && activeConversationIdRef.current === result.conversationId) {
               setEntries(detail.entries);
               setSnapshot(nextSnapshot);
               setLoadedConversationId(result.conversationId);
@@ -758,6 +845,9 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         workflowId: result.workflowId,
       };
     } catch (error: unknown) {
+      if (!isCurrent() || !isCurrentConversation()) {
+        return { route: "workflow", conversationId: null, workflowId: requestSnapshot?.workflowId ?? null };
+      }
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "revise",
         workflowId: snapshotRef.current?.workflowId,
@@ -769,15 +859,17 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         workflowId: snapshotRef.current?.workflowId ?? null,
       };
     } finally {
-      setIsSubmitting(false);
+      if (isCurrent() && isCurrentConversation()) setIsSubmitting(false);
     }
-  }, [followCurrentWorkflowPreview, loadedConversationId, refresh, router, subtitlesEnabled, videoModel]);
+  }, [canSubmitInput, operations, activeSnapshot, followCurrentWorkflowPreview, loadedConversationId, refresh, router, subtitlesEnabled, videoModel]);
 
   const resolveReferenceImagePurpose = useCallback(async (
     resolutionRequestId: string,
     referenceImageId: string,
     purpose: ReferenceImagePurpose,
   ): Promise<void> => {
+    if (!canSubmitInput) return;
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
@@ -785,10 +877,15 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         resolutionRequestId,
         resolutions: [{ referenceImageId, purpose, sceneOrders: [] }],
       });
+      if (!isCurrent()) {
+        notifyConversationHistoryChanged();
+        return;
+      }
       if (result.conversationId) {
         const detailPromise = getConversation(result.conversationId);
         const snapshotPromise = result.workflowId ? getVideoWorkflow(result.workflowId) : Promise.resolve(null);
         const [detail, nextSnapshot] = await Promise.all([detailPromise, snapshotPromise]);
+        if (!isCurrent()) return;
         activeConversationIdRef.current = result.conversationId;
         setEntries(detail.entries);
         setLoadedConversationId(result.conversationId);
@@ -805,36 +902,41 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
       }
       notifyConversationHistoryChanged();
     } catch (error: unknown) {
+      if (!isCurrent()) return;
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "revise",
         workflowId: snapshotRef.current?.workflowId,
         requestId: snapshotRef.current?.requestId,
       }));
     } finally {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     }
-  }, [loadedConversationId, refresh, router]);
+  }, [canSubmitInput, operations, loadedConversationId, refresh, router]);
 
   const updateReferenceImagePurpose = useCallback(async (
     referenceImageId: string,
     purpose: ReferenceImagePurpose,
   ): Promise<void> => {
+    if (!canSubmitInput) return;
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
       await updateReferenceImagePurposeRequest(referenceImageId, { purpose, sceneOrders: [] });
-      await refresh();
       notifyConversationHistoryChanged();
+      if (!isCurrent()) return;
+      await refresh();
     } catch (error: unknown) {
+      if (!isCurrent()) return;
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "revise",
         workflowId: snapshotRef.current?.workflowId,
         requestId: snapshotRef.current?.requestId,
       }));
     } finally {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     }
-  }, [refresh]);
+  }, [canSubmitInput, operations, refresh]);
 
   const submitSceneDurations = useCallback(async (
     scenes: ReadonlyArray<{ order: number; durationSeconds: number }>,
@@ -847,8 +949,10 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
   }, [postInteraction]);
 
   const retryWorkflow = useCallback(async () => {
+    if (!canSubmitInput) return;
     if (!workflowId || activeSnapshot?.status !== "failed" || activeSnapshot.videoJob?.status !== "failed" || !activeSnapshot.videoJob.providerTaskId) return;
     const previousProgress = stepProgress;
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setErrorMessage(null);
     setStepView(createWorkflowStepView(workflowId, {
@@ -861,14 +965,16 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     }));
     try {
       await retryVideoWorkflow(workflowId);
-      setSnapshot((current) => current ? {
+      notifyConversationHistoryChanged();
+      if (!isCurrent()) return;
+      setSnapshot((current) => current?.workflowId === workflowId ? {
         ...current,
         status: "queued",
         errorMessage: null,
         videoJob: current.videoJob ? { ...current.videoJob, status: "queued", errorMessage: null } : null,
       } : current);
-      notifyConversationHistoryChanged();
     } catch (error: unknown) {
+      if (!isCurrent()) return;
       if (previousProgress) setStepView(createWorkflowStepView(workflowId, previousProgress));
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "retry",
@@ -876,13 +982,15 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         requestId: snapshotRef.current?.requestId,
       }));
     } finally {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     }
-  }, [activeSnapshot, stepProgress, workflowId]);
+  }, [canSubmitInput, operations, activeSnapshot, stepProgress, workflowId]);
 
   const recoverWorkflow = useCallback(async () => {
+    if (!canSubmitInput) return;
     if (!workflowId || activeSnapshot?.status !== "failed" || !activeSnapshot.canRecover) return;
     const previousProgress = stepProgress;
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setErrorMessage(null);
     setStepView(createWorkflowStepView(
@@ -891,10 +999,13 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     ));
     try {
       await recoverVideoWorkflow(workflowId);
-      const latest = await getVideoWorkflow(workflowId);
-      setSnapshot(latest);
       notifyConversationHistoryChanged();
+      if (!isCurrent()) return;
+      const latest = await getVideoWorkflow(workflowId);
+      if (!isCurrent()) return;
+      setSnapshot(latest);
     } catch (error: unknown) {
+      if (!isCurrent()) return;
       if (previousProgress) setStepView(createWorkflowStepView(workflowId, previousProgress));
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "recover",
@@ -902,21 +1013,26 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         requestId: snapshotRef.current?.requestId,
       }));
     } finally {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     }
-  }, [activeSnapshot, stepProgress, workflowId]);
+  }, [canSubmitInput, operations, activeSnapshot, stepProgress, workflowId]);
 
   const changeVideoModel = useCallback((model: VideoModel) => {
+    if (!canSubmitInput) return;
     if (model === videoModel) return;
     if (workflowId && !activeSnapshot?.canChangeVideoModel) return;
     const previousModel = videoModel;
     setVideoModel(model);
     if (!workflowId) return;
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setErrorMessage(null);
     void updateVideoWorkflowModel(workflowId, { videoModel: model }).then(() => {
-      setSnapshot((current) => current ? { ...current, videoModel: model } : current);
+      notifyConversationHistoryChanged();
+      if (!isCurrent()) return;
+      setSnapshot((current) => current?.workflowId === workflowId ? { ...current, videoModel: model } : current);
     }).catch((error: unknown) => {
+      if (!isCurrent()) return;
       setVideoModel(previousModel);
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "update_model",
@@ -924,21 +1040,26 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         requestId: snapshotRef.current?.requestId,
       }));
     }).finally(() => {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     });
-  }, [activeSnapshot?.canChangeVideoModel, videoModel, workflowId]);
+  }, [canSubmitInput, operations, activeSnapshot?.canChangeVideoModel, videoModel, workflowId]);
 
   const changeSubtitlesEnabled = useCallback((enabled: boolean) => {
+    if (!canSubmitInput) return;
     if (enabled === subtitlesEnabled) return;
     if (workflowId && !activeSnapshot?.canChangeSubtitles) return;
     const previous = subtitlesEnabled;
     setSubtitlesEnabledState(enabled);
     if (!workflowId) return;
+    const isCurrent = operations.start("mutation");
     setIsSubmitting(true);
     setErrorMessage(null);
     void updateVideoWorkflowSubtitles(workflowId, { subtitlesEnabled: enabled }).then(() => {
-      setSnapshot((current) => current ? { ...current, subtitlesEnabled: enabled } : current);
+      notifyConversationHistoryChanged();
+      if (!isCurrent()) return;
+      setSnapshot((current) => current?.workflowId === workflowId ? { ...current, subtitlesEnabled: enabled } : current);
     }).catch((error: unknown) => {
+      if (!isCurrent()) return;
       setSubtitlesEnabledState(previous);
       setErrorMessage(formatVideoWorkflowError(error, {
         operation: "update_subtitles",
@@ -946,13 +1067,18 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
         requestId: snapshotRef.current?.requestId,
       }));
     }).finally(() => {
-      setIsSubmitting(false);
+      if (isCurrent()) setIsSubmitting(false);
     });
-  }, [activeSnapshot?.canChangeSubtitles, subtitlesEnabled, workflowId]);
+  }, [canSubmitInput, operations, activeSnapshot?.canChangeSubtitles, subtitlesEnabled, workflowId]);
 
   const newConversation = useCallback(() => {
+    operations.invalidate();
+    previewOperations.invalidate();
     activeConversationIdRef.current = null;
-    preparedConversationIdRef.current = null;
+    snapshotRef.current = null;
+    setIsSubmitting(false);
+    preparedConversationIdRef.current = getNewConversationPendingId(requestedConversationId);
+    setIsSwitchingConversation(false);
     setEntries([]);
     setSnapshot(null);
     setLoadedConversationId(null);
@@ -964,8 +1090,9 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     setErrorMessage(null);
     setVideoModel(DEFAULT_VIDEO_MODEL);
     setSubtitlesEnabledState(false);
-    router.push("/studio/agent");
-  }, [router]);
+    // Clear the address immediately; server navigation must not restore the old query.
+    window.history.pushState(null, "", "/studio/agent");
+  }, [operations, previewOperations, requestedConversationId]);
 
   const requestChatVideoFocus = useCallback((videoId: string) => {
     chatVideoFocusSequenceRef.current += 1;
@@ -975,91 +1102,70 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     chatViewportControllerRef.current = controller;
   }, []);
   const openGeneratedVideo = useCallback(async (video: GeneratedVideoSelection): Promise<boolean> => {
+    const isCurrent = previewOperations.start("navigation");
     const isStartingPreviewNavigation = previewReturnLocationRef.current === null;
     if (isStartingPreviewNavigation) {
       previewReturnLocationRef.current = chatViewportControllerRef.current?.capture() ?? {
-        conversationId: loadedConversationId,
-        scrollTop: 0,
+        conversationId: loadedConversationId, scrollTop: 0,
       };
     }
-
-    let isReady = true;
-    if (video.conversationId !== loadedConversationId) {
-      isPreviewConversationSwitchRef.current = true;
-      try {
-        isReady = await prepareConversationSwitch(video.conversationId);
-      } finally {
-        isPreviewConversationSwitchRef.current = false;
-      }
-    }
+    const isReady = await prepareConversationSwitch(video.conversationId, { preservePreviewNavigation: true });
+    if (!isCurrent()) return false;
     if (!isReady) {
       if (isStartingPreviewNavigation) previewReturnLocationRef.current = null;
       return false;
     }
 
+    // The conversation is already selected even if the archived preview fails to load.
+    if (video.conversationId !== requestedConversationId) {
+      router.push(`/studio/agent?conversationId=${encodeURIComponent(video.conversationId)}`);
+    }
     let workflowSnapshot = snapshotRef.current;
-    if (video.conversationId !== loadedConversationId || workflowSnapshot?.workflowId !== video.workflowId) {
+    if (workflowSnapshot?.workflowId !== video.workflowId) {
       try {
         workflowSnapshot = await getVideoWorkflow(video.workflowId);
       } catch (error: unknown) {
+        if (!isCurrent()) return false;
         setErrorMessage(formatVideoWorkflowError(error, { operation: "load" }));
         if (isStartingPreviewNavigation) previewReturnLocationRef.current = null;
         return false;
       }
     }
+    if (!isCurrent() || activeConversationIdRef.current !== video.conversationId) return false;
     if (!workflowSnapshot || workflowSnapshot.workflowId !== video.workflowId) {
       if (isStartingPreviewNavigation) previewReturnLocationRef.current = null;
       return false;
     }
-
     setPreviewVideo({
-      id: video.id,
-      playbackUrl: video.playbackUrl,
-      promptTrace: video.promptTrace,
-      title: video.title,
-      workflowId: video.workflowId,
-      workflowSnapshot,
+      id: video.id, playbackUrl: video.playbackUrl, promptTrace: video.promptTrace,
+      title: video.title, workflowId: video.workflowId, workflowSnapshot,
     });
     requestChatVideoFocus(video.id);
-    if (video.conversationId !== requestedConversationId) {
-      router.push(`/studio/agent?conversationId=${encodeURIComponent(video.conversationId)}`);
-    }
     return true;
-  }, [loadedConversationId, prepareConversationSwitch, requestChatVideoFocus, requestedConversationId, router]);
+  }, [loadedConversationId, prepareConversationSwitch, previewOperations, requestChatVideoFocus, requestedConversationId, router]);
+
   const returnToCurrentVideo = useCallback(async (): Promise<void> => {
+    const isCurrent = previewOperations.start("navigation");
     const returnLocation = previewReturnLocationRef.current;
     if (!returnLocation) {
       setPreviewVideo(null);
       return;
     }
-
     if (returnLocation.conversationId === null) {
       newConversation();
     } else {
-      let isReady = true;
-      if (returnLocation.conversationId !== loadedConversationId) {
-        isPreviewConversationSwitchRef.current = true;
-        try {
-          isReady = await prepareConversationSwitch(returnLocation.conversationId);
-        } finally {
-          isPreviewConversationSwitchRef.current = false;
-        }
-      }
-      if (!isReady) return;
+      const isReady = await prepareConversationSwitch(returnLocation.conversationId, { preservePreviewNavigation: true });
+      if (!isCurrent() || !isReady) return;
       if (returnLocation.conversationId !== requestedConversationId) {
         router.push(`/studio/agent?conversationId=${encodeURIComponent(returnLocation.conversationId)}`);
       }
     }
-
     previewReturnLocationRef.current = null;
     setPreviewVideo(null);
     setChatVideoFocusRequest(null);
     chatScrollRestoreSequenceRef.current += 1;
-    setChatScrollRestoreRequest({
-      location: returnLocation,
-      requestId: chatScrollRestoreSequenceRef.current,
-    });
-  }, [loadedConversationId, newConversation, prepareConversationSwitch, requestedConversationId, router]);
+    setChatScrollRestoreRequest({ location: returnLocation, requestId: chatScrollRestoreSequenceRef.current });
+  }, [newConversation, prepareConversationSwitch, previewOperations, requestedConversationId, router]);
 
   const value = useMemo<VideoWorkflowContextValue>(() => ({
     conversationId: loadedConversationId,
@@ -1067,6 +1173,7 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     snapshot: activeSnapshot,
     errorMessage: activeErrorMessage,
     isLoading: isConversationLoading,
+    canSubmitInput,
     isSubmitting,
     stepProgress,
     stepProgressHistory,
@@ -1086,13 +1193,14 @@ export function VideoWorkflowProvider({ children }: { readonly children: ReactNo
     updateReferenceImagePurpose,
     submitSceneDurations,
     refresh,
+    refreshConversation,
     prepareConversationSwitch,
     newConversation,
     videoModel: activeVideoModel,
     setVideoModel: changeVideoModel,
     subtitlesEnabled,
     setSubtitlesEnabled: changeSubtitlesEnabled,
-  }), [activeEntries, activeErrorMessage, activeSnapshot, activeVideoModel, changeSubtitlesEnabled, changeVideoModel, chatScrollRestoreRequest, chatVideoFocusRequest, isConversationLoading, isSubmitting, loadedConversationId, newConversation, openGeneratedVideo, prepareConversationSwitch, previewVideo, recoverWorkflow, refresh, registerChatViewportController, retryWorkflow, returnToCurrentVideo, resolveControlIntent, resolveReferenceImagePurpose, resolveUserIntent, startWorkflow, stepProgress, stepProgressHistory, submitSceneDurations, submitText, subtitlesEnabled, updateReferenceImagePurpose]);
+  }), [canSubmitInput, activeEntries, activeErrorMessage, activeSnapshot, activeVideoModel, changeSubtitlesEnabled, changeVideoModel, chatScrollRestoreRequest, chatVideoFocusRequest, isConversationLoading, isSubmitting, loadedConversationId, newConversation, openGeneratedVideo, prepareConversationSwitch, previewVideo, recoverWorkflow, refresh, refreshConversation, registerChatViewportController, retryWorkflow, returnToCurrentVideo, resolveControlIntent, resolveReferenceImagePurpose, resolveUserIntent, startWorkflow, stepProgress, stepProgressHistory, submitSceneDurations, submitText, subtitlesEnabled, updateReferenceImagePurpose]);
 
   return <VideoWorkflowContext value={value}>{children}</VideoWorkflowContext>;
 }

@@ -11,9 +11,189 @@ import {
   classifyWorkflowReviewInput,
 } from "@/lib/workflow-review-intent";
 
+import { deferred } from "./helpers/deferred";
+import { createConversationOperationScope } from "@/lib/conversation-operation-scope";
+import { canSubmitConversation, getNewConversationPendingId, getConversationRouteAction } from "@/lib/conversation-route";
+
 const webRoot = resolve(import.meta.dirname, "..");
 
 describe("workflow and chat routing", () => {
+
+  it("rejects delayed success, failure and completion writes after a conversation reset", async () => {
+    const scope = createConversationOperationScope();
+    const isCurrent = scope.start("mutation");
+    const request = deferred<string>();
+    const writes: string[] = [];
+    const pending = request.promise.then(
+      (value) => { if (isCurrent()) writes.push(value); },
+      () => { if (isCurrent()) writes.push("error"); },
+    ).finally(() => { if (isCurrent()) writes.push("idle"); });
+    scope.invalidate();
+    request.resolve("old snapshot");
+    await pending;
+    expect(writes).toEqual([]);
+
+    const failed = deferred<string>();
+    const isFailedCurrent = scope.start("mutation");
+    const failure = failed.promise.catch(() => { if (isFailedCurrent()) writes.push("error"); })
+      .finally(() => { if (isFailedCurrent()) writes.push("idle"); });
+    scope.invalidate();
+    failed.reject(new Error("old request failed"));
+    await failure;
+    expect(writes).toEqual([]);
+  });
+
+  it("keeps only the latest operation in a channel without discarding other channels", async () => {
+    const scope = createConversationOperationScope();
+    const older = deferred<string>();
+    const newer = deferred<string>();
+    const first = scope.start("preview");
+    const load = scope.start("load");
+    const second = scope.start("preview");
+    const writes: string[] = [];
+    const a = older.promise.then((value) => { if (first()) writes.push(value); });
+    const b = newer.promise.then((value) => { if (second()) writes.push(value); });
+    newer.resolve("new video");
+    await b;
+    older.resolve("old video");
+    await a;
+    expect(writes).toEqual(["new video"]);
+    expect(load()).toBe(true);
+    scope.invalidate("preview");
+    expect(second()).toBe(false);
+    expect(load()).toBe(true);
+    scope.invalidate();
+    expect(load()).toBe(false);
+    expect(scope.start("load")()).toBe(true);
+  });
+
+  it("allows a first message after repeatedly resetting an already empty page", () => {
+    let preparedConversationId = getNewConversationPendingId(null);
+    expect(preparedConversationId).toBeUndefined();
+    preparedConversationId = getNewConversationPendingId(null);
+    expect(getConversationRouteAction({
+      requestedConversationId: "created", loadedConversationId: null, preparedConversationId,
+    })).toEqual({ type: "load", conversationId: "created" });
+  });
+
+  it("blocks submissions until the target conversation is restored, including failed loads", () => {
+    expect(canSubmitConversation({
+      requestedConversationId: "existing", loadedConversationId: null, preparedConversationId: undefined,
+      isSwitching: false,
+    })).toBe(false);
+    expect(canSubmitConversation({
+      requestedConversationId: "existing", loadedConversationId: "existing", preparedConversationId: "next",
+      isSwitching: true,
+    })).toBe(false);
+    expect(canSubmitConversation({
+      requestedConversationId: "existing", loadedConversationId: "next", preparedConversationId: "next",
+      isSwitching: false,
+    })).toBe(true);
+    expect(canSubmitConversation({
+      requestedConversationId: "previous", loadedConversationId: null, preparedConversationId: getNewConversationPendingId("previous"),
+      isSwitching: false,
+    })).toBe(true);
+  });
+
+  it("gates submission before reserving a conversation and scopes composer cleanup to its local session", async () => {
+    const [panel, composer, client, provider] = await Promise.all([
+      readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/chat/chat-composer.tsx"), "utf8"),
+      readFile(resolve(webRoot, "lib/conversation-client.ts"), "utf8"),
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
+    ]);
+    const send = panel.slice(panel.indexOf("const sendInput ="), panel.indexOf("const cancelQueuedInput ="));
+    const guard = send.indexOf("if (!workflow.canSubmitInput) return false");
+    expect(guard).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeLessThan(send.indexOf("crypto.randomUUID()"));
+    expect(guard).toBeLessThan(send.indexOf("enqueueInput("));
+    expect(panel).toContain("key={activeSession.id}");
+    expect(panel).not.toContain("key={activeSession.conversationId}");
+    expect(composer).toContain("if (!onSubmitMessage({ text: message.text, referenceImages: readyImages })) return");
+    expect(composer).toContain("getDraft().release()");
+    expect(composer).toContain("draft.dispose()");
+    expect(composer).toContain("if (!draft.resolve(localId, referenceImage.id)) return");
+    expect(client).toContain("shareRequest: !options.fresh");
+    expect(provider).toContain("preserveTransientUi: true, fresh: true");
+    expect(provider).toContain("loadedConversationId !== conversationId");
+  });
+
+  it("does not restore the old URL while a new conversation is waiting for route synchronization", () => {
+    expect(getConversationRouteAction({
+      requestedConversationId: "previous",
+      loadedConversationId: null,
+      preparedConversationId: null,
+    })).toEqual({ type: "wait" });
+    expect(getConversationRouteAction({
+      requestedConversationId: null,
+      loadedConversationId: null,
+      preparedConversationId: null,
+    })).toEqual({ type: "clear" });
+  });
+
+  it("restores an existing conversation on reload and browser back navigation", () => {
+    expect(getConversationRouteAction({
+      requestedConversationId: "previous",
+      loadedConversationId: null,
+      preparedConversationId: undefined,
+    })).toEqual({ type: "load", conversationId: "previous" });
+    expect(getConversationRouteAction({
+      requestedConversationId: null,
+      loadedConversationId: "previous",
+      preparedConversationId: undefined,
+    })).toEqual({ type: "clear" });
+  });
+
+  it("preserves a prepared history selection until its URL catches up", () => {
+    expect(getConversationRouteAction({
+      requestedConversationId: "previous",
+      loadedConversationId: "selected",
+      preparedConversationId: "selected",
+    })).toEqual({ type: "wait" });
+    expect(getConversationRouteAction({
+      requestedConversationId: "selected",
+      loadedConversationId: "selected",
+      preparedConversationId: "selected",
+    })).toEqual({ type: "ready" });
+  });
+
+  it("clears the URL synchronously and rejects stale responses when starting a new conversation", async () => {
+    const [provider, panel] = await Promise.all([
+      readFile(resolve(webRoot, "components/video-workflow/video-workflow-provider.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
+    ]);
+    const reset = provider.slice(provider.indexOf("const newConversation ="), provider.indexOf("const requestChatVideoFocus"));
+    expect(reset).toContain('window.history.pushState(null, "", "/studio/agent")');
+    expect(reset).not.toContain("router.push");
+    expect(reset.indexOf("operations.invalidate()")).toBeLessThan(reset.indexOf("setEntries([])"));
+    expect(reset).toContain("getNewConversationPendingId(requestedConversationId)");
+    expect(reset).toContain("snapshotRef.current = null");
+    expect(reset).toContain("setIsSubmitting(false)");
+    for (const [start, end] of [
+      ["const postInteraction =", "const startWorkflow ="],
+      ["const startWorkflow =", "const submitText ="],
+      ["const resolveUserIntent =", "const resolveControlIntent ="],
+      ["const resolveControlIntent =", "const resolveReferenceImagePurpose ="],
+      ["const resolveReferenceImagePurpose =", "const updateReferenceImagePurpose ="],
+      ["const updateReferenceImagePurpose =", "const submitSceneDurations ="],
+      ["const retryWorkflow =", "const recoverWorkflow ="],
+      ["const recoverWorkflow =", "const changeVideoModel ="],
+      ["const changeVideoModel =", "const changeSubtitlesEnabled ="],
+      ["const changeSubtitlesEnabled =", "const newConversation ="],
+    ] as const) {
+      const operation = provider.slice(provider.indexOf(start), provider.indexOf(end));
+      expect(operation).toContain('operations.start("mutation")');
+      expect(operation).toContain("!isCurrent()");
+      expect(operation).toContain("if (isCurrent()");
+      expect(operation).toContain("setIsSubmitting(false)");
+    }
+    expect(panel).toContain("() => activeSessionIdRef.current === sessionId");
+    expect(provider).toContain("!isCurrentConversation()");
+    const resetChat = panel.slice(panel.indexOf("const handleNewChat ="), panel.indexOf("const handleConversationSwitch ="));
+    expect(resetChat).toContain("conversationIdRef.current = undefined");
+    expect(resetChat).toContain("adoptedConversationIdRef.current = null");
+  });
+
   it.each([
     ["从脚本重新开始，并把旁白写得更克制", "script"],
     ["回退到分镜重新生成，减少镜头数量", "scene_plan"],
@@ -230,9 +410,10 @@ describe("workflow and chat routing", () => {
     expect(panel).not.toContain("activeSession.controller");
     expect(panel).toContain("const { messages, sendMessage, status, stop }");
     expect(panel).toContain("void stop();");
-    expect(panel).toContain("const completedIds = new Set(completedMessageIds);");
-    expect(panel).toContain("session.chat.messages.filter((message) => !completedIds.has(message.id))");
-    expect(panel.indexOf("refreshConversationRef.current().then")).toBeLessThan(panel.indexOf("releasePersistedMessages();"));
+    expect(panel).toContain("completedIds: session.completedMessageIds");
+    expect(panel).toContain("confirmCompletedChatMessages({");
+    expect(panel).toContain("load: (id) => refreshConversationRef.current(id)");
+    expect(panel).not.toContain("releasePersistedMessages");
     expect(panel).toContain("if (isError) {");
     expect(panel).toContain("session.chat.clearError();");
     expect(panel).toContain("当前无法连接聊天服务。我暂时无法完成回答");

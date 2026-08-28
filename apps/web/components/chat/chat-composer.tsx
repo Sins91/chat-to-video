@@ -2,9 +2,10 @@
 
 import { MAX_REFERENCE_IMAGE_BYTES, MAX_REFERENCE_IMAGES_PER_MESSAGE, type PersistedChatQueueItem, type ReferenceImageView, type VideoModel } from "@chat-to-video/contracts";
 import { CaptionsIcon, ChevronDownIcon, Clock3Icon, ImagePlusIcon, RotateCcwIcon, VideoIcon, XIcon } from "lucide-react";
-import { forwardRef, useCallback, useImperativeHandle, useRef, useState, type ChangeEvent, type ClipboardEvent, type Ref } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type ChangeEvent, type ClipboardEvent, type Ref } from "react";
 
 import { Button } from "@/components/ui/button";
+import { createReferenceImageDraft } from "@/lib/reference-image-draft";
 import { abandonReferenceImage, uploadReferenceImage } from "@/lib/reference-image-client";
 import { Attachment, AttachmentFallback, AttachmentImage, AttachmentInfo, AttachmentPreview, AttachmentRemove, Attachments, AttachmentStatus, type AttachmentData } from "@/src/components/ai-elements/attachments";
 import { getVideoModelPresentation, VIDEO_MODELS } from "@/lib/video-models";
@@ -54,6 +55,7 @@ type PendingReferenceImage = AttachmentData & { referenceImage: ReferenceImageVi
 
 interface ChatComposerProps {
   canStop: boolean;
+  canSubmitInput: boolean;
   input: string;
   isGenerating: boolean;
   isVideoModelLocked: boolean;
@@ -61,7 +63,7 @@ interface ChatComposerProps {
   onRetryQueuedInput: (id: string) => void;
   onInputChange: (input: string) => void;
   onStop: () => void;
-  onSubmitMessage: (message: SubmittedChatInput) => void;
+  onSubmitMessage: (message: SubmittedChatInput) => boolean;
   onSubtitlesEnabledChange: (enabled: boolean) => void;
   onVideoModelChange: (model: VideoModel) => void;
   placeholder?: string;
@@ -79,6 +81,7 @@ export interface ChatComposerHandle {
 
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer({
   canStop,
+  canSubmitInput,
   input,
   isGenerating,
   isVideoModelLocked,
@@ -101,18 +104,31 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const [pendingImages, setPendingImages] = useState<PendingReferenceImage[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const removedUploadIdsRef = useRef(new Set<string>());
+  const draftRef = useRef<ReturnType<typeof createReferenceImageDraft> | null>(null);
+  const getDraft = useCallback(() => draftRef.current ??= createReferenceImageDraft({
+    revokeObjectUrl: (url) => URL.revokeObjectURL(url),
+    abandon: (id) => { void abandonReferenceImage(id).catch(() => undefined); },
+  }), []);
+  useEffect(() => {
+    const draft = getDraft();
+    return () => {
+      draft.dispose();
+      if (draftRef.current === draft) draftRef.current = null;
+    };
+  }, [getDraft]);
   const readyImages = pendingImages.flatMap((image) => image.referenceImage ? [image.referenceImage] : []);
   const isUploading = pendingImages.some((image) => image.status !== "ready" && image.status !== "rejected");
   const handleSubmit = useCallback((message: PromptInputMessage) => {
-    if (isUploading || (!message.text.trim() && readyImages.length === 0)) return;
-    onSubmitMessage({ text: message.text, referenceImages: readyImages });
+    if (!canSubmitInput || isUploading || (!message.text.trim() && readyImages.length === 0)) return;
+    if (!onSubmitMessage({ text: message.text, referenceImages: readyImages })) return;
+    getDraft().release();
     setPendingImages([]);
     setUploadError(null);
-  }, [isUploading, onSubmitMessage, readyImages]);
+  }, [canSubmitInput, getDraft, isUploading, onSubmitMessage, readyImages]);
   const addFiles = useCallback((files: File[]) => {
-    if (files.length === 0) return;
-    const remaining = MAX_REFERENCE_IMAGES_PER_MESSAGE - pendingImages.length;
+    if (!canSubmitInput || files.length === 0) return;
+    const draft = getDraft();
+    const remaining = MAX_REFERENCE_IMAGES_PER_MESSAGE - draft.size;
     const selected = files.slice(0, Math.max(0, remaining));
     const invalid = selected.find((file) =>
       !["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > MAX_REFERENCE_IMAGE_BYTES
@@ -125,6 +141,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     for (const file of selected) {
       const localId = crypto.randomUUID();
       const localUrl = URL.createObjectURL(file);
+      if (!draft.register(localId, localUrl)) continue;
       setPendingImages((current) => [...current, {
         id: localId,
         filename: file.name,
@@ -134,20 +151,17 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         referenceImage: null,
       }]);
       void uploadReferenceImage(file).then((referenceImage) => {
-        URL.revokeObjectURL(localUrl);
-        if (removedUploadIdsRef.current.delete(localId)) {
-          void abandonReferenceImage(referenceImage.id).catch(() => undefined);
-          return;
-        }
+        if (!draft.resolve(localId, referenceImage.id)) return;
         setPendingImages((current) => current.map((item) => item.id === localId
-          ? { ...item, id: referenceImage.id, url: referenceImage.previewUrl, status: "ready", referenceImage }
+          ? { ...item, url: referenceImage.previewUrl, status: "ready", referenceImage }
           : item));
       }).catch((error: unknown) => {
+        if (!draft.reject(localId)) return;
         setPendingImages((current) => current.map((item) => item.id === localId ? { ...item, status: "rejected" } : item));
         setUploadError(error instanceof Error ? error.message : "参考图上传失败。");
       });
     }
-  }, [pendingImages.length]);
+  }, [canSubmitInput, getDraft]);
   const handleFiles = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const files = [...(event.currentTarget.files ?? [])];
     event.currentTarget.value = "";
@@ -161,12 +175,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     addFiles(files);
   }, [addFiles]);
   const removeImage = useCallback((id: string) => {
-    const removed = pendingImages.find((item) => item.id === id);
-    if (removed?.url?.startsWith("blob:")) URL.revokeObjectURL(removed.url);
-    if (removed?.referenceImage) void abandonReferenceImage(removed.referenceImage.id).catch(() => undefined);
-    else if (removed) removedUploadIdsRef.current.add(removed.id);
+    getDraft().remove(id);
     setPendingImages((current) => current.filter((item) => item.id !== id));
-  }, [pendingImages]);
+  }, [getDraft]);
   const selectedModel = getVideoModelPresentation(videoModel);
 
   return <div className="min-w-0 border-t border-border bg-background/95 px-3 py-3 sm:px-4 backdrop-blur-sm">
@@ -230,6 +241,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         <PromptInputTextarea
           aria-label="聊天或视频创意输入"
           className="min-h-16 max-h-44 text-[13px] text-foreground placeholder:text-muted-foreground"
+          disabled={!canSubmitInput}
           maxLength={8_000}
           onChange={(event) => onInputChange(event.currentTarget.value)}
           onPaste={handlePaste}
@@ -241,12 +253,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       <PromptInputFooter className="min-w-0 items-end font-sans">
         <PromptInputTools className="min-w-0 flex-1 flex-wrap">
           <input accept="image/jpeg,image/png,image/webp" className="sr-only" multiple onChange={handleFiles} ref={fileInputRef} type="file" />
-          <Button aria-label="添加参考图" className="size-7" disabled={pendingImages.length >= MAX_REFERENCE_IMAGES_PER_MESSAGE} onClick={() => fileInputRef.current?.click()} size="icon" type="button" variant="ghost">
+          <Button aria-label="添加参考图" className="size-7" disabled={!canSubmitInput || pendingImages.length >= MAX_REFERENCE_IMAGES_PER_MESSAGE} onClick={() => fileInputRef.current?.click()} size="icon" type="button" variant="ghost">
             <ImagePlusIcon className="size-4" />
           </Button>
           <ModelSelector onOpenChange={setIsModelSelectorOpen} open={isModelSelectorOpen}>
             <ModelSelectorTrigger
-              disabled={isVideoModelLocked || isGenerating}
+              disabled={!canSubmitInput || isVideoModelLocked || isGenerating}
               render={<Button className="h-7 min-w-0 max-w-full border-border bg-background px-2 font-sans text-xs font-medium normal-case tracking-normal text-muted-foreground hover:bg-accent hover:text-foreground" size="sm" type="button" variant="outline" />}
             >
               <VideoIcon className="size-3.5" />
@@ -283,7 +295,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             aria-checked={subtitlesEnabled}
             aria-label={subtitlesEnabled ? "成片字幕已开启" : "成片字幕已关闭"}
             className="h-7 border-border bg-background px-2 font-sans text-xs font-medium normal-case tracking-normal text-muted-foreground hover:bg-accent hover:text-foreground"
-            disabled={isSubtitlesLocked || isGenerating}
+            disabled={!canSubmitInput || isSubtitlesLocked || isGenerating}
             onClick={() => onSubtitlesEnabledChange(!subtitlesEnabled)}
             role="switch"
             size="sm"
@@ -298,7 +310,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         <PromptInputSubmit
           className="ml-auto shrink-0 self-end"
           aria-label={canStop ? "停止当前 Agent" : willQueueInput ? "加入发送队列" : "发送消息"}
-          disabled={!canStop && (isUploading || (!input.trim() && readyImages.length === 0))}
+          disabled={!canStop && (!canSubmitInput || isUploading || (!input.trim() && readyImages.length === 0))}
           onStop={onStop}
           status={canStop ? "streaming" : "ready"}
         />

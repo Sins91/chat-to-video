@@ -459,8 +459,9 @@ describe("two-step video workflow UI", () => {
     expect(conversation).toContain("viewportKey");
     expect(provider).toContain("conversationId: loadedConversationId");
     expect(provider).toContain("const activeEntries = entries");
-    expect(provider).toContain("await loadConversation(nextConversationId)");
-    expect(provider).toContain("preparedConversationIdRef.current !== null && preparedConversationIdRef.current === loadedConversationId");
+    expect(provider).toContain("await loadConversation(nextConversationId, options)");
+    expect(provider).toContain("getConversationRouteAction");
+    expect(provider).toContain('if (routeAction.type === "wait") return;');
     expect(provider).not.toContain("setLoadedConversationId(null);\n    setIsSubmitting(false)");
     expect(provider).toContain("setIsSubmitting(false)");
     expect(panel).toContain("onConversationSwitch={handleConversationSwitch}");
