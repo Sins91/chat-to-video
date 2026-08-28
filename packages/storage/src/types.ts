@@ -13,6 +13,7 @@ export type AliyunOssStorageConfig = {
   provider: "aliyun-oss";
   region: string;
   bucket: string;
+  prefix: string;
   internalEndpoint: string;
   publicEndpoint: string;
   accessKeyId: string;

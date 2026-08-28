@@ -14,6 +14,7 @@
     "db:seed:history": "pnpm --filter @chat-to-video/database db:seed:history",
     "sdk:docs:ai": "node scripts/search-sdk-docs.cjs ai",
     "docker:images:export": "node scripts/export-docker-images.cjs",
+    "deploy:ecs": "node scripts/deploy-to-ecs.cjs",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "dev:chat": "node scripts/run-chat-dev.cjs",

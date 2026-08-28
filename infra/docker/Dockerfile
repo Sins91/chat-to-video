@@ -66,7 +66,7 @@ COPY --from=api-build --chown=node:node /app/packages ./packages
 USER node
 EXPOSE 4101
 
-CMD ["node", "apps/api/dist/main.js"]
+CMD ["node", "apps/api/dist/src/main.js"]
 
 FROM dependencies AS worker-build
 

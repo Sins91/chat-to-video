@@ -18,6 +18,7 @@ const ossEnvironment = {
   STORAGE_PROVIDER: "aliyun-oss",
   OSS_REGION: "oss-cn-hangzhou",
   OSS_BUCKET: "private-bucket",
+  OSS_PREFIX: "chat-to-video",
   OSS_INTERNAL_ENDPOINT: "https://oss-cn-hangzhou-internal.aliyuncs.com",
   OSS_PUBLIC_ENDPOINT: "https://oss-cn-hangzhou.aliyuncs.com",
   OSS_ACCESS_KEY_ID: "access-key-id",
@@ -39,11 +40,35 @@ describe("loadStorageConfigFromEnvironment", () => {
       provider: "aliyun-oss",
       region: "oss-cn-hangzhou",
       bucket: "private-bucket",
+      prefix: "chat-to-video",
       internalEndpoint: "https://oss-cn-hangzhou-internal.aliyuncs.com",
       publicEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
       accessKeyId: "access-key-id",
       accessKeySecret: "access-key-secret",
     });
+  });
+
+  it("keeps existing OSS object keys when no prefix is configured", () => {
+    const environment = { ...ossEnvironment, OSS_PREFIX: undefined };
+    expect(loadStorageConfigFromEnvironment(environment)).toMatchObject({
+      provider: "aliyun-oss",
+      prefix: "",
+    });
+  });
+
+  it.each([
+    "/chat-to-video",
+    "chat-to-video/",
+    "chat-to-video//assets",
+    "chat-to-video/./assets",
+    "chat-to-video/../assets",
+    "chat-to-video\\assets",
+    "chat-to-video\u0000assets",
+  ])("rejects unsafe OSS prefix %j", (prefix) => {
+    expect(() => loadStorageConfigFromEnvironment({
+      ...ossEnvironment,
+      OSS_PREFIX: prefix,
+    })).toThrow("OSS_PREFIX");
   });
 
   it("rejects unknown providers", () => {

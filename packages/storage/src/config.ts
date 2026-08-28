@@ -54,6 +54,28 @@ const validateOssEndpointRegion = (
   }
 };
 
+const ossPrefix = (environment: StorageEnvironment): string => {
+  const value = environment.OSS_PREFIX?.trim() ?? "";
+  if (!value) return "";
+  const hasControlCharacter = [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+  if (
+    value.startsWith("/")
+    || value.endsWith("/")
+    || value.includes("\\")
+    || hasControlCharacter
+  ) {
+    throw new Error("OSS_PREFIX must be a relative object-key prefix without leading or trailing slashes, backslashes, or control characters.");
+  }
+  const segments = value.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error("OSS_PREFIX must not contain empty, dot, or parent-directory path segments.");
+  }
+  return value;
+};
+
 const loadMinioConfig = (environment: StorageEnvironment): MinioStorageConfig => ({
   provider: "minio",
   endpoint: endpoint(environment, "S3_ENDPOINT"),
@@ -80,6 +102,7 @@ const loadAliyunOssConfig = (environment: StorageEnvironment): AliyunOssStorageC
     provider: "aliyun-oss",
     region,
     bucket: required(environment, "OSS_BUCKET"),
+    prefix: ossPrefix(environment),
     internalEndpoint,
     publicEndpoint,
     accessKeyId: required(environment, "OSS_ACCESS_KEY_ID"),

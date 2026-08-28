@@ -156,6 +156,30 @@ docker load -i chat-to-video-images-linux-amd64.tar.gz
 脚本要求 Docker daemon 使用 Linux 容器。只有全部镜像成功拉取或构建并通过
 `linux/amd64` 平台校验后，才会替换已有归档。
 
+### 一键发布到 ECS
+
+在 Windows 开发机上，可一次完成远端预检、镜像构建与导出、SHA-256 计算、
+临时文件上传、服务器端哈希与 gzip 校验、镜像导入、Compose 启动和健康检查：
+
+```bash
+pnpm deploy:ecs
+```
+
+默认连接 `root@101.37.194.186`，使用 `~/.ssh/cy.pem`，部署目录为
+`/root/chatvideo`。服务器必须已存在 `.env`、`compose.yaml` 和可执行的
+`deploy.sh`。上传完成且校验通过后才会原子替换服务器上的镜像归档；部署失败时
+保留现有容器和数据卷，并清理未完成的临时上传。
+
+可通过参数覆盖目标，或在已经手动生成归档时跳过构建：
+
+```bash
+pnpm deploy:ecs -- --host <ecs-host> --user root --identity-file C:\path\to\key.pem
+pnpm deploy:ecs -- --skip-build
+```
+
+运行 `pnpm deploy:ecs -- --help` 可查看全部参数。对应参数也可以通过
+`CHATVIDEO_DEPLOY_*` 环境变量配置；脚本不会读取或上传本地 `.env`。
+
 Worker 构建时默认通过 `http://mirrors.aliyun.com` 安装 Debian 软件包，镜像不可用
 时会自动回退到 Debian 官方源。也可在单独构建 Worker 时覆盖镜像站：
 

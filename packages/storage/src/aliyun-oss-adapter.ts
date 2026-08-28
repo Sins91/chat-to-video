@@ -23,11 +23,13 @@ const header = (headers: object | undefined, name: string): string | undefined =
 export class AliyunOssStorageAdapter implements ObjectStorageAdapter {
   private readonly operationClient: OssClient;
   private readonly signingClient: OssClient;
+  private readonly prefix: string;
 
   constructor(
     config: AliyunOssStorageConfig,
     clientFactory: OssClientFactory = (options) => new OSS(options),
   ) {
+    this.prefix = config.prefix;
     const common: OSS.Options = {
       accessKeyId: config.accessKeyId,
       accessKeySecret: config.accessKeySecret,
@@ -39,9 +41,13 @@ export class AliyunOssStorageAdapter implements ObjectStorageAdapter {
     this.signingClient = clientFactory({ ...common, endpoint: config.publicEndpoint });
   }
 
+  private physicalObjectKey(objectKey: string): string {
+    return this.prefix ? `${this.prefix}/${objectKey}` : objectKey;
+  }
+
   async putObject(input: { objectKey: string; body: Uint8Array; contentType: string }): Promise<void> {
     await attempt("put", async () => {
-      await this.operationClient.put(input.objectKey, Buffer.from(input.body), {
+      await this.operationClient.put(this.physicalObjectKey(input.objectKey), Buffer.from(input.body), {
         mime: input.contentType,
         headers: { "Content-Type": input.contentType },
       });
@@ -50,7 +56,7 @@ export class AliyunOssStorageAdapter implements ObjectStorageAdapter {
 
   async getObject(objectKey: string): Promise<Uint8Array> {
     return attempt("get", async () => {
-      const response = await this.operationClient.get(objectKey);
+      const response = await this.operationClient.get(this.physicalObjectKey(objectKey));
       const content: unknown = response.content;
       if (!(content instanceof Uint8Array)) throw new Error("Object storage response has no binary body.");
       return new Uint8Array(content);
@@ -59,19 +65,19 @@ export class AliyunOssStorageAdapter implements ObjectStorageAdapter {
 
   async assertObjectExists(objectKey: string): Promise<void> {
     await attempt("head", async () => {
-      await this.operationClient.head(objectKey);
+      await this.operationClient.head(this.physicalObjectKey(objectKey));
     });
   }
 
   async deleteObject(objectKey: string): Promise<void> {
     await attempt("delete", async () => {
-      await this.operationClient.delete(objectKey);
+      await this.operationClient.delete(this.physicalObjectKey(objectKey));
     });
   }
 
   async createDownloadUrl(objectKey: string, expiresInSeconds: number): Promise<string> {
     return attempt("sign-download", async () => {
-      return this.signingClient.signatureUrlV4("GET", expiresInSeconds, {}, objectKey);
+      return this.signingClient.signatureUrlV4("GET", expiresInSeconds, {}, this.physicalObjectKey(objectKey));
     });
   }
 
@@ -79,13 +85,13 @@ export class AliyunOssStorageAdapter implements ObjectStorageAdapter {
     return attempt("sign-upload", async () => {
       return this.signingClient.signatureUrlV4("PUT", expiresInSeconds, {
         headers: { "Content-Type": contentType },
-      }, objectKey);
+      }, this.physicalObjectKey(objectKey));
     });
   }
 
   async statObject(objectKey: string): Promise<ObjectStat> {
     return attempt("head", async () => {
-      const response = await this.operationClient.head(objectKey);
+      const response = await this.operationClient.head(this.physicalObjectKey(objectKey));
       const contentLength = Number(header(response.res.headers, "content-length") ?? 0);
       return {
         contentLength: Number.isFinite(contentLength) ? contentLength : 0,
