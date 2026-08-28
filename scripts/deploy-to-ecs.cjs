@@ -6,7 +6,7 @@ const { join, resolve } = require("node:path");
 const { spawn } = require("node:child_process");
 
 const ARCHIVE_NAME = "chat-to-video-images-linux-amd64.tar.gz";
-const DEFAULT_HOST = "101.37.194.186";
+const DEFAULT_HOST = "";
 const DEFAULT_REMOTE_DIRECTORY = "/root/chatvideo";
 const DEFAULT_REMOTE_USER = "root";
 
