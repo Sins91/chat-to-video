@@ -169,7 +169,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }, [pendingImages]);
   const selectedModel = getVideoModelPresentation(videoModel);
 
-  return <div className="border-t border-border bg-background/95 px-4 py-3 backdrop-blur-sm">
+  return <div className="min-w-0 border-t border-border bg-background/95 px-3 py-3 sm:px-4 backdrop-blur-sm">
     {queuedInputs.length > 0 ? (
       <Queue aria-label="待发送消息" className="mx-auto mb-2 w-full max-w-3xl bg-muted/20 px-2 shadow-none">
         <QueueSection>
@@ -238,8 +238,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           value={input}
         />
       </PromptInputBody>
-      <PromptInputFooter className="font-sans">
-        <PromptInputTools>
+      <PromptInputFooter className="min-w-0 items-end font-sans">
+        <PromptInputTools className="min-w-0 flex-1 flex-wrap">
           <input accept="image/jpeg,image/png,image/webp" className="sr-only" multiple onChange={handleFiles} ref={fileInputRef} type="file" />
           <Button aria-label="添加参考图" className="size-7" disabled={pendingImages.length >= MAX_REFERENCE_IMAGES_PER_MESSAGE} onClick={() => fileInputRef.current?.click()} size="icon" type="button" variant="ghost">
             <ImagePlusIcon className="size-4" />
@@ -247,10 +247,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           <ModelSelector onOpenChange={setIsModelSelectorOpen} open={isModelSelectorOpen}>
             <ModelSelectorTrigger
               disabled={isVideoModelLocked || isGenerating}
-              render={<Button className="h-7 border-border bg-background px-2 font-sans text-xs font-medium normal-case tracking-normal text-muted-foreground hover:bg-accent hover:text-foreground" size="sm" type="button" variant="outline" />}
+              render={<Button className="h-7 min-w-0 max-w-full border-border bg-background px-2 font-sans text-xs font-medium normal-case tracking-normal text-muted-foreground hover:bg-accent hover:text-foreground" size="sm" type="button" variant="outline" />}
             >
               <VideoIcon className="size-3.5" />
-              <span>{selectedModel.name}</span>
+              <span className="min-w-0 truncate">{selectedModel.name}</span>
               <ChevronDownIcon className="size-3 text-muted-foreground" />
             </ModelSelectorTrigger>
             <ModelSelectorContent className="font-sans">
@@ -296,6 +296,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           <span className="hidden pl-1 font-sans text-xs font-normal tracking-normal text-muted-foreground sm:inline">Enter 发送 · Shift+Enter 换行</span>
         </PromptInputTools>
         <PromptInputSubmit
+          className="ml-auto shrink-0 self-end"
           aria-label={canStop ? "停止当前 Agent" : willQueueInput ? "加入发送队列" : "发送消息"}
           disabled={!canStop && (isUploading || (!input.trim() && readyImages.length === 0))}
           onStop={onStop}

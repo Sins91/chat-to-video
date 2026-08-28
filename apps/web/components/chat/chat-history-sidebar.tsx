@@ -1,10 +1,12 @@
 "use client";
 
 import type { ConversationSummary } from "@chat-to-video/contracts";
-import { ChevronDownIcon, ClapperboardIcon, LoaderCircleIcon, MoreHorizontalIcon, Trash2Icon } from "lucide-react";
+import { ChevronDownIcon, ClapperboardIcon, LoaderCircleIcon, MoreHorizontalIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -20,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 type HistorySidebarProps = {
   activeConversationId: string | null;
+  isNarrow: boolean;
   onConversationSwitch: (conversationId: string) => Promise<boolean>;
   onPendingConversationSwitch: (conversationId: string) => Promise<boolean>;
 };
@@ -46,6 +49,7 @@ const groupFor = (createdAt: string): GroupName => {
 
 export const ChatHistorySidebar = memo(function ChatHistorySidebar({
   activeConversationId,
+  isNarrow,
   onConversationSwitch,
   onPendingConversationSwitch,
 }: HistorySidebarProps) {
@@ -212,5 +216,15 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar({
       {!isLoading && nextCursor ? <button className="w-full cursor-pointer py-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => void load(nextCursor)} type="button">加载更多</button> : null}
     </div>;
 
-  return <TooltipProvider delay={250}><aside className="flex h-full w-60 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground" aria-label="历史对话">{content}</aside></TooltipProvider>;
+  return <TooltipProvider delay={250}>{isNarrow ? <DialogContent
+    aria-describedby={undefined}
+    className="inset-y-0 left-0 flex h-dvh w-80 max-w-[calc(100%-2rem)] translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-r border-sidebar-border bg-sidebar p-0 text-sidebar-foreground sm:max-w-80"
+    showCloseButton={false}
+  >
+    <div className="flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border px-4">
+      <DialogTitle className="font-sans text-sm font-semibold">历史对话</DialogTitle>
+      <DialogClose render={<Button aria-label="关闭历史对话" size="icon-sm" type="button" variant="ghost" />}><XIcon /></DialogClose>
+    </div>
+    {content}
+  </DialogContent> : <aside className="flex h-full w-60 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground" aria-label="历史对话">{content}</aside>}</TooltipProvider>;
 });

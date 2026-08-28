@@ -87,16 +87,53 @@ describe("Agent UI shell", () => {
     expect(workspace).not.toContain("min-h-[720px]");
   });
 
-  it("keeps conversation history visible at every viewport width", async () => {
+  it("stacks preview above chat on narrow screens without remounting the workspace", async () => {
+    const workspace = await readFile(resolve(webRoot, "components/chat/agent-workspace.tsx"), "utf8");
+
+    expect(workspace).toContain('window.matchMedia("(width < 64rem)")');
+    expect(workspace).toContain('orientation={isNarrow ? "vertical" : "horizontal"}');
+    expect(workspace).toContain("isNarrow ? [previewPanel, handle, chatPanel] : [chatPanel, handle, previewPanel]");
+    for (const key of ["agent-chat", "agent-preview", "agent-divider"]) {
+      expect(workspace).toContain(`key="${key}"`);
+    }
+    expect(workspace.match(/<ChatPanel\b/gu)).toHaveLength(1);
+    expect(workspace.match(/<VideoWorkflowProvider>/gu)).toHaveLength(1);
+    expect(workspace).toContain('query.removeEventListener("change", onChange)');
+    expect(workspace).not.toMatch(/key=\{isNarrow/u);
+  });
+
+  it("uses an accessible history drawer on narrow screens and a sidebar on wide screens", async () => {
     const [panel, sidebar] = await Promise.all([
       readFile(resolve(webRoot, "components/chat/chat-panel.tsx"), "utf8"),
       readFile(resolve(webRoot, "components/chat/chat-history-sidebar.tsx"), "utf8"),
     ]);
     expect(sidebar).toContain('className="flex h-full w-60 shrink-0');
-    expect(sidebar).not.toContain("hidden h-full");
-    expect(sidebar).not.toContain("mobileOpen");
-    expect(panel).not.toContain("isMobileHistoryOpen");
-    expect(panel).not.toContain("打开历史对话");
+    expect(sidebar).toContain("isNarrow ? <DialogContent");
+    expect(sidebar).toContain("<DialogTitle");
+    expect(sidebar).toContain('aria-label="关闭历史对话"');
+    expect(panel).toContain("open={isNarrow && isHistoryOpen}");
+    expect(panel).toContain('aria-label="打开历史对话"');
+    expect(panel).toContain("if (!isNarrow) setIsHistoryOpen(false)");
+    expect(panel.match(/<ChatHistorySidebar\b/gu)).toHaveLength(1);
+    const switchHandler = panel.slice(panel.indexOf("const handleConversationSwitch"), panel.indexOf("const panelStatePresentation"));
+    expect(switchHandler.indexOf("if (!isReady) return false")).toBeLessThan(switchHandler.indexOf("setIsHistoryOpen(false)"));
+    expect(switchHandler.indexOf("if (!sessionId || !sessionsRef.current.has(sessionId))")).toBeLessThan(switchHandler.lastIndexOf("setIsHistoryOpen(false)"));
+    expect(switchHandler.match(/setIsHistoryOpen\(false\)/gu)).toHaveLength(2);
+  });
+
+  it("keeps the composer and long messages within the conversation width", async () => {
+    const [composer, conversation, message] = await Promise.all([
+      readFile(resolve(webRoot, "components/chat/chat-composer.tsx"), "utf8"),
+      readFile(resolve(webRoot, "components/chat/chat-conversation.tsx"), "utf8"),
+      readFile(resolve(webRoot, "src/components/ai-elements/message.tsx"), "utf8"),
+    ]);
+    expect(composer).toContain('<PromptInputTools className="min-w-0 flex-1 flex-wrap">');
+    expect(composer).toContain('className="ml-auto shrink-0 self-end"');
+    expect(composer).toContain('<span className="min-w-0 truncate">{selectedModel.name}</span>');
+    expect(conversation).toContain('scrollClassName="min-w-0 overflow-x-hidden overflow-y-auto"');
+    expect(message).toContain("[overflow-wrap:anywhere]");
+    expect(message).toContain("overflow-x-auto rounded-lg border border-border");
+    expect(message).toContain("[&_pre]:overflow-x-auto");
   });
 
   it("reserves the conversation scrollbar gutter without deferred container layout", async () => {

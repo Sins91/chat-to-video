@@ -43,7 +43,7 @@ export type MessageProps = HTMLAttributes<HTMLDivElement> & {
 export const Message = ({ className, from, ...props }: MessageProps) => (
   <div
     className={cn(
-      "group flex w-full max-w-[95%] flex-col gap-0.5",
+      "group flex w-full min-w-0 max-w-[95%] flex-col gap-0.5",
       from === "user" ? "is-user ml-auto justify-end" : "is-assistant",
       className
     )}
@@ -60,7 +60,7 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-[13px]",
+      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-[13px] [overflow-wrap:anywhere]",
       "group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-3 group-[.is-user]:py-1.5 group-[.is-user]:text-foreground",
       "group-[.is-assistant]:text-foreground",
       className
@@ -342,7 +342,7 @@ const messageResponseComponents: Components = {
   ul: ({ className, ...props }) => <ul className={cn("my-3 list-outside list-disc space-y-1.5 pl-5 marker:text-muted-foreground [&>li]:pl-1", className)} {...withoutMarkdownNode(props)} />,
   li: ({ className, ...props }) => <li className={cn("leading-[1.35] [&>ol]:mb-1 [&>ol]:mt-1.5 [&>p]:inline [&>ul]:mb-1 [&>ul]:mt-1.5", className)} {...withoutMarkdownNode(props)} />,
   p: ({ className, ...props }) => <p className={cn("leading-[1.35]", className)} {...withoutMarkdownNode(props)} />,
-  table: ({ className, ...props }) => <div className="my-4 max-w-full overflow-x-auto rounded-lg border border-border"><table className={cn("w-full border-collapse text-left text-[13px]", className)} {...withoutMarkdownNode(props)} /></div>,
+  table: ({ className, ...props }) => <div className="my-4 min-w-0 max-w-full overflow-x-auto rounded-lg border border-border"><table className={cn("w-full border-collapse text-left text-[13px]", className)} {...withoutMarkdownNode(props)} /></div>,
   thead: ({ className, ...props }) => <thead className={cn("bg-muted/70", className)} {...withoutMarkdownNode(props)} />,
   tbody: ({ className, ...props }) => <tbody className={cn("bg-card", className)} {...withoutMarkdownNode(props)} />,
   tr: ({ className, ...props }) => <tr className={cn("border-b border-border last:border-b-0", className)} {...withoutMarkdownNode(props)} />,
@@ -354,7 +354,7 @@ export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
-        "chat-markdown size-full space-y-1.5 text-[13px] text-foreground/80 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "chat-markdown size-full space-y-1.5 text-[13px] text-foreground/80 min-w-0 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:[overflow-wrap:normal] [&_table]:[overflow-wrap:normal] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
       components={messageResponseComponents}

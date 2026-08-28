@@ -14,6 +14,7 @@ import {
   LogOutIcon,
   ImagePlusIcon,
   PlusIcon,
+  PanelLeftIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
@@ -25,6 +26,7 @@ import { abandonReferenceImage } from "@/lib/reference-image-client";
 import { ChatConversation } from "@/components/chat/chat-conversation";
 import { ChatHistorySidebar } from "@/components/chat/chat-history-sidebar";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { useVideoWorkflow } from "@/components/video-workflow/video-workflow-provider";
 import { createChatTransport, createChatUserMessage } from "@/lib/chat-transport";
 import { chatQueueItemsForConversation, useChatQueueStore } from "@/lib/chat-queue-store";
@@ -71,10 +73,15 @@ const waitForPendingActionPaint = (): Promise<void> => new Promise((resolve) => 
   window.requestAnimationFrame(finish);
 });
 
-export function ChatPanel() {
+export function ChatPanel({ isNarrow }: { isNarrow: boolean }) {
   const router = useRouter();
   const workflow = useVideoWorkflow();
   const [input, setInput] = useState("");
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isNarrow) setIsHistoryOpen(false);
+  }, [isNarrow]);
   const [isQueueDispatching, setIsQueueDispatching] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingActionPresentation | null>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
@@ -429,6 +436,7 @@ export function ChatPanel() {
     if (!isReady) return false;
     activateConversation(conversationId);
     setInput("");
+    setIsHistoryOpen(false);
     return true;
   }, [activateConversation, workflow]);
 
@@ -438,6 +446,7 @@ export function ChatPanel() {
     workflow.newConversation();
     activateConversation(conversationId);
     setInput("");
+    setIsHistoryOpen(false);
     return Promise.resolve(true);
   }, [activateConversation, workflow]);
 
@@ -491,8 +500,8 @@ export function ChatPanel() {
     }
   }, [isLoggingOut]);
 
-  return <div
-    className="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-background"
+  return <Dialog onOpenChange={setIsHistoryOpen} open={isNarrow && isHistoryOpen}><div
+    className="relative grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] bg-background"
     onDragEnter={handleImageDragEnter}
     onDragLeave={handleImageDragLeave}
     onDragOver={handleImageDragOver}
@@ -505,9 +514,10 @@ export function ChatPanel() {
         <span className="mt-1 text-xs leading-5 text-muted-foreground">在聊天区任意位置松开即可上传，最多 4 张 JPEG、PNG 或 WebP。</span>
       </div>
     </div> : null}
-    <header className="flex h-14 items-center border-b border-border bg-background/95 px-3 backdrop-blur-sm sm:px-5">
+    <header className="flex h-14 min-w-0 items-center border-b border-border bg-background/95 px-3 backdrop-blur-sm sm:px-5">
+      {isNarrow ? <DialogTrigger render={<Button aria-label="打开历史对话" className="mr-2 shrink-0" size="icon-sm" type="button" variant="ghost" />}><PanelLeftIcon /></DialogTrigger> : null}
       <h1 className="min-w-0 truncate font-sans text-base font-semibold tracking-tight text-foreground">Chat to Video</h1>
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
         <span className={`hidden items-center gap-1.5 rounded-full border px-2.5 py-1 font-sans text-[10px] uppercase tracking-[0.08em] sm:inline-flex ${panelStatePresentation.tone}`} role="status">
           <PanelStateIcon className={`size-3 ${panelState === "working" ? "animate-spin" : ""}`} />
           {panelStatePresentation.label}
@@ -520,6 +530,7 @@ export function ChatPanel() {
     <div className="relative flex min-h-0 min-w-0">
       <ChatHistorySidebar
         activeConversationId={activeSession.conversationId}
+        isNarrow={isNarrow}
         onConversationSwitch={handleConversationSwitch}
         onPendingConversationSwitch={handlePendingConversationSwitch}
       />
@@ -568,5 +579,5 @@ export function ChatPanel() {
         />
       </div>
     </div>
-  </div>;
+  </div></Dialog>;
 }
